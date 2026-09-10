@@ -1,0 +1,6 @@
+name: WebGame
+version: '${project.version}'
+main: com.github.cocosoys.mc.webgame.WebGame
+softdepend: [SOYSHTTPOverMC]
+author: cocosoys
+description: Serve Eaglercraft 1.12.2 web client on the MC port, letting browsers join the server.

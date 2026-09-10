@@ -1,0 +1,34 @@
+# WebGame 第一版配置（M1：页面托管 + 地址注入）
+page:
+  # 游戏页面根路径（挂载 SOYSHTTPOverMC 无前缀路由）
+  path: "/"
+  # 插件 jar 内 dist 目录下的 Eaglercraft HTML 文件名
+  html-file: "Eaglercraft_IR_1.12.2.html"
+  # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
+  public-host: "127.0.0.1"
+  # 0 = 跟随 server.properties 的 server-port
+  public-port: 0
+tunnel:
+  # WebSocket 隧道入口路径（须与注入的 servers.addr 一致）
+  ws-path: "/eagler"
+  # MC 回环连接目标（同机回环登录，见设计 §4.1）
+  loopback-host: "127.0.0.1"
+  # 0 = 跟随 server-port（回环 MC 客户端连本服自身端口）
+  loopback-port: 0
+  # EaglerX 握手协议版本支持范围（V3=协议 2/3，V4=协议 4）
+  allow-v3: true
+  allow-v4: true
+  # 服务端 MC 协议版本范围（1.12.2 = 340）
+  min-mc-protocol: 340
+  max-mc-protocol: 340
+  # SERVER_VERSION 帧中的服务器品牌与版本（供客户端显示）
+  server-brand: "WebGame"
+  server-version: "1.0.0"
+  # 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数（默认 2）
+  # 用于防止单台设备开过多浏览器标签占满服务器名额
+  max-connections-per-device: 2
+auto-join:
+  # 打开页面后自动进入服务器（设置用户名 + 自动连接，无需手动点击）
+  enabled: true
+  # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/?user=Tom
+  default-username: "WebPlayer"
