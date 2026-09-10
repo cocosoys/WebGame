@@ -12,6 +12,7 @@ public final class WebGameConfig {
     private final int publicPort;
     private final String wsPath;
     private final String htmlFile;
+    private final String pagePath;
     private final boolean autoJoinEnabled;
     private final String defaultUsername;
     private final String loopbackHost;
@@ -30,6 +31,7 @@ public final class WebGameConfig {
         this.publicPort = Math.max(0, c.getInt("page.public-port", 0));
         this.wsPath = c.getString("tunnel.ws-path", "/eagler");
         this.htmlFile = c.getString("page.html-file", "Eaglercraft_IR_1.12.2.html");
+        this.pagePath = normalizePath(c.getString("page.path", "/api/plugins/WebGame/eagler/"));
         this.autoJoinEnabled = c.getBoolean("auto-join.enabled", true);
         this.defaultUsername = c.getString("auto-join.default-username", "WebPlayer").trim();
         this.loopbackHost = c.getString("tunnel.loopback-host", "127.0.0.1").trim();
@@ -58,6 +60,23 @@ public final class WebGameConfig {
 
     public String getHtmlFile() {
         return htmlFile;
+    }
+
+    /** 游戏页面挂载路径（以 / 开头、以 / 结尾），如 /api/plugins/WebGame/eagler/。 */
+    public String getPagePath() {
+        return pagePath;
+    }
+
+    /** 规范化页面路径：确保以 / 开头并以 / 结尾（根路径 "/" 原样返回）。 */
+    private static String normalizePath(String p) {
+        String s = (p == null || p.trim().isEmpty()) ? "/api/plugins/WebGame/eagler/" : p.trim();
+        if (!s.startsWith("/")) {
+            s = "/" + s;
+        }
+        if (!s.endsWith("/")) {
+            s = s + "/";
+        }
+        return s;
     }
 
     public boolean isAutoJoinEnabled() {

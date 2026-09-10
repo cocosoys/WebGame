@@ -18,8 +18,9 @@ import java.util.zip.GZIPOutputStream;
  *
  * <p>职责：从插件 jar 读取 Eaglercraft HTML → 把 {@code eaglercraftXOpts.servers}
  * 的服务器地址注入为本地 WS 地址（如 {@code ws://127.0.0.1:25574/eagler}）→
+ * 注入 joinServer 与独立 bootstrap 脚本引用（{@code eagler-bootstrap.js}，前端按需加载）→
  * 落盘一份到 {@code plugins/WebGame/dist/}（便于检查/热替换）→
- * 通过 SOYSHTTPOverMC 登记到根路径 {@code /}（无前缀）。</p>
+ * 通过 SOYSHTTPOverMC 登记到标准接口路径 {@code /api/plugins/WebGame/eagler/}（无前缀）。</p>
  */
 public final class EaglerPageRegistrar {
 
@@ -57,20 +58,21 @@ public final class EaglerPageRegistrar {
             plugin.getLogger().info("已写出注入后的客户端副本: " + out);
         }
 
-        // 根路径托管（无 /plugins 前缀），GET / 直接出游戏页面。
-        // force=true：SOYSHTTPOverMC 默认首页已登记 GET /，需强制覆盖为本插件页面
-        // （覆盖后 SOYSHTTPOverMC 自带首页不再可访问；测试环境可接受）。
-        // 独立 bootstrap 脚本：随插件 jar 打包，注册为 /eagler-bootstrap.js 路由，
-        // 由 HTML 内 <script src="/eagler-bootstrap.js" defer> 按需加载（defer 保证
-        // 页面解析完成后才执行，运行时机受控）。
+        // 标准接口路径托管（无 /plugins 前缀），GET <page-path> 出游戏页面，
+        // 不再占用根路径 "/"（SOYSHTTPOverMC 默认首页恢复）。
+        // 独立 bootstrap 脚本：随插件 jar 打包，注册为 <page-path>eagler-bootstrap.js 路由，
+        // 由 HTML 内 <script src="<page-path>eagler-bootstrap.js" defer> 前端按需加载
+        // （defer 保证页面解析完成后才执行，运行时机受控；JS 本体非后端注入）。
+        String pagePath = config.getPagePath();
         byte[] bootstrapJs = readJarResource("eagler-bootstrap.js");
-        api.getWebPage().registerProxyPage(plugin, "/eagler-bootstrap.js", "GET", bootstrapJs,
+        api.getWebPage().registerProxyPage(plugin, pagePath + "eagler-bootstrap.js", "GET", bootstrapJs,
                 "application/javascript; charset=utf-8", true, "WebGame bootstrap 脚本", null);
-        plugin.getLogger().info("Eaglercraft bootstrap 脚本已登记到 /eagler-bootstrap.js (" + bootstrapJs.length + " bytes)");
+        plugin.getLogger().info("Eaglercraft bootstrap 脚本已登记到 " + pagePath + "eagler-bootstrap.js ("
+                + bootstrapJs.length + " bytes)");
 
-        api.getWebPage().registerProxyPage(plugin, "/", "GET", injected, "text/html; charset=utf-8",
+        api.getWebPage().registerProxyPage(plugin, pagePath, "GET", injected, "text/html; charset=utf-8",
                 true, "Eaglercraft 1.12.2 网页客户端", null);
-        plugin.getLogger().info("Eaglercraft 页面已登记到 / （" + injected.length + " bytes）");
+        plugin.getLogger().info("Eaglercraft 页面已登记到 " + pagePath + " （" + injected.length + " bytes）");
     }
 
     private byte[] readJarResource(String name) throws Exception {
@@ -169,7 +171,7 @@ public final class EaglerPageRegistrar {
             return raw;
         }
         byte[] replacement = ("        // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n    </script>\n"
-                + "    <script src=\"/eagler-bootstrap.js\" defer></script>")
+                + "    <script src=\"" + config.getPagePath() + "eagler-bootstrap.js\" defer></script>")
                 .getBytes(StandardCharsets.UTF_8);
         byte[] out = new byte[raw.length - marker.length + replacement.length];
         System.arraycopy(raw, 0, out, 0, idx);
@@ -177,7 +179,8 @@ public final class EaglerPageRegistrar {
         int tailLen = raw.length - idx - marker.length;
         System.arraycopy(raw, idx + marker.length, out, idx + replacement.length, tailLen);
 
-        plugin.getLogger().info("已注入 bootstrap 脚本引用 <script src=/eagler-bootstrap.js defer>");
+        plugin.getLogger().info("已注入 bootstrap 脚本引用 <script src=" + config.getPagePath()
+                + "eagler-bootstrap.js defer>");
         return out;
     }
 

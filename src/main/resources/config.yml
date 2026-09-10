@@ -1,7 +1,9 @@
 # WebGame 第一版配置（M1：页面托管 + 地址注入）
 page:
-  # 游戏页面根路径（挂载 SOYSHTTPOverMC 无前缀路由）
-  path: "/"
+  # 游戏页面挂载路径（标准接口前缀，挂载 SOYSHTTPOverMC 无前缀路由）。
+  # 打开 http://127.0.0.1:25574/api/plugins/WebGame/eagler/?user=Tom 直接进入服务器；
+  # 不再占用根路径 "/"（SOYS 默认首页恢复）。
+  path: "/api/plugins/WebGame/eagler/"
   # 插件 jar 内 dist 目录下的 Eaglercraft HTML 文件名
   html-file: "Eaglercraft_IR_1.12.2.html"
   # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
