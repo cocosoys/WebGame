@@ -70,7 +70,8 @@ apt-get update -y
 apt-get install -y \
   openbox xdotool x11-utils x11-xserver-utils wmctrl scrot \
   python3 curl ca-certificates gnupg lsb-release \
-  xauth x11-xkb-utils xkb-data procps ssl-cert || true
+  xauth x11-xkb-utils xkb-data procps ssl-cert \
+  libopenal1 python3-websockify || true
 
 # ---------- 2.1 Java 8：优先本地包，其次 apt，最后提示 ----------
 if ! command -v java >/dev/null 2>&1 || ! java -version 2>&1 | grep -q '1\.8'; then
