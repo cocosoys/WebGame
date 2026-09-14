@@ -204,6 +204,24 @@ def instance_worker(instance_id):
     # inst_root 整体归 webgame 所有（MC 以 webgame 运行，需写日志/gameDir/natives；
     # 残留的 root 属主文件一并回收）
     run_cmd(["chown", "-R", "webgame:webgame", inst_root], timeout=10)
+    # 1.5) 禁用"失焦暂停"：MC 默认 pauseOnLostFocus:true，云游戏下窗口频繁失焦
+    # 会自动弹暂停菜单并吞输入（KasmVNC/输入代理均受影响），必须置 false
+    opt = os.path.join(inst_root, "options.txt")
+    try:
+        if os.path.exists(opt):
+            with open(opt, encoding="utf-8", errors="replace") as f:
+                _content = f.read()
+            if "pauseOnLostFocus" in _content:
+                _content = _content.replace("pauseOnLostFocus:true", "pauseOnLostFocus:false")
+            else:
+                _content += "\npauseOnLostFocus:false\n"
+        else:
+            _content = "pauseOnLostFocus:false\n"
+        with open(opt, "w", encoding="utf-8") as f:
+            f.write(_content)
+        log("  已确保 %s 失焦暂停关闭" % opt)
+    except Exception as e:
+        log("  写 options.txt 失败: %s" % e)
     launch_sh = os.path.join(inst_root, "launch.sh")
     stdout_log = os.path.join(inst_root, "client-stdout.log")
 
@@ -249,6 +267,22 @@ def instance_worker(instance_id):
         fail_instance(instance_id, "Xvnc 就绪超时（xdpyinfo 无法连接 :%d）" % disp)
         return
     time.sleep(3)
+
+    # 2.6) 启动轻量 WM（openbox）：MC 的鼠标 grab / 焦点管理依赖 WM，
+    # 无 WM 裸 Xvnc 下视角鼠标注入会失效（Kasm 容器标准做法）。
+    # 用 systemd-run 托管，避免 nohup 后台进程随 wsl.exe 会话退出而丢失
+    # （X root 的 _NET_SUPPORTING_WM_CHECK 属性在 openbox 异常退出后残留，探测属性不可靠）
+    r = run_cmd([
+        "bash", "-lc",
+        "systemctl stop openbox-%d 2>/dev/null; systemctl reset-failed openbox-%d 2>/dev/null; "
+        "systemd-run --unit=openbox-%d --uid=webgame --gid=webgame "
+        "--setenv=HOME=/home/webgame --setenv=DISPLAY=:%d openbox >/dev/null 2>&1; "
+        "sleep 2; systemctl is-active openbox-%d" % (disp, disp, disp, disp, disp)],
+        timeout=25)
+    if r[0] == 0 and "active" in r[1]:
+        log("  openbox-%d 已启动（systemd 托管，EWMH 就绪）" % disp)
+    else:
+        log("  openbox-%d 启动异常（%s）—— 不阻断，MC 仍将启动" % (disp, r[1].strip() if r[0] == 0 else "rc=%d" % r[0]))
 
     # 3+4) 启动 MC 并等待就绪；若 MC 在 Xvnc 竞态下静默退出（Forge 加载后无
     # 异常消失），自动清理重启，最多 3 次尝试
