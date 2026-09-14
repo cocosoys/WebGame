@@ -1,0 +1,11 @@
+#!/bin/bash
+# =============================================================================
+# WebGame 云游戏执行面 —— X 会话启动脚本（KasmVNC xstartup）
+# 部署位置: ~webgame/.vnc/xstartup
+# 作用：Xvnc 启动每个 display 会话时执行，拉起窗口管理器 openbox。
+#       执行面注入依赖 openbox 的 EWMH 焦点管理（MC 自动聚焦 + grab）。
+# =============================================================================
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+xrdb -merge ~/.Xresources 2>/dev/null
+exec openbox

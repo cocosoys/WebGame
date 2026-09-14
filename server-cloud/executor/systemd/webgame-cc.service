@@ -1,0 +1,23 @@
+# =============================================================================
+# WebGame 云游戏执行面 —— 管控服务 systemd 单元（持久化版）
+# -----------------------------------------------------------------------------
+# 由 deploy.sh 自动写入 /etc/systemd/system/webgame-cc.service
+# 注意：
+#   * 必须 root 运行（内部以 su - webgame 执行实例命令，非 root 会触发
+#     chown 权限异常），因此不要启用 User= 指令
+#   * --port 为管控 TCP 端口（插件 ControlClient 连接目标，默认 25576）
+#   * --mc-base / --instances 与 deploy.sh 保持一致
+# =============================================================================
+[Unit]
+Description=WebGame Cloud Executor (control_client)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/webgame/control_client.py --port 25576 --mc-base /home/webgame/mc --instances /home/webgame/instances
+Restart=on-failure
+RestartSec=3
+# User=webgame  <-- 不要启用（必须 root 运行）
+
+[Install]
+WantedBy=multi-user.target

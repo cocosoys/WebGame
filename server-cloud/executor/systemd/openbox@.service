@@ -1,0 +1,26 @@
+# =============================================================================
+# WebGame 云游戏执行面 —— Openbox WM systemd 单元模板（每个 display 一个）
+# -----------------------------------------------------------------------------
+# 说明：
+#   * control_client.py 内部已用 systemd-run 自管 openbox（幂等），
+#     本单元是"独立托管"等价物，供需要单独管理 WM 的场景使用。
+#   * 启用方式（display :99 为例）：
+#       sudo systemctl enable --now openbox@99.service
+#   * %i 为 display 号（99 -> DISPLAY=:99）
+# =============================================================================
+[Unit]
+Description=Openbox WM (display %i) for WebGame Cloud
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+User=webgame
+Group=webgame
+Environment=HOME=/home/webgame
+Environment=DISPLAY=:%i
+ExecStart=/usr/bin/openbox
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

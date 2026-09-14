@@ -1,0 +1,28 @@
+# =============================================================================
+# WebGame 云游戏执行面 —— KasmVNC 配置模板
+# 部署位置: ~webgame/.vnc/kasmvnc.yaml
+# 说明：
+#   * network.websocket_port: auto —— 由 vncserver/control_client 分配
+#     （base 8542 起，每个实例递增）
+#   * ssl.require_ssl: false —— 插件侧经 25574 反代 WS，无需本机 TLS
+#   * desktop.resolution —— 控制面通过 vncserver -geometry 覆盖，模板为默认值
+# =============================================================================
+network:
+  protocol: http
+  interface: 0.0.0.0
+  websocket_port: auto
+  ssl:
+    require_ssl: false
+  udp:
+    stun_server: off
+    public_ip: 127.0.0.1
+
+desktop:
+  resolution:
+    width: 1024
+    height: 768
+  allow_resize: true
+  pixel_depth: 24
+  gpu:
+    hw3d: false
+    drinode: /dev/dri/renderD128
