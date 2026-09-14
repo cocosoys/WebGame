@@ -124,7 +124,14 @@ def display_in_use(disp):
 # ---------------- 实例生命周期 ----------------
 
 def spawn_instance(fields):
-    """SPAWN：分配 display/kasmPort，起 Xvnc + MC，异步等待就绪。"""
+    """SPAWN：分配 display/kasmPort，起 Xvnc + MC，异步等待就绪。
+
+    幂等语义（配合插件侧 resume 重发 SPAWN）：
+      * 实例已存在且 SPAWNING/STARTING/READY → 复用：READY 时补发一次
+        READY 上报（插件 onInstanceReady 据此重新下发采集端点），
+        不重复起进程；STARTING/SPAWNING 时保持等待既有 worker 完成。
+      * 实例已存在但 STOPPED/FAILED（残留记录）→ 移除记录，走正常启动。
+    """
     instance_id = fields.get("instanceId", "")
     username = fields.get("username", "WebPlayer")
     server = fields.get("server", "127.0.0.1")
@@ -138,10 +145,27 @@ def spawn_instance(fields):
         return False, "非法用户名: %s" % username
 
     with instances_lock:
+        if instance_id in instances:
+            inst = instances[instance_id]
+            st = inst.get("state")
+            if st in (ST_SPAWNING, ST_STARTING, ST_READY):
+                log("SPAWN 幂等复用 %s state=%s display=:%d kasm=%d"
+                    % (instance_id, st, inst.get("display", -1), inst.get("kasmPort", -1)))
+                if st == ST_READY:
+                    def _re_ready():
+                        time.sleep(0.3)
+                        broadcast(S_READY, OrderedDict([
+                            ("instanceId", instance_id),
+                            ("display", ":%d" % inst["display"]),
+                            ("kasmPort", str(inst["kasmPort"])),
+                            ("host", "127.0.0.1"),
+                            ("readyAt", str(int(inst.get("readyAt") or time.time())))]))
+                    threading.Thread(target=_re_ready, daemon=True).start()
+                return True, ""
+            log("SPAWN 清理残留记录 %s state=%s" % (instance_id, st))
+            instances.pop(instance_id, None)
         if len(instances) >= capacity:
             return False, "执行面容量已满 (%d)" % capacity
-        if instance_id in instances:
-            return False, "实例已存在: %s" % instance_id
         disp = base_display + len(instances)
         kasm_port = base_kasm_port + len(instances)
         inst = {
@@ -254,12 +278,12 @@ def instance_worker(instance_id):
         except Exception as e:
             fail_instance(instance_id, "MC 启动失败: %s" % e)
             return
-        ready = wait_ready(inst_root, stdout_log, timeout=120, alive_check=mc_alive)
+        ready = wait_ready(inst_root, stdout_log, timeout=240, alive_check=mc_alive)
         if ready:
             break
         if mc_alive():
             # 进程还活着但 120s 未就绪 —— 真超时，不重试
-            fail_instance(instance_id, "客户端启动超时（120s 未进入服务器）")
+            fail_instance(instance_id, "客户端启动超时（240s 未进入服务器）")
             return
         log("  MC 第 %d 次尝试静默退出，清理后重启" % (attempt + 1))
         run_cmd(["bash", "-lc", "pkill -f 'gameDir %s'" % inst_root], timeout=5)
@@ -319,7 +343,7 @@ def uuid_for(name):
     return "%08x-1234-5678-9abc-def000000000" % h
 
 
-def wait_ready(inst_root, stdout_log, timeout=120, alive_check=None):
+def wait_ready(inst_root, stdout_log, timeout=240, alive_check=None):
     """轮询 latest.log / client-stdout.log 出现进服信号。
 
     信号口径（避免把启动早期的宽泛日志误判为就绪）：
@@ -421,6 +445,20 @@ conns = []
 conns_lock = threading.Lock()
 
 
+# ---------------- 全量清理（管控连接断开时调用） ----------------
+
+def cleanup_all_instances(reason):
+    """管控连接断开：服务器已重启或不可用，清理全部实例（含残留 MC/Xvnc），
+    避免旧实例与重启后服务器的同序号实例 id 冲突（旧实例 STOPPED/READY 事件
+    误匹配新会话）。"""
+    log("管控连接断开，清理全部实例（%s）" % reason)
+    for iid in list(instances.keys()):
+        try:
+            kill_instance(iid)
+        except Exception as _e:
+            log("清理 %s 异常: %s" % (iid, _e))
+    instances.clear()
+
 # ---------------- 连接处理 ----------------
 
 def handle_conn(conn, addr):
@@ -445,6 +483,7 @@ def handle_conn(conn, addr):
         except Exception:
             pass
         log("连接关闭: %s" % (addr,))
+        cleanup_all_instances("conn closed %s" % (addr,))
 
 
 def handle_cmd(conn, typ, fields):
