@@ -85,8 +85,12 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
      * 尝试创建会话：先做设备限流（复用 WsGateway 的进入游戏名额），
      * 再查同名在线玩家，随后登记实例黑盒并下发 SPAWN。失败返回 null
      * （调用方应拒绝连接）。ctx 必须持有：下行发送用 ctx.writeAndFlush。
+     *
+     * @param reqWidth  浏览器请求的容器宽度（0 = 服务端 config）
+     * @param reqHeight 浏览器请求的容器高度（0 = 服务端 config）
      */
-    public CloudSession create(io.netty.channel.ChannelHandlerContext ctx, String username, String deviceIp) {
+    public CloudSession create(io.netty.channel.ChannelHandlerContext ctx, String username, String deviceIp,
+                               int reqWidth, int reqHeight) {
         if (!gateway.tryAcquireDeviceSlot(deviceIp)) {
             plugin.getLogger().info("Cloud 设备限制拒绝 user=" + username + " ip=" + deviceIp
                     + " 超过每设备上限 " + gateway.getMaxConnectionsPerDevice());
@@ -99,7 +103,7 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
             return null;
         }
         String id = "c" + sessionSeq.incrementAndGet();
-        CloudSession session = new CloudSession(plugin, this, id, username, deviceIp, ctx);
+        CloudSession session = new CloudSession(plugin, this, id, username, deviceIp, ctx, reqWidth, reqHeight);
         sessions.put(id, session);
         // 登记实例黑盒 + 下发 SPAWN（执行面异步起 Xvnc + Forge 客户端）
         String instanceId = "i" + id.substring(1);
@@ -269,6 +273,16 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         f.put("fps", String.valueOf(config.getCloudFps()));
         f.put("bitrate", String.valueOf(config.getCloudBitrateKbps()));
         f.put("clientDir", config.getClientBaseDir());
+        // 容器分辨率：浏览器请求（reqWidth/reqHeight）优先，否则用服务端 cloud.scale
+        CloudSession s = sessions.get(h.getInstanceId().startsWith("i")
+                ? "c" + h.getInstanceId().substring(1) : "");
+        int rw = 0, rh = 0;
+        if (s != null) {
+            rw = s.getReqWidth();
+            rh = s.getReqHeight();
+        }
+        f.put("width", String.valueOf(rw > 0 ? rw : config.getCloudResolutionWidth()));
+        f.put("height", String.valueOf(rh > 0 ? rh : config.getCloudResolutionHeight()));
         boolean sent = control.send(ControlProtocol.C_SPAWN, f);
         if (!sent) {
             plugin.getLogger().warning("Cloud SPAWN 发送失败（执行面未连接） instance=" + h.getInstanceId()

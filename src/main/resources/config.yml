@@ -74,4 +74,5 @@ cloud:
   # 编码参数（下发执行面）
   fps: 30
   bitrate-kbps: 4000
+  # 容器分辨率（Xvfb/MC 全屏渲染尺寸）：浏览器可用 ?res=WxH 或 ?w=&h= 覆盖（单次会话）
   scale: "1280x720"

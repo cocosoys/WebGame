@@ -262,7 +262,8 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
                 return;
             }
         }
-        CloudSession s = manager.create(ctx, username, deviceIp);
+        CloudSession s = manager.create(ctx, username, deviceIp,
+                parseResParam("w", 0), parseResParam("h", 0));
         if (s == null) {
             ctx.writeAndFlush(EaglerXProtocol.encodeFrame(EaglerXProtocol.WS_BINARY,
                     CloudProtocol.buildError("本设备会话已达上限或用户名已在线，请更换用户名")));
@@ -296,6 +297,45 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
             }
         }
         return fallback;
+    }
+
+    /**
+     * 解析容器分辨率查询参数（?w=1600&h=900 或 ?res=1600x900）。
+     * 非法/越界回落 0（使用服务端 config cloud.scale）。
+     */
+    private int parseResParam(String name, int fallback) {
+        String raw = parseParam(name, null);
+        if (raw == null || raw.isEmpty()) {
+            // 兼容 ?res=WxH 单参数形态
+            String res = parseParam("res", null);
+            if (res != null && res.indexOf('x') > 0) {
+                String[] parts = res.split("x");
+                int idx = "w".equals(name) ? 0 : 1;
+                if (parts.length > idx) {
+                    try {
+                        return clampRes(Integer.parseInt(parts[idx].trim()));
+                    } catch (NumberFormatException ignored) {
+                        return fallback;
+                    }
+                }
+            }
+            return fallback;
+        }
+        try {
+            return clampRes(Integer.parseInt(raw));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private static int clampRes(int v) {
+        if (v < 640) {
+            return 0;
+        }
+        if (v > 2560) {
+            return 0;
+        }
+        return v & ~1; // 偶数，Xvfb 要求
     }
 
     /** 升级请求的原始 URL（由 parseAndRespondUpgrade 解析并缓存）。 */

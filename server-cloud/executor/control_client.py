@@ -138,6 +138,16 @@ def spawn_instance(fields):
     port = int(fields.get("port", "25574") or 25574)
     xmx = fields.get("xmx", "2G")
     client_dir = fields.get("clientDir", "/home/webgame/mc")
+    # 容器分辨率（插件透传 width/height；缺省 1280x720）。校验范围并取偶数，
+    # 非法值回落默认——防止 Xvfb -screen 参数注入与极端分辨率拖垮软渲染。
+    try:
+        width = max(640, min(2560, int(fields.get("width", "1280") or 1280))) & ~1
+    except (TypeError, ValueError):
+        width = 1280
+    try:
+        height = max(360, min(1440, int(fields.get("height", "720") or 720))) & ~1
+    except (TypeError, ValueError):
+        height = 720
 
     if not instance_id:
         return False, "缺 instanceId"
@@ -172,11 +182,12 @@ def spawn_instance(fields):
             "id": instance_id, "username": username, "state": ST_SPAWNING,
             "display": disp, "kasmPort": kasm_port,
             "server": server, "port": port, "xmx": xmx,
-            "clientDir": client_dir, "proc": None, "startedAt": time.time(),
+            "clientDir": client_dir, "width": width, "height": height,
+            "proc": None, "startedAt": time.time(),
         }
         instances[instance_id] = inst
 
-    log("SPAWN %s user=%s display=:%d kasm=%d" % (instance_id, username, disp, kasm_port))
+    log("SPAWN %s user=%s display=:%d kasm=%d res=%dx%d" % (instance_id, username, disp, kasm_port, width, height))
     t = threading.Thread(target=instance_worker, args=(instance_id,), daemon=True)
     t.start()
     return True, ""
@@ -204,12 +215,15 @@ def instance_worker(instance_id):
     # inst_root 整体归 webgame 所有（MC 以 webgame 运行，需写日志/gameDir/natives；
     # 残留的 root 属主文件一并回收）
     run_cmd(["chown", "-R", "webgame:webgame", inst_root], timeout=10)
-    # 1.5) 实例 options.txt：禁用"失焦暂停" + 低画质软渲染优化预设。
+    # 1.5) 实例 options.txt：禁用"失焦暂停" + 低画质软渲染优化预设 + 强制全屏。
     # llvmpipe 软渲染下，高画质/远视距/VBO 会显著拖慢世界渲染（长时间停留加载背景），
     # 因此强制低画质：近视距 2chunk、maxFps 30、关粒子/平滑光照/阴影/VBO/mipmap。
+    # fullscreen:true 让 MC 以 Xvfb 屏幕分辨率全屏渲染（否则 854x480 窗口居中，
+    # Xvfb 背景大面积黑边会随画面传到浏览器）。
     opt = os.path.join(inst_root, "options.txt")
     low_gfx = {
         "pauseOnLostFocus": "false",
+        "fullscreen": "true",
         "graphics": "fast",
         "renderDistance": "2",
         "maxFps": "30",
@@ -269,14 +283,26 @@ def instance_worker(instance_id):
     # active for display" 启动失败）
     run_cmd(["bash", "-lc", "rm -f /tmp/.X%d-lock /tmp/.X11-unix/X%d 2>/dev/null; true"
              % (disp, disp)], timeout=5)
-    # 2.0) Xvfb（webgame 身份，后台；-ac 允许 x11vnc/客户端连接）
+    # 释放 display 对应 TCP 端口（Xvfb 的 -ac 会 TCP 监听 6000+disp；强杀残留的
+    # TIME_WAIT/占用会导致 "Cannot establish any listening sockets" 启动失败）
+    run_cmd(["bash", "-lc", "fuser -k %d/tcp 2>/dev/null; sleep 1; true" % (6000 + disp)], timeout=10)
+    # 2.0) Xvfb（webgame 身份，后台；-ac 允许 x11vnc/客户端连接；分辨率由 SPAWN 透传，
+    #      默认 1280x720——MC 全屏后画面=屏幕分辨率，浏览器端黑框随之消失）
     rc, out = run_cmd([
         "su", "-", "webgame", "-c",
-        "nohup Xvfb :%d -screen 0 1280x720x24 -ac >/tmp/xvfb-%d.log 2>&1 &" % (disp, disp)],
+        "nohup Xvfb :%d -screen 0 %dx%dx24 -ac >/tmp/xvfb-%d.log 2>&1 &" % (disp, inst["width"], inst["height"], disp)],
         timeout=15)
     if rc != 0:
         fail_instance(instance_id, "Xvfb 启动失败: %s" % out.strip())
         return
+    # 2.0.1) Xvfb 存活验证（nohup 的 su 返回 0 不代表 Xvfb 成功启动——立即 pgrep，
+    #        失败直接 fail，避免后续 xdpyinfo 轮询空转 18 分钟）
+    time.sleep(2)
+    r = run_cmd(["bash", "-lc", "pgrep -f 'Xvfb :%d ' >/dev/null && echo ALIVE || echo DEAD" % disp], timeout=8)
+    if r[0] != 0 or "ALIVE" not in r[1]:
+        fail_instance(instance_id, "Xvfb :%d 启动失败（未存活，见 /tmp/xvfb-%d.log）" % (disp, disp))
+        return
+    log("  Xvfb :%d (%dx%d) 存活" % (disp, inst["width"], inst["height"]))
     # 2.0.3) x11vnc（webgame 身份，RFB 服务器；-forever 断线续听 / -shared 多客户端 /
     #        -noxdamage 规避软渲染下 xdamage 问题）
     rc, out = run_cmd([
@@ -303,7 +329,12 @@ def instance_worker(instance_id):
     # （socket/端口存在不代表 X 内部完成初始化，刚重启时偶发 MC 静默退出；
     #   Xvnc 启动时 dxg GPU 探测可能拖慢就绪到 60s+，等待放宽到 120s）
     x_ok = False
-    for _try in range(120):
+    for _try in range(90):
+        # Xvfb 中途退出立即 fail（避免 xdpyinfo 连接挂起空转）
+        r = run_cmd(["bash", "-lc", "pgrep -f 'Xvfb :%d ' >/dev/null || echo XDEAD" % disp], timeout=8)
+        if r[0] == 0 and "XDEAD" in r[1]:
+            fail_instance(instance_id, "Xvfb :%d 中途退出（见 /tmp/xvfb-%d.log）" % (disp, disp))
+            return
         r = run_cmd([
             "su", "-", "webgame", "-c",
             "DISPLAY=:%d xdpyinfo >/dev/null 2>&1 && echo YES || echo NO" % disp],

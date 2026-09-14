@@ -31,14 +31,21 @@ public final class CloudSession {
     private volatile com.github.cocosoys.mc.webgame.control.InstanceHandle instance;
     private volatile long lastActivity = System.currentTimeMillis();
 
+    /** 浏览器请求的容器分辨率（0 = 使用服务端 config cloud.scale）。 */
+    private final int reqWidth;
+    private final int reqHeight;
+
     CloudSession(JavaPlugin plugin, CloudSessionManager manager, String id,
-                 String username, String deviceIp, io.netty.channel.ChannelHandlerContext ctx) {
+                 String username, String deviceIp, io.netty.channel.ChannelHandlerContext ctx,
+                 int reqWidth, int reqHeight) {
         this.plugin = plugin;
         this.manager = manager;
         this.id = id;
         this.username = username;
         this.deviceIp = deviceIp;
         this.ctx = ctx;
+        this.reqWidth = Math.max(0, reqWidth);
+        this.reqHeight = Math.max(0, reqHeight);
     }
 
     // ===== getters =====
@@ -53,6 +60,16 @@ public final class CloudSession {
 
     public String getDeviceIp() {
         return deviceIp;
+    }
+
+    /** 浏览器请求的容器宽度（0 = 使用服务端 config）。 */
+    public int getReqWidth() {
+        return reqWidth;
+    }
+
+    /** 浏览器请求的容器高度（0 = 使用服务端 config）。 */
+    public int getReqHeight() {
+        return reqHeight;
     }
 
     public Channel getChannel() {

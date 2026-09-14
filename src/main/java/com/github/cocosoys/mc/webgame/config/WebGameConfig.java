@@ -239,6 +239,30 @@ public final class WebGameConfig {
         return cloudScale;
     }
 
+    /** 容器（Xvfb/MC 全屏）宽度：解析 cloud.scale 的 "WxH"（非法回落 1280）。 */
+    public int getCloudResolutionWidth() {
+        return parseScale(cloudScale, 0, 1280);
+    }
+
+    /** 容器（Xvfb/MC 全屏）高度：解析 cloud.scale 的 "WxH"（非法回落 720）。 */
+    public int getCloudResolutionHeight() {
+        return parseScale(cloudScale, 1, 720);
+    }
+
+    private static int parseScale(String scale, int idx, int fallback) {
+        try {
+            if (scale != null && scale.indexOf('x') > 0) {
+                String[] parts = scale.split("x");
+                if (parts.length > idx) {
+                    int v = Integer.parseInt(parts[idx].trim());
+                    return Math.max(1, Math.min(2560, v));
+                }
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return fallback;
+    }
+
     /** GOP 帧数（关键帧间隔）。 */
     public int getCloudGopFrames() {
         return cloudGopFrames;

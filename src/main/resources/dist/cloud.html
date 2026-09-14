@@ -272,7 +272,9 @@ function startFitWatch() {
 
     var proto = location.protocol === "https:" ? "wss://" : "ws://";
     var url = proto + location.host + "/cloud?user=" + encodeURIComponent(user)
-        + (sessionSid ? "&sid=" + encodeURIComponent(sessionSid) : "");
+        + (sessionSid ? "&sid=" + encodeURIComponent(sessionSid) : "")
+        + (reqW > 0 ? "&w=" + reqW : "")
+        + (reqH > 0 ? "&h=" + reqH : "");
     ws = new WebSocket(url);
 
     var t0 = Date.now();
@@ -396,11 +398,25 @@ function startFitWatch() {
 
   // URL ?user=xxx 预填（URL 显式指定的用户优先于本地会话恢复）
   var urlUser = "";
+  // 容器分辨率：?res=1600x900 或 ?w=1600&h=900，透传给执行面 Xvfb/MC 全屏；
+  // 未指定/非法时 0 = 使用服务端 config cloud.scale（默认 1280x720）。
+  var reqW = 0, reqH = 0;
   (function () {
     var q = location.search;
     if (q.indexOf("user=") >= 0) {
       q.replace(/[?&]user=([^&]*)/, function (m, v) { urlUser = v; return m; });
       if (urlUser) { input.value = decodeURIComponent(urlUser); }
+    }
+    function clamp(v) { v = parseInt(v, 10); return (v >= 640 && v <= 2560) ? (v & ~1) : 0; }
+    var m = q.match(/[?&]res=([^&]*)/);
+    if (m && m[1].indexOf("x") > 0) {
+      var sp = m[1].split("x");
+      reqW = clamp(sp[0]); reqH = clamp(sp[1]);
+    } else {
+      var mw = q.match(/[?&]w=([^&]*)/);
+      var mh = q.match(/[?&]h=([^&]*)/);
+      if (mw) { reqW = clamp(mw[1]); }
+      if (mh) { reqH = clamp(mh[1]); }
     }
   })();
 
