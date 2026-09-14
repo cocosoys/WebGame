@@ -116,14 +116,55 @@
     try {
       var d = cloudFrame.contentDocument;
       if (!d) { return; }
-      var cv = d.querySelector("canvas");
+      // KasmVNC 页内有多个 canvas：noVNC_multiMonitorWidget 是隐藏占位，
+      // 真正画面 canvas 是缓冲面积最大的那个（1024x768）。必须选对，否则
+      // 拉伸落在占位 canvas 上，真实画面仍按 4:3 等比缩放留黑边。
+      var cvs = d.querySelectorAll("canvas");
+      var cv = null, bestArea = -1;
+      for (var i = 0; i < cvs.length; i++) {
+        var c = cvs[i];
+        if (c.id === "noVNC_multiMonitorWidget") { continue; }
+        var a = (c.width || 0) * (c.height || 0);
+        if (a > bestArea) { bestArea = a; cv = c; }
+      }
       if (!cv) { return; }
       if (fitMode) {
+        // 铺满：canvas 及其祖先容器链全部强制 100%（KasmVNC 父容器 height:auto
+        // 会塌陷为 0，canvas 100% 高度因此失效）
+        var p = cv.parentElement;
+        while (p && p !== d.documentElement) {
+          p.style.width = "100%";
+          p.style.height = "100%";
+          p.style.flex = "none";
+          p = p.parentElement;
+        }
+        d.documentElement.style.width = "100%";
+        d.documentElement.style.height = "100%";
+        d.body.style.margin = "0";
+        d.body.style.width = "100%";
+        d.body.style.height = "100%";
+        d.body.style.overflow = "hidden";
         cv.style.width = "100%";
         cv.style.height = "100%";
+        cv.style.display = "block";
       } else {
+        // 原始比例：清空内联样式，交还 KasmVNC 等比缩放
+        var q = cv.parentElement;
+        while (q && q !== d.documentElement) {
+          q.style.width = "";
+          q.style.height = "";
+          q.style.flex = "";
+          q = q.parentElement;
+        }
+        d.documentElement.style.width = "";
+        d.documentElement.style.height = "";
+        d.body.style.margin = "";
+        d.body.style.width = "";
+        d.body.style.height = "";
+        d.body.style.overflow = "";
         cv.style.width = "";
         cv.style.height = "";
+        cv.style.display = "";
       }
     } catch (e) {}
   }
