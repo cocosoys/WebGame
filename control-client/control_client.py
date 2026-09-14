@@ -326,6 +326,22 @@ def instance_worker(instance_id):
         fail_instance(instance_id, "MC 连续 3 次启动未就绪")
         return
 
+    # 4.5) MC 窗口铺满虚拟屏幕（云游戏全屏化）：虚拟屏 NxM，MC 初始窗口
+    # 854x480 只占中央留黑边，resize 到虚拟屏尺寸消除黑边（浏览器侧 canvas
+    # 100% 拉伸后即为铺满画面）。windowmove 0 0 尽力归位（openbox 可能覆盖）
+    r = run_cmd([
+        "su", "-", "webgame", "-c",
+        "export DISPLAY=:%d; "
+        "GEO=$(xdpyinfo | grep dimensions | awk '{print $2}'); "
+        "W=$(xdotool search --name Minecraft | head -1); "
+        "[ -n \"$W\" ] && xdotool windowsize $W $GEO; "
+        "[ -n \"$W\" ] && xdotool windowmove $W 0 0; "
+        "echo FULLSCREEN:$GEO:$W" % disp], timeout=15)
+    if r[0] == 0 and "FULLSCREEN" in r[1]:
+        log("  MC 窗口已铺满虚拟屏: %s" % (r[1].strip() or "?"))
+    else:
+        log("  MC 全屏化失败: %s" % (r[1].strip() if r[0] == 0 else "rc=%d" % r[0]))
+
     inst["state"] = ST_READY
     inst["readyAt"] = time.time()
     log("READY %s display=:%d kasm=%d" % (instance_id, disp, inst["kasmPort"]))
