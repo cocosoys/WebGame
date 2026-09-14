@@ -393,6 +393,9 @@ export LWJGL_DISABLE_XRANDR=true
 # MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
+# llvmpipe 16 线程在 WSL 下会触发 libc SIGSEGV（hs_err 实证），单线程太慢（加载>10min）
+# 折中：4 线程（多核加速 + 崩溃风险可控）
+export LP_NUM_THREADS=4
 exec java -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\
