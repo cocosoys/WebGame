@@ -54,6 +54,8 @@
 ```
 server-cloud/
 ├── README.md                  # 本文档
+├── 一键安装.bat / 一键更新.bat / 一键卸载.bat / 一键状态.bat
+│                              # Windows 中文一键快捷方式（双击即用，GBK）
 ├── packages/                  # 离线依赖包（一键安装免下载）
 │   ├── kasmvncserver_jammy_1.5.0_amd64.deb   # KasmVNC（入库，2.5MB）
 │   ├── java8-openjdk-amd64.tar.gz            # Java 8 离线包（本地存放，不入库，56MB）

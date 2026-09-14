@@ -88,6 +88,19 @@ systemd=true
 
 ## 7. Windows 侧辅助（可选）
 
+- **中文一键快捷方式**：`server-cloud/` 根目录提供了 4 个双击即用的启动器
+  （Windows 批处理，GBK 编码，中文命名）：
+
+  | 文件 | 作用 |
+  |---|---|
+  | `一键安装.bat` | 部署执行面（deploy.sh）+ 状态检查 |
+  | `一键更新.bat` | 同步代码并重启服务（update.sh） |
+  | `一键卸载.bat` | 停止服务并清理（uninstall.sh，保留数据） |
+  | `一键状态.bat` | 只读状态检查（status.sh） |
+
+  > 启动器以 `wsl -u root` 进入 WSL 执行（无需 sudo 密码）；自动用
+  > `wslpath` 把当前目录转为 `/mnt/...` 路径，双击即可使用。
+
 - 服务器（Spigot）跑在 Windows 上、执行面跑在 WSL 内时，管控 TCP 25576
   走 WSL 回环即可（WSL2 与宿主共享回环，`127.0.0.1:25576` 双向可达）。
 - 若服务器在其他主机：执行面 `webgame-cc.service` 默认监听回环，

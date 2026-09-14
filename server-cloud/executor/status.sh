@@ -47,9 +47,10 @@ else
 fi
 
 # 4. Xvnc / openbox / 实例
-XVNC_COUNT=$(pgrep -fc "/usr/bin/Xvnc :" 2>/dev/null || echo 0)
-OPENBOX_COUNT=$(pgrep -fc "^/usr/bin/openbox" 2>/dev/null || echo 0)
-MC_COUNT=$(pgrep -fc "net.minecraft.launchwrapper.Launch" 2>/dev/null || echo 0)
+XVNC_COUNT=$(pgrep -fc "/usr/bin/Xvnc :" 2>/dev/null || true)
+OPENBOX_COUNT=$(pgrep -fc "^/usr/bin/openbox" 2>/dev/null || true)
+MC_COUNT=$(pgrep -fc "net.minecraft.launchwrapper.Launch" 2>/dev/null || true)
+XVNC_COUNT="${XVNC_COUNT:-0}"; OPENBOX_COUNT="${OPENBOX_COUNT:-0}"; MC_COUNT="${MC_COUNT:-0}"
 inf "Xvnc 进程: $XVNC_COUNT 个 | openbox: $OPENBOX_COUNT 个 | MC 客户端: $MC_COUNT 个"
 
 # 5. KasmVNC 端口（8542 起）
