@@ -42,27 +42,28 @@ cd ~/server-cloud/executor
 sudo bash deploy.sh
 ```
 
-脚本会：创建 `webgame` 用户、装依赖（openbox/xdotool/openjdk-8 等）、
-下载并安装 KasmVNC 1.5.0、部署 `control_client.py` 与 KasmVNC 配置、
-写 systemd 单元并启动 `webgame-cc.service`。
+脚本会：创建 `webgame` 用户、装依赖（openbox/xdotool 等）、
+安装 Java 8（**优先用 packages/java8-openjdk-amd64.tar.gz 离线解包**，
+否则尝试 apt，失败会明确提示）、安装 KasmVNC（**优先用
+packages/kasmvncserver_jammy_1.5.0_amd64.deb**，否则从 GitHub 下载）、
+部署 `control_client.py` 与 KasmVNC 配置、写 systemd 单元并启动
+`webgame-cc.service`。
 
-若主机无法直连 GitHub，请先在能上网的机器下载
-[kasmvncserver_1.5.0-1_amd64.deb](https://github.com/kasmtech/KasmVNC/releases)，
-再 `sudo bash deploy.sh --kasm-deb /path/to/kasmvncserver_1.5.0-1_amd64.deb`。
+> 整个 `server-cloud/packages/` 目录（KasmVNC deb + Java8 + MC 客户端）
+> 拷贝到新机器后即可**全离线一键部署**，无需任何外部下载。
 
 ## 5. 导入 MC 客户端
 
-源机器（已有可用的执行面）：
+新机器直接使用本地离线包（推荐）：
 
 ```bash
-sudo bash mc-pack.sh                    # 产出 mc-backup.tar.gz
-# 传到新机器（scp / U盘 / 网盘均可）
+sudo bash mc-import.sh          # 自动使用 packages/mc-backup.tar.gz
 ```
 
-新机器：
+源机器生成/更新离线包（当 packages/ 里没有时）：
 
 ```bash
-sudo bash mc-import.sh /path/to/mc-backup.tar.gz
+sudo bash mc-pack.sh            # 产出 mc-backup.tar.gz，拷贝到新机器 packages/
 ```
 
 ## 6. 开机自启（WSL2 注意）

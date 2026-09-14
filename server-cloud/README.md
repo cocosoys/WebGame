@@ -54,14 +54,18 @@
 ```
 server-cloud/
 ├── README.md                  # 本文档
+├── packages/                  # 离线依赖包（一键安装免下载）
+│   ├── kasmvncserver_jammy_1.5.0_amd64.deb   # KasmVNC（入库，2.5MB）
+│   ├── java8-openjdk-amd64.tar.gz            # Java 8 离线包（本地存放，不入库，56MB）
+│   └── mc-backup.tar.gz                      # MC 客户端离线包（本地存放，不入库，196MB）
 ├── executor/                  # 执行面（部署到 Linux/WSL2）
 │   ├── control_client.py      # 管控服务主程序（与 control-client/ 同源）
-│   ├── deploy.sh              # ★ 一键部署（新机从零）
+│   ├── deploy.sh              # ★ 一键部署（新机从零，本地包优先）
 │   ├── update.sh              # ★ 一键更新（同步代码 + 重启）
 │   ├── uninstall.sh           # ★ 一键卸载（停服务 + 清理）
 │   ├── status.sh              # 一键状态检查（只读）
 │   ├── mc-pack.sh             # 打包 MC 客户端（迁移/备份）
-│   ├── mc-import.sh           # 导入 MC 客户端
+│   ├── mc-import.sh           # 导入 MC 客户端（默认用 packages/ 本地包）
 │   ├── systemd/
 │   │   ├── webgame-cc.service # 管控服务单元（root 运行）
 │   │   └── openbox@.service   # openbox 单元模板（%i=display 号）
@@ -71,6 +75,17 @@ server-cloud/
 └── windows/
     └── README.md              # Windows 宿主侧说明（WSL 安装/进入）
 ```
+
+### 离线依赖包（packages/）
+
+| 文件 | 体积 | 入库 | 说明 |
+|---|---|---|---|
+| `kasmvncserver_jammy_1.5.0_amd64.deb` | 2.5MB | ✅ | KasmVNC（Ubuntu 22.04/jammy 版），deploy.sh 自动优先使用 |
+| `java8-openjdk-amd64.tar.gz` | 56MB | ❌ | Java 8 完整 JVM，deploy.sh 检测到后自动解包 + update-alternatives |
+| `mc-backup.tar.gz` | 196MB | ❌ | Forge 1.12.2 客户端完整安装（versions/libraries/assets/natives），`mc-import.sh` 默认自动使用 |
+
+> 大包（java8/mc）不入 git 仓库（体积限制），**本地保留**即可实现全离线一键部署；
+> 迁移到新机器时把 `packages/` 整个目录拷贝过去（或用 mc-pack.sh/mc-import.sh 重新生成）。
 
 ## 3. 快速开始（新服务器）
 
@@ -82,11 +97,12 @@ server-cloud/
 cd server-cloud/executor
 
 # ② 一键部署（创建用户、装依赖/KasmVNC、写 systemd、启动服务）
+#    依赖优先使用 packages/ 本地包（KasmVNC deb、Java 8 tar），无需下载
 sudo bash deploy.sh
 
-# ③ 导入 MC 客户端（Forge 1.12.2，含 versions/libraries/assets/natives）
-#    在源机器先执行: sudo bash mc-pack.sh            # 产出 mc-backup.tar.gz
-sudo bash mc-import.sh /path/to/mc-backup.tar.gz
+# ③ 导入 MC 客户端（自动使用 packages/mc-backup.tar.gz；若不存在再手动指定）
+sudo bash mc-import.sh
+#     或者: sudo bash mc-import.sh /path/to/mc-backup.tar.gz
 
 # ④ 检查
 bash status.sh
@@ -123,6 +139,7 @@ http://<服务器>:25574/api/plugins/WebGame/cloud/?user=玩家名
 | `INSTANCES` | `/home/<user>/instances` | 实例目录 |
 | `CTRL_PORT` | `25576` | 管控 TCP 端口 |
 | `KASM_VER` | `1.5.0` | KasmVNC 版本 |
+| `KASM_DIST` | `jammy` | KasmVNC 发行版（Ubuntu 22.04 用 jammy） |
 | `VNC_PASS` | `webgame` | KasmVNC 密码（deploy 时写入） |
 
 例：`APP_USER=clouduser CTRL_PORT=25577 sudo bash deploy.sh`

@@ -2,19 +2,32 @@
 # =============================================================================
 # WebGame 云游戏执行面 —— 导入 MC 客户端（配合 mc-pack.sh）
 # -----------------------------------------------------------------------------
-# 作用：把 mc-pack.sh 打出的 mc-backup.tar.gz 解包到本机 MC 目录。
+# 作用：把 mc-backup.tar.gz 解包到本机 MC 目录。
 # 用法：
-#   sudo bash mc-import.sh mc-backup.tar.gz
-#   APP_USER=xxx bash mc-import.sh mc-backup.tar.gz
+#   sudo bash mc-import.sh                        # 自动用 packages/mc-backup.tar.gz
+#   sudo bash mc-import.sh /path/to/mc-backup.tar.gz
+#   APP_USER=xxx bash mc-import.sh <包>
 # =============================================================================
 set -euo pipefail
 
 APP_USER="${APP_USER:-webgame}"
 MC_BASE="${MC_BASE:-/home/${APP_USER}/mc}"
-TARBALL="${1:?用法: sudo bash mc-import.sh <mc-backup.tar.gz>}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKG_DIR="$(dirname "$SCRIPT_DIR")/packages"
+TARBALL="${1:-}"
 
 log() { echo -e "\033[1;32m[import]\033[0m $*"; }
 die() { echo -e "\033[1;31m[import!]\033[0m $*" >&2; exit 1; }
+
+# 未指定包时，优先使用本地 packages/mc-backup.tar.gz
+if [[ -z "$TARBALL" ]]; then
+  if [[ -f "$PKG_DIR/mc-backup.tar.gz" ]]; then
+    TARBALL="$PKG_DIR/mc-backup.tar.gz"
+    log "使用本地包: $TARBALL"
+  else
+    die "未指定包且 packages/mc-backup.tar.gz 不存在。请用 mc-pack.sh 打包或传入路径"
+  fi
+fi
 
 [[ -f "$TARBALL" ]] || die "文件不存在: $TARBALL"
 [[ "$(id -u)" -eq 0 ]] || die "请用 root 运行（需要 chown）"

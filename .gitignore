@@ -15,3 +15,6 @@ client/testmod/
 __pycache__/
 *.pyc
 
+# Cloud offline packages (local only, not committed)
+server-cloud/packages/java8-*
+server-cloud/packages/mc-*
