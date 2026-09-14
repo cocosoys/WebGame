@@ -6,6 +6,9 @@
 #     （base 8542 起，每个实例递增）
 #   * ssl.require_ssl: false —— 插件侧经 25574 反代 WS，无需本机 TLS
 #   * desktop.resolution —— 控制面通过 vncserver -geometry 覆盖，模板为默认值
+#   * 不配置 desktop.gpu —— WSL2 的 dxg GPU 接口不稳定（dxgkio_query_adapter_info
+#     Ioctl failed），vncserver 打开 drinode 探测 GPU 会触发 WSL 实例崩溃重启，
+#     必须保持纯软件渲染（Xvnc 默认 llvmpipe）
 # =============================================================================
 network:
   protocol: http
@@ -19,10 +22,7 @@ network:
 
 desktop:
   resolution:
-    width: 1024
-    height: 768
+    width: 1280
+    height: 720
   allow_resize: true
   pixel_depth: 24
-  gpu:
-    hw3d: false
-    drinode: /dev/dri/renderD128

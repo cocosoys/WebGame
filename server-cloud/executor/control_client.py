@@ -245,7 +245,7 @@ def instance_worker(instance_id):
         time.sleep(2)
     rc, out = run_cmd([
         "su", "-", "webgame", "-c",
-        "vncserver :%d -geometry 1280x720 -depth 24 -localhost no "
+        "vncserver :%d -geometry 1280x720 -depth 24 -localhost yes "
         "-SecurityTypes None -disableBasicAuth -udpPort 0" % disp], timeout=30)
     if rc != 0:
         fail_instance(instance_id, "Xvnc 启动失败: %s" % out.strip())
@@ -371,9 +371,14 @@ def build_launch_script(username, server, port, xmx, mc_base, inst_root):
 # WebGame 执行面实例脚本（S1 契约生成）
 cd {inst_root}
 export LWJGL_DISABLE_XRANDR=true
+# WSL2 dxg GPU 接口不稳定（dxgkio_query_adapter_info Ioctl failed），
+# MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=llvmpipe
 exec java -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\
+  -Dorg.lwjgl.opengl.Display.allowSoftwareOpenGL=true \\
   -cp "{classpath}" \\
   net.minecraft.launchwrapper.Launch \\
   --username {username} --version {version_id} \\
@@ -605,8 +610,16 @@ def main():
     signal.signal(signal.SIGTERM, on_sig)
 
     while True:
-        conn, addr = srv.accept()
-        threading.Thread(target=handle_conn, args=(conn, addr), daemon=True).start()
+        try:
+            conn, addr = srv.accept()
+            threading.Thread(target=handle_conn, args=(conn, addr), daemon=True).start()
+        except socket.timeout:
+            continue
+        except Exception as _e:
+            # accept 偶发异常（服务器重启导致 WSL 端口转发短暂中断时 EINTR/ECONNABORTED
+            # 等），绝不能让它击穿主循环——否则 systemd 判定崩溃重启，SPAWN 窗口失败
+            log("accept 异常: %s，1s 后重试" % _e)
+            time.sleep(1)
 
 
 if __name__ == "__main__":
