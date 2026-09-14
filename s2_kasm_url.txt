@@ -1,0 +1,1 @@
+http://127.0.0.1:25574/kasm/c2/8542/vnc.html?host=127.0.0.1&port=25574&path=kasm/c2/8542/websockify&autoconnect=1&resize=scale&reconnect=1

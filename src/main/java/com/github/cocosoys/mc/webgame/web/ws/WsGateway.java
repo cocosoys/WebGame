@@ -46,6 +46,11 @@ public final class WsGateway {
     /** 设备（来源 IP）当前活跃游戏会话计数，用于 max-connections-per-device 限制。 */
     private final Map<String, java.util.concurrent.atomic.AtomicInteger> deviceSlots = new ConcurrentHashMap<>();
 
+    // ---- cloud 云游戏通道（可选，由 WebGame 装配） ----
+    private volatile String cloudPath;
+    private volatile com.github.cocosoys.mc.webgame.config.WebGameConfig cloudConfig;
+    private volatile com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager cloudManager;
+
     private static final AtomicInteger GROUP_SEQ = new AtomicInteger();
 
     public WsGateway(JavaPlugin plugin, String wsPath, String loopbackHost, int loopbackPort,
@@ -138,6 +143,30 @@ public final class WsGateway {
     /** 同一设备（来源 IP）最多同时进入游戏的浏览器会话数。 */
     public int getMaxConnectionsPerDevice() {
         return maxConnectionsPerDevice;
+    }
+
+    // ===== cloud 通道接入 =====
+
+    /** 装配 cloud 云游戏通道（在 install() 之前调用）。 */
+    public void setCloudEndpoint(String path,
+                                 com.github.cocosoys.mc.webgame.config.WebGameConfig config,
+                                 com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager manager) {
+        this.cloudPath = path;
+        this.cloudConfig = config;
+        this.cloudManager = manager;
+    }
+
+    /** 路径是否命中 cloud 通道（未装配返回 false）。 */
+    public boolean matchesCloudPath(String path) {
+        return cloudPath != null && cloudPath.equals(path) && cloudManager != null;
+    }
+
+    public com.github.cocosoys.mc.webgame.config.WebGameConfig getCloudConfig() {
+        return cloudConfig;
+    }
+
+    public com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager getCloudManager() {
+        return cloudManager;
     }
 
     /**

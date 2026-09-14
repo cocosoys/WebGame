@@ -1,4 +1,4 @@
-# WebGame 第一版配置（M1：页面托管 + 地址注入）
+﻿# WebGame 第一版配置（M1：页面托管 + 地址注入）
 page:
   # 游戏页面挂载路径（标准接口前缀，挂载 SOYSHTTPOverMC 无前缀路由）。
   # 打开 http://127.0.0.1:25574/api/plugins/WebGame/eagler/?user=Tom 直接进入服务器；
@@ -34,3 +34,44 @@ auto-join:
   enabled: true
   # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/?user=Tom
   default-username: "WebPlayer"
+# 管控契约（S1：插件控制面 ↔ 执行面控制客户端）
+# 插件为 TCP 客户端，控制客户端为 TCP 服务端（执行面所在主机）。
+# 连接后插件按需下发 SPAWN/KILL/STATUS/CONFIG，执行面回报 READY/STOPPED/STATUS。
+# 断线自动重连（指数退避，最长 30s）。
+control:
+  # 控制客户端监听地址（WSL2 mirrored 网络下 127.0.0.1 与 Windows 互通）
+  host: "127.0.0.1"
+  # 管控契约 TCP 端口（与 MC 25574、KasmVNC 8542 互不冲突）
+  port: 25576
+# 云游戏通道（路线 C：插件控制面 + 执行面 KasmVNC）。
+# 信令走同端口 25574 的 WS /cloud：浏览器连入 → 插件限流 + 下发 SPAWN →
+# 执行面起实例 → READY 上报 → 插件回 KasmVNC 采集端点 URL → 浏览器跳转直连（v1）；
+# S2 起由插件 25574 反代（/kasm），浏览器不再直连执行面。
+cloud:
+  enabled: true
+  # 云游戏页面挂载路径（SOYS 无前缀路由）
+  path: "/api/plugins/WebGame/cloud/"
+  # 信令 WebSocket 路径（WebGame 自接管，先于 SOYS 分流）
+  ws-path: "/cloud"
+  # 传输模式：ws（v1 同端口信令）| webrtc（v2 预留，分离端口）
+  transport: "ws"
+  # v2 预留：WebRTC/UDP 媒体端口段（v1 不启用，留空）
+  udp-port-range: ""
+  # 心跳：服务器下发间隔秒、失活判定秒（实例启动约 90s，失活窗口须覆盖）
+  ping-interval-seconds: 2
+  idle-timeout-seconds: 120
+  # 实例参数（经管控契约随 SPAWN 下发给执行面；本机不再直接 spawn 客户端进程）
+  client:
+    # 执行面侧客户端根目录（含 .minecraft；libraries/assets/versions/mods 均在此）
+    base-dir: "/home/webgame/mc"
+    # 版本 id（versions 目录下）
+    version: "1.12.2-Forge_14.23.5.2864"
+    # 自动连服地址/端口（端口 0 = 跟随 server-port）
+    server: "127.0.0.1"
+    port: 0
+    # JVM 内存
+    xmx: "2G"
+  # 编码参数（下发执行面）
+  fps: 30
+  bitrate-kbps: 4000
+  scale: "1280x720"

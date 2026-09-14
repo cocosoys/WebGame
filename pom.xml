@@ -14,7 +14,7 @@
     <properties>
         <java.version>1.8</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <soys.version>1.3.0</soys.version>
+        <soys.version>1.4.0</soys.version>
     </properties>
 
     <build>
@@ -97,7 +97,7 @@
             <artifactId>soyshttpovermc</artifactId>
             <version>${soys.version}</version>
             <scope>system</scope>
-            <systemPath>${project.basedir}/../SOYSHTTPOverMC/core/target/SOYSHTTPOverMC-1_12-${soys.version}.jar</systemPath>
+            <systemPath>${project.basedir}/../SOYSHTTPOverMC/output/SOYSHTTPOverMC-1_12-${soys.version}.jar</systemPath>
         </dependency>
     </dependencies>
 </project>

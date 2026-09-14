@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGame 云游戏</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #101014; color: #e8e8e8;
+    font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; overflow: hidden; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #topbar { height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 14px;
+    background: #1a1a22; border-bottom: 1px solid #2a2a34; gap: 10px; font-size: 13px; }
+  #topbar .title { font-weight: 600; }
+  #status { font-size: 12px; color: #9a9aa5; }
+  #stage { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; }
+  #canvas { width: 100%; height: 100%; object-fit: contain; background: #000; cursor: crosshair; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; background: rgba(16,16,20,0.92); text-align: center; padding: 20px; }
+  #overlay.hidden { display: none; }
+  #overlay h1 { font-size: 20px; margin: 0 0 6px; }
+  #overlay p { font-size: 13px; color: #9a9aa5; margin: 4px 0; max-width: 460px; line-height: 1.6; }
+  #userInput { margin-top: 16px; display: flex; gap: 8px; }
+  #username { padding: 8px 12px; font-size: 14px; border-radius: 8px; border: 1px solid #3a3a48;
+    background: #1a1a22; color: #e8e8e8; width: 200px; outline: none; }
+  #username:focus { border-color: #6b8afd; }
+  #enterBtn { padding: 8px 20px; font-size: 14px; border-radius: 8px; border: none; cursor: pointer;
+    background: #4a6cf7; color: #fff; }
+  #enterBtn:hover { background: #5a7cff; }
+  #errMsg { color: #ff7b7b; font-size: 13px; margin-top: 12px; min-height: 18px; }
+  #hint { position: absolute; bottom: 12px; left: 0; right: 0; text-align: center;
+    font-size: 12px; color: rgba(255,255,255,0.5); pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="topbar">
+    <span class="title">WebGame 云游戏</span>
+    <span id="status">未连接</span>
+  </div>
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="overlay">
+      <h1 id="ovTitle">云游戏通道</h1>
+      <p id="ovDesc">输入用户名后直接进入服务器（第一版：同端口 WS 媒体通道）。点击画面可锁定鼠标控制视角。</p>
+      <div id="userInput">
+        <input id="username" maxlength="16" placeholder="输入用户名" autocomplete="off">
+        <button id="enterBtn">进入服务器</button>
+      </div>
+      <div id="errMsg"></div>
+    </div>
+    <div id="hint">点击画面锁定鼠标 · Esc 释放 · 再次点击重新锁定</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ================= 参数 =================
+  var params = new URLSearchParams(location.search);
+  var wsPath = params.get("ws") || "/cloud";
+  var initialUser = params.get("user") || "";
+
+  // ================= DOM =================
+  var canvas = document.getElementById("canvas");
+  var ctx2d = canvas.getContext("2d");
+  var statusEl = document.getElementById("status");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovDesc = document.getElementById("ovDesc");
+  var errMsg = document.getElementById("errMsg");
+  var userInput = document.getElementById("username");
+  var enterBtn = document.getElementById("enterBtn");
+
+  // ================= WebCodecs 能力探测 =================
+  var codecsOk = typeof window.VideoDecoder !== "undefined";
+  if (!codecsOk) {
+    errMsg.textContent = "当前浏览器不支持 WebCodecs（需要 Chrome 94+/Edge 94+/Firefox 130+/Safari 26+），" +
+      "且页面必须通过 localhost 或 HTTPS 访问。";
+    ovDesc.textContent = "请在 localhost 或 HTTPS 环境使用 Chromium 内核浏览器打开本页。";
+  }
+
+  // ================= 会话状态 =================
+  var ws = null;
+  var username = initialUser;
+  var connected = false;
+  var decoder = null;
+  var decoderMode = 0; // 0=未配置 1=带description 2=in-band
+  var vw = 0, vh = 0;
+  var currentSps = null; // 最近一次 CONFIG 的 SPS（error 降级时用于生成 codec 字符串）
+  // 调试统计（暴露到 window，供外部验证解码链路）
+  window.__cloudDebug = { decoderMode: 0, configs: 0, videos: 0, keyFrames: 0, decodes: 0, errors: 0, errorMsg: "", decodeException: "", selfHeal: 0 };
+  var reconTimer = null;
+  var reconAttempts = 0;
+
+  // ================= 输入捕获（节流批量） =================
+  var inputQueue = [];        // 事件字节数组
+  var inputBuf = null;        // 组装缓冲
+  var inputTimer = null;
+  var mouseDown = { 0:false, 1:false, 2:false };
+  var keysDown = {};
+
+  function startInputCapture() {
+    if (inputTimer) return;
+    inputBuf = [];
+    inputTimer = setInterval(flushInput, 16); // ~60Hz 批量上行
+  }
+  function stopInputCapture() {
+    if (inputTimer) { clearInterval(inputTimer); inputTimer = null; }
+    if (inputBuf && inputBuf.length > 0) { flushInput(); }
+    inputBuf = null;
+  }
+
+  function pushEvent(bytes) {
+    if (inputBuf) inputBuf.push(bytes);
+  }
+  function flushInput() {
+    if (!connected || !ws || ws.readyState !== 1) return;
+    var list = inputBuf;
+    if (!list || list.length === 0) return;
+    inputBuf = [];
+    var total = 3;
+    for (var i = 0; i < list.length; i++) total += list[i].length;
+    var buf = new ArrayBuffer(total);
+    var dv = new DataView(buf);
+    dv.setUint8(0, 0x10);            // TYPE_INPUT
+    dv.setUint16(1, list.length, true); // eventCount (LE)
+    var off = 3;
+    for (var j = 0; j < list.length; j++) {
+      var ev = list[j];
+      for (var k = 0; k < ev.length; k++) dv.setUint8(off + k, ev[k]);
+      off += ev.length;
+    }
+    ws.send(buf);
+  }
+
+  function evMouseMove(dx, dy) {
+    if (dx === 0 && dy === 0) return;
+    var b = new Uint8Array(9);
+    b[0] = 1; // EVENT_MOUSE_MOVE
+    var dv = new DataView(b.buffer);
+    dv.setInt32(1, dx, true);
+    dv.setInt32(5, dy, true);
+    pushEvent(Array.from(b));
+  }
+  function evMouseButton(button, pressed) {
+    var b = new Uint8Array(3);
+    b[0] = 2; b[1] = button & 0xFF; b[2] = pressed ? 1 : 0;
+    pushEvent(Array.from(b));
+  }
+  function evKey(code, pressed) {
+    var codeBytes = code.split("").map(function (c) { return c.charCodeAt(0) & 0xFF; });
+    var b = new Uint8Array(4 + codeBytes.length);
+    b[0] = 3; // EVENT_KEY
+    var dv = new DataView(b.buffer);
+    dv.setUint16(1, codeBytes.length, true);
+    b.set(codeBytes, 3);
+    b[3 + codeBytes.length] = pressed ? 1 : 0;
+    pushEvent(Array.from(b));
+  }
+  function evWheel(delta) {
+    var b = new Uint8Array(5);
+    b[0] = 4; // EVENT_WHEEL
+    var dv = new DataView(b.buffer);
+    dv.setInt32(1, delta, true);
+    pushEvent(Array.from(b));
+  }
+
+  function bindInput() {
+    document.addEventListener("mousemove", function (e) {
+      if (document.pointerLockElement === canvas) {
+        evMouseMove(e.movementX || 0, e.movementY || 0);
+      }
+    });
+    document.addEventListener("mousedown", function (e) {
+      if (document.pointerLockElement !== canvas) return;
+      if (e.button === 0 || e.button === 1 || e.button === 2) {
+        mouseDown[e.button] = true;
+        evMouseButton(e.button, true);
+      }
+      e.preventDefault();
+    });
+    document.addEventListener("mouseup", function (e) {
+      if (e.button === 0 || e.button === 1 || e.button === 2) {
+        if (mouseDown[e.button]) {
+          mouseDown[e.button] = false;
+          evMouseButton(e.button, false);
+        }
+      }
+    });
+    document.addEventListener("wheel", function (e) {
+      if (document.pointerLockElement !== canvas) return;
+      evWheel(Math.round(e.deltaY));
+      e.preventDefault();
+    }, { passive: false });
+    document.addEventListener("keydown", function (e) {
+      if (!connected || document.pointerLockElement !== canvas) return;
+      if (!keysDown[e.code]) {
+        keysDown[e.code] = true;
+        evKey(e.code, true);
+      }
+      if (["Tab", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"].indexOf(e.code) >= 0) {
+        e.preventDefault();
+      }
+    });
+    document.addEventListener("keyup", function (e) {
+      if (keysDown[e.code]) {
+        keysDown[e.code] = false;
+        evKey(e.code, false);
+      }
+    });
+    canvas.addEventListener("click", function () {
+      if (!connected) return;
+      if (document.pointerLockElement !== canvas) {
+        canvas.requestPointerLock();
+      }
+    });
+    document.addEventListener("pointerlockchange", function () {
+      // 释放锁时补发所有按键弹起，避免服务器侧卡键
+      for (var code in keysDown) {
+        if (keysDown[code]) { keysDown[code] = false; evKey(code, false); }
+      }
+      for (var b in mouseDown) {
+        if (mouseDown[b]) { mouseDown[b] = false; evMouseButton(parseInt(b, 10), false); }
+      }
+    });
+  }
+
+  // ================= WebCodecs 解码 =================
+  function createDecoder() {
+    if (!codecsOk) return null;
+    try {
+      var d = new VideoDecoder({
+        output: function (frame) {
+          try {
+            window.__cloudDebug.decodes++;
+            if (vw > 0 && vh > 0 && canvas.width !== vw) {
+              canvas.width = vw; canvas.height = vh;
+            }
+            ctx2d.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          } catch (ignored) {
+          } finally {
+            try { frame.close(); } catch (ignored2) {}
+          }
+        },
+        error: function (e) {
+          window.__cloudDebug.errors++;
+          window.__cloudDebug.errorMsg = (e && e.message) || String(e);
+          // 带 description 失败 → 降级 in-band（Safari 路径）
+          if (decoderMode === 1) {
+            decoderMode = 2;
+            window.__cloudDebug.decoderMode = 2;
+            try { d.configure({ codec: codecFromSps(currentSps) }); setStatus("已切换 in-band 解码"); } catch (ignored) {}
+          }
+        }
+      });
+      return d;
+    } catch (e) {
+      errMsg.textContent = "解码器初始化失败: " + e.message;
+      return null;
+    }
+  }
+
+  function codecFromSps(sps) {
+    // avc1.PPCCLL —— 从实际 SPS 动态生成，避免硬编码与流 profile/level 不匹配导致 Decoding error
+    if (!sps || sps.length < 4) return "avc1.42E01E";
+    function hx(b) { var s = b.toString(16); return s.length < 2 ? "0" + s : s; }
+    return "avc1." + hx(sps[1]) + hx(sps[2]) + hx(sps[3]);
+  }
+
+  function handleConfig(payload) {
+    if (payload.length < 6) return;
+    var dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    var spsLen = dv.getUint16(1, true);
+    var ppsOff = 3 + spsLen;
+    if (spsLen <= 0 || payload.length < ppsOff + 2) return;
+    var ppsLen = dv.getUint16(ppsOff, true);
+    var bodyOff = ppsOff + 2;
+    if (ppsLen <= 0 || payload.length < bodyOff + ppsLen + 12) return;
+    var sps = payload.subarray(3, 3 + spsLen);
+    var pps = payload.subarray(bodyOff, bodyOff + ppsLen);
+    currentSps = sps;
+    var w = dv.getUint32(bodyOff + ppsLen, true);
+    var h = dv.getUint32(bodyOff + ppsLen + 4, true);
+    var fps = dv.getUint32(bodyOff + ppsLen + 8, true);
+    vw = w; vh = h;
+    window.__cloudDebug.configs++;
+    if (decoder) {
+      try { decoder.close(); } catch (ignored) {}
+      decoder = null;
+    }
+    decoder = createDecoder();
+    if (!decoder) return;
+    // 统一走 in-band 解码：帧数据为 Annex-B，关键帧自带 SPS/PPS（服务器 handleNalu 已保留参数集）。
+    // description(AVCC) 模式在部分 Chromium 上 decode 报 Decoding error，in-band 兼容性更稳。
+    decoderMode = 2;
+    window.__cloudDebug.decoderMode = 2;
+    var codec = codecFromSps(sps);
+    try {
+      decoder.configure({ codec: codec, codedWidth: w, codedHeight: h });
+    } catch (e2) {
+      errMsg.textContent = "解码器配置失败: " + e2.message;
+    }
+    setStatus("已连接 " + w + "x" + h + "@" + fps + "fps");
+    hideOverlay();
+  }
+
+  function buildAvcc(sps, pps) {
+    var profile = sps[1], compat = sps[2], level = sps[3];
+    var out = new Uint8Array(7 + 2 + sps.length + 1 + 2 + pps.length);
+    var i = 0;
+    out[i++] = 1; out[i++] = profile; out[i++] = compat; out[i++] = level;
+    out[i++] = 0xFF; out[i++] = 0xE1;
+    out[i++] = (sps.length >> 8) & 0xFF; out[i++] = sps.length & 0xFF;
+    out.set(sps, i); i += sps.length;
+    out[i++] = 1;
+    out[i++] = (pps.length >> 8) & 0xFF; out[i++] = pps.length & 0xFF;
+    out.set(pps, i);
+    return out.buffer;
+  }
+
+  function handleVideo(payload) {
+    if (!decoder || payload.length < 6) return;
+    var dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    var tsMs = dv.getUint32(1, true);
+    var key = dv.getUint8(5) === 1;
+    // 自愈：解码器因 Decoding error 进入 closed 状态后，等下一个关键帧重建实例（中途加入/参数集缺失恢复）
+    if (key && decoder && decoder.state === "closed") {
+      try {
+        decoder = createDecoder();
+        decoder.configure({ codec: codecFromSps(currentSps), codedWidth: vw, codedHeight: vh });
+        decoderMode = 2;
+        window.__cloudDebug.decoderMode = 2;
+        window.__cloudDebug.selfHeal++;
+      } catch (e) {
+        window.__cloudDebug.selfHealErr = (e && e.message) || String(e);
+      }
+    }
+    window.__cloudDebug.videos++;
+    if (key) window.__cloudDebug.keyFrames++;
+    // 诊断：记录首个 chunk 与每个 key 帧的信息
+    if (window.__cloudDebug.videos <= 3 || key) {
+      window.__cloudDebug.lastKeyInfo = JSON.stringify({
+        v: window.__cloudDebug.videos, key: key, len: payload.length - 6, ts: tsMs,
+        head: Array.prototype.slice.call(payload, 0, Math.min(12, payload.length)).map(function (b) { return b.toString(16); }).join(" ")
+      });
+    }
+    // 有 description（decoderMode=1）时 WebCodecs 要求 AVCC 长度前缀格式；无 description 时用 Annex-B
+    var raw = payload.subarray(6);
+    var data = decoderMode === 1 ? annexbToAvcc(raw) : raw;
+    try {
+      var chunk = new EncodedVideoChunk({
+        type: key ? "key" : "delta",
+        timestamp: tsMs * 1000,
+        data: data
+      });
+      decoder.decode(chunk);
+    } catch (e) {
+      window.__cloudDebug.decodeException = (e && e.message) || String(e);
+      // 解码队列已满等瞬时错误，忽略（下一关键帧自愈）
+    }
+  }
+
+  // ================= Annex-B → AVCC（长度前缀） =================
+  function findStartCode(src, from) {
+    for (var j = from; j + 2 < src.length; j++) {
+      if (src[j] === 0 && src[j + 1] === 0 &&
+          (src[j + 2] === 1 || (j + 3 < src.length && src[j + 2] === 0 && src[j + 3] === 1))) {
+        return j;
+      }
+    }
+    return -1;
+  }
+
+  function annexbToAvcc(src) {
+    var parts = [];
+    var i = 0, n = src.length;
+    while (i < n) {
+      var sc = findStartCode(src, i);
+      if (sc < 0) break;
+      var hdr = sc + (src[sc + 2] === 1 ? 3 : 4);
+      var next = findStartCode(src, hdr);
+      var end = next < 0 ? n : next;
+      if (end > hdr) parts.push(src.subarray(hdr, end));
+      i = end;
+    }
+    var total = 0, k;
+    for (k = 0; k < parts.length; k++) total += 4 + parts[k].length;
+    var out = new Uint8Array(total);
+    var p = 0;
+    for (k = 0; k < parts.length; k++) {
+      var len = parts[k].length;
+      out[p++] = (len >>> 24) & 0xFF;
+      out[p++] = (len >>> 16) & 0xFF;
+      out[p++] = (len >>> 8) & 0xFF;
+      out[p++] = len & 0xFF;
+      out.set(parts[k], p);
+      p += len;
+    }
+    return out;
+  }
+
+  // ================= WS 连接 =================
+  function connect() {
+    if (reconTimer) { clearTimeout(reconTimer); reconTimer = null; }
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    var url = proto + location.host + wsPath + "?user=" + encodeURIComponent(username);
+    setStatus("连接中...");
+    var sock;
+    try {
+      sock = new WebSocket(url);
+    } catch (e) {
+      showError("WS 连接失败: " + e.message);
+      scheduleReconnect();
+      return;
+    }
+    ws = sock;
+    sock.binaryType = "arraybuffer";
+    sock.onopen = function () {
+      connected = true;
+      reconAttempts = 0;
+      setStatus("已连接，等待视频...");
+      startInputCapture();
+    };
+    sock.onmessage = function (ev) {
+      var payload;
+      if (ev.data instanceof ArrayBuffer) {
+        payload = new Uint8Array(ev.data);
+      } else if (ev.data && ev.data.buffer) {
+        payload = new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength);
+      } else {
+        return;
+      }
+      if (payload.length < 1) return;
+      var type = payload[0];
+      switch (type) {
+        case 0x01: handleConfig(payload); break;
+        case 0x02: handleVideo(payload); break;
+        case 0x03: { // PING → PONG
+          var pong = new ArrayBuffer(5);
+          var pdv = new DataView(pong);
+          pdv.setUint8(0, 0x04);
+          pdv.setUint32(1, new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(1, true), true);
+          ws.send(pong);
+          break;
+        }
+        case 0x05: { // ERROR
+          var len = payload.length > 3 ? new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint16(1, true) : 0;
+          var msg = len > 0 && payload.length >= 3 + len
+            ? new TextDecoder().decode(payload.subarray(3, 3 + len)) : "未知错误";
+          showError(msg);
+          break;
+        }
+        default: break;
+      }
+    };
+    sock.onclose = function (ev) {
+      console.log("WS closed code=" + (ev && ev.code) + " reason=" + (ev && ev.reason)
+        + " wasClean=" + (ev && ev.wasClean));
+      connected = false;
+      stopInputCapture();
+      setStatus("连接已断开");
+      if (decoder) { try { decoder.close(); } catch (ignored) {} decoder = null; }
+      scheduleReconnect();
+    };
+    sock.onerror = function () {
+      // onclose 会随后触发
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconTimer || !username) return;
+    reconAttempts++;
+    var delay = Math.min(1000 * reconAttempts, 8000);
+    setStatus("连接断开，" + (delay / 1000) + "s 后重连...");
+    reconTimer = setTimeout(function () {
+      reconTimer = null;
+      connect();
+    }, delay);
+  }
+
+  // ================= UI =================
+  function setStatus(s) { statusEl.textContent = s; }
+  function hideOverlay() {
+    overlay.classList.add("hidden");
+  }
+  function showError(msg) {
+    errMsg.textContent = msg;
+  }
+  function showOverlayWith(title, desc) {
+    ovTitle.textContent = title;
+    ovDesc.textContent = desc;
+    overlay.classList.remove("hidden");
+  }
+
+  function start() {
+    bindInput();
+    var u = (username || "").trim();
+    if (u) {
+      if (!/^[A-Za-z0-9_]{1,16}$/.test(u)) {
+        showError("用户名仅允许字母、数字、下划线，1-16 位");
+        username = "";
+        return;
+      }
+      connect();
+      return;
+    }
+    // 无用户名 → 显示输入界面（延续自动进服交互：确认后直接进入，无菜单）
+    overlay.classList.remove("hidden");
+    userInput.focus();
+    enterBtn.addEventListener("click", tryEnter);
+    userInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") tryEnter();
+    });
+  }
+
+  function tryEnter() {
+    var u = (userInput.value || "").trim();
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(u)) {
+      showError("用户名仅允许字母、数字、下划线，1-16 位");
+      return;
+    }
+    username = u;
+    errMsg.textContent = "";
+    showOverlayWith("正在进入服务器...", "正在建立云游戏通道，请稍候");
+    connect();
+  }
+
+  start();
+})();
+</script>
+</body>
+</html>

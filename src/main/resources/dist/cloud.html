@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGame 云游戏</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #101014; color: #e8e8e8;
+    font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; }
+  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #topbar { height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 14px;
+    background: #1a1a22; border-bottom: 1px solid #2a2a34; gap: 10px; font-size: 13px; }
+  #topbar .title { font-weight: 600; }
+  #topbar button { background: #2a2a34; color: #c8c8d0; border: 1px solid #3a3a48; border-radius: 6px;
+    padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  #topbar button:hover { background: #3a3a48; }
+  #status { font-size: 12px; color: #9a9aa5; flex: 1; text-align: right; }
+  #stage { position: relative; flex: 1; overflow: hidden; display: flex; align-items: center;
+    justify-content: center; background: #000; }
+  #cloudFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; background: rgba(16,16,20,0.95); text-align: center; padding: 20px; }
+  #overlay h1 { font-size: 20px; margin: 0 0 6px; }
+  #overlay p { font-size: 13px; color: #9a9aa5; margin: 4px 0; max-width: 460px; line-height: 1.6; }
+  #userInput { margin-top: 16px; display: flex; gap: 8px; }
+  #username { padding: 8px 12px; font-size: 14px; border-radius: 8px; border: 1px solid #3a3a48;
+    background: #1a1a22; color: #e8e8e8; width: 200px; outline: none; }
+  #username:focus { border-color: #6b8afd; }
+  #enterBtn { padding: 8px 20px; font-size: 14px; border-radius: 8px; border: none; cursor: pointer;
+    background: #6b8afd; color: #fff; }
+  #enterBtn:hover { background: #5578f0; }
+  #enterBtn:disabled { opacity: 0.5; cursor: default; }
+  .spinner { width: 34px; height: 34px; border: 3px solid #2a2a34; border-top-color: #6b8afd;
+    border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 14px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+  #err { color: #ff7b7b; font-size: 13px; margin-top: 10px; white-space: pre-line; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="topbar">
+    <span class="title">WebGame 云游戏</span>
+    <button id="fitBtn" class="hidden" title="铺满 / 原始比例">铺满</button>
+    <button id="quitBtn" class="hidden" title="退出游戏并释放实例">退出</button>
+    <span id="status">路线 C · 执行面 KasmVNC</span>
+  </div>
+  <div id="stage">
+    <div id="overlay">
+      <h1 id="title">进入服务器</h1>
+      <p id="desc">输入用户名后确认，将自动启动隔离的游戏实例并进入服务器。</p>
+      <div id="userInput">
+        <input id="username" maxlength="16" placeholder="玩家名称" autocomplete="off">
+        <button id="enterBtn">进入服务器</button>
+      </div>
+      <div id="err"></div>
+      <div id="waiting" class="hidden">
+        <div class="spinner"></div>
+        <p>正在启动游戏实例（隔离容器）…<br><span id="waitMsg"></span></p>
+      </div>
+    </div>
+    <iframe id="cloudFrame" class="hidden" allow="pointer-lock; fullscreen; clipboard-read; clipboard-write; autoplay; display-capture; web-share"></iframe>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var input = document.getElementById("username");
+  var btn = document.getElementById("enterBtn");
+  var errBox = document.getElementById("err");
+  var waiting = document.getElementById("waiting");
+  var userInput = document.getElementById("userInput");
+  var title = document.getElementById("title");
+  var desc = document.getElementById("desc");
+  var waitMsg = document.getElementById("waitMsg");
+  var statusEl = document.getElementById("status");
+  var overlay = document.getElementById("overlay");
+  var cloudFrame = document.getElementById("cloudFrame");
+  var fitBtn = document.getElementById("fitBtn");
+  var quitBtn = document.getElementById("quitBtn");
+
+  var ws = null;
+  var started = false;
+  var sessionUser = "";
+  var sessionSid = "";
+  var fitMode = true;        // true=铺满  false=原始比例
+  var reconnectAttempts = 0; // 当前连接失败重连次数
+  var reconnectTimer = null;
+
+  var STORE_KEY = "wg_cloud_session";
+
+  // ===== 会话持久化（F5 刷新 / 短时掉线恢复）=====
+
+  function saveSession() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ user: sessionUser, sid: sessionSid }));
+    } catch (e) {}
+  }
+  function loadSession() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (!raw) { return null; }
+      var o = JSON.parse(raw);
+      if (o && o.user && o.sid) { return o; }
+    } catch (e) {}
+    return null;
+  }
+  function clearSession() {
+    try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+  }
+
+  // ===== 视频拉伸：铺满 / 原始比例 =====
+
+  function applyFit() {
+    try {
+      var d = cloudFrame.contentDocument;
+      if (!d) { return; }
+      var cv = d.querySelector("canvas");
+      if (!cv) { return; }
+      if (fitMode) {
+        cv.style.width = "100%";
+        cv.style.height = "100%";
+      } else {
+        cv.style.width = "";
+        cv.style.height = "";
+      }
+    } catch (e) {}
+  }
+  function startFitWatch() {
+    // KasmVNC 会周期性重建 canvas，watch 保持拉伸状态
+    var apply = applyFit;
+    var iv = setInterval(function () {
+      if (cloudFrame.classList.contains("hidden")) { clearInterval(iv); return; }
+      apply();
+    }, 1500);
+  }
+
+  // ===== iframe 启动（含首次加载竞态自愈）=====
+
+  var kasmUrl = "";
+  var reloadCount = 0;
+
+  function startCloud(url) {
+    overlay.classList.add("hidden");
+    cloudFrame.classList.remove("hidden");
+    fitBtn.classList.remove("hidden");
+    quitBtn.classList.remove("hidden");
+    kasmUrl = url;
+    statusEl.textContent = "已连接游戏实例";
+    // 预热关键资源，降低 KasmVNC 首次加载竞态（偶发 unhandledrejection 中断连接）
+    try {
+      var base = url.replace(/vnc\.html.*$/, "");
+      ["assets/ui-BOjwDkC7.js", "assets/ui-PaSsnzBa.css"].forEach(function (p) {
+        fetch(base + p, { mode: "no-cors" }).catch(function () {});
+      });
+    } catch (e) {}
+    cloudFrame.src = url;
+    applyFit();
+    startFitWatch();
+  }
+
+  // ===== 全局独立自愈轮询（不依赖 startCloud 闭包，定时检测 iframe 是否真正连上画面）=====
+  // 判定"已稳定"：KasmVNC title 含真实桌面名（DESKTOP-xxx:NN (webgame) - KasmVNC）且 canvas 有实际画面；
+  // 只要未稳定（停在 KasmVNC 初始 title / 画面丢失），就自动重载（最多 4 次），直到连上为止。
+  window.__healCount = 0;
+  setInterval(function () {
+    if (cloudFrame.classList.contains("hidden")) { return; }
+    var d;
+    try { d = cloudFrame.contentDocument; } catch (e) { return; }
+    if (!d || !d.title) { return; }
+    var connected = d.title.indexOf("(webgame)") > 0;
+    var cv = d.querySelector("canvas");
+    var painted = cv && cv.width > 100 && cv.height > 100;
+    if (connected && painted) {
+      window.__healCount = 0;
+      applyFit();
+      return;
+    }
+    if (window.__healCount < 4 && kasmUrl) {
+      window.__healCount++;
+      cloudFrame.src = kasmUrl; // 自愈重载（等执行面服务完全就绪后重连）
+    }
+  }, 4000);
+
+  function applyFitToggle() {
+    fitMode = !fitMode;
+    fitBtn.textContent = fitMode ? "铺满" : "原始比例";
+    applyFit();
+  }
+
+  // ===== 信令连接 =====
+
+  function connect(user, sid) {
+    started = true;
+    sessionUser = user;
+    sessionSid = sid || "";
+    if (sessionSid) { saveSession(); }
+
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    var url = proto + location.host + "/cloud?user=" + encodeURIComponent(user)
+        + (sessionSid ? "&sid=" + encodeURIComponent(sessionSid) : "");
+    ws = new WebSocket(url);
+
+    var t0 = Date.now();
+    var timer = setInterval(function () {
+      var s = Math.round((Date.now() - t0) / 1000);
+      waitMsg.textContent = "已等待 " + s + " 秒（实例启动最长约 90 秒）";
+    }, 1000);
+
+    ws.onopen = function () {
+      reconnectAttempts = 0;
+      waitMsg.textContent = sessionSid ? "正在恢复会话，请稍候…" : "信令已连接，等待游戏实例就绪…";
+    };
+    ws.onmessage = function (ev) {
+      if (!(ev.data instanceof Blob)) { return; }
+      var fr = new FileReader();
+      fr.onload = function () {
+        var arr = new Uint8Array(fr.result);
+        if (arr.length < 1) { return; }
+        var type = arr[0];
+        if (type === 0x03) {
+          // 服务器心跳 PING：回应用层 PONG（0x04 + 4 字节 ts），保持会话活跃
+          var ts = new Uint8Array(4);
+          var v = (Date.now() / 1000) | 0;
+          ts[0] = (v >>> 24) & 0xFF; ts[1] = (v >>> 16) & 0xFF;
+          ts[2] = (v >>> 8) & 0xFF; ts[3] = v & 0xFF;
+          var out = new Uint8Array(5);
+          out[0] = 0x04;
+          out.set(ts, 1);
+          ws.send(out.buffer);
+          return;
+        }
+        if (type === 0x06) {
+          // KASM_URL：0x06 后直接是 UTF-8 URL（服务器帧无长度头，实测确认）
+          var url = "";
+          for (var i = 1; i < arr.length; i++) { url += String.fromCharCode(arr[i]); }
+          clearInterval(timer);
+          // 从 KASM_URL 提取会话 token（/kasm/{sid}/{port}/...）持久化，供刷新/断线恢复
+          var m = url.match(/\/kasm\/([^/]+)\//);
+          if (m && m[1] && m[1] !== sessionSid) {
+            sessionSid = m[1];
+            saveSession();
+          }
+          startCloud(url);
+        } else if (type === 0x05) {
+          // ERROR：0x05 + u16 小端长度 + utf8 消息
+          var eLen = (arr[1] & 0xFF) | ((arr[2] & 0xFF) << 8);
+          var msg = "";
+          for (var j = 3; j < 3 + eLen && j < arr.length; j++) { msg += String.fromCharCode(arr[j]); }
+          clearInterval(timer);
+          fail("无法进入服务器：" + msg);
+        }
+      };
+      fr.readAsArrayBuffer(ev.data);
+    };
+    ws.onclose = function (ev) {
+      clearInterval(timer);
+      if (!started) { return; }
+      // 短时掉线自动重连：指数退避 3/6/12/24/48s，最多 5 次；重连带 sid 恢复同一实例
+      if (reconnectAttempts < 5 && sessionSid) {
+        reconnectAttempts++;
+        var delay = 3000 * Math.pow(2, reconnectAttempts - 1);
+        statusEl.textContent = "连接断开，" + Math.round(delay / 1000) + " 秒后自动重连…（" + reconnectAttempts + "/5）";
+        reconnectTimer = setTimeout(function () {
+          if (started) { connect(sessionUser, sessionSid); }
+        }, delay);
+        return;
+      }
+      started = false;
+      fail("信令连接已断开，请重试");
+    };
+    ws.onerror = function () {
+      clearInterval(timer);
+      if (!started) { return; }
+      statusEl.textContent = "信令连接异常，等待自动重连…";
+      // 不立即 fail：等 onclose 触发重连逻辑
+    };
+  }
+
+  // ===== UI 流程 =====
+
+  function fail(msg) {
+    clearSession();
+    errBox.textContent = msg;
+    errBox.classList.remove("hidden");
+    waiting.classList.add("hidden");
+    userInput.classList.remove("hidden");
+    btn.disabled = false;
+    fitBtn.classList.add("hidden");
+    quitBtn.classList.add("hidden");
+    statusEl.textContent = "路线 C · 执行面 KasmVNC";
+  }
+
+  function enter() {
+    if (started) { return; }
+    var user = input.value.trim();
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(user)) {
+      errBox.textContent = "用户名须为 1-16 位字母/数字/下划线";
+      errBox.classList.remove("hidden");
+      return;
+    }
+    errBox.classList.add("hidden");
+    btn.disabled = true;
+    userInput.classList.add("hidden");
+    waiting.classList.remove("hidden");
+    title.textContent = "正在进入服务器";
+    desc.textContent = "正在为你分配隔离的游戏实例…";
+    waitMsg.textContent = "";
+    connect(user, "");
+  }
+
+  function quit() {
+    if (ws) {
+      try { ws.close(1000, "quit"); } catch (e) {}
+    }
+    clearSession();
+    started = false;
+    reconnectAttempts = 5; // 阻止自动重连
+    if (reconnectTimer) { clearTimeout(reconnectTimer); }
+    location.reload();
+  }
+
+  // URL ?user=xxx 预填（URL 显式指定的用户优先于本地会话恢复）
+  var urlUser = "";
+  (function () {
+    var q = location.search;
+    if (q.indexOf("user=") >= 0) {
+      q.replace(/[?&]user=([^&]*)/, function (m, v) { urlUser = v; return m; });
+      if (urlUser) { input.value = decodeURIComponent(urlUser); }
+    }
+  })();
+
+  btn.addEventListener("click", enter);
+  input.addEventListener("keydown", function (e) { if (e.key === "Enter") { enter(); } });
+  fitBtn.addEventListener("click", applyFitToggle);
+  quitBtn.addEventListener("click", quit);
+
+  // 页面加载：URL 未指定用户且存在有效会话 → 自动恢复（跳过登录，直接回到同一实例）；
+  // URL 指定了不同用户 → 清掉旧会话，走新用户登录
+  var stored = loadSession();
+  if (stored && /^[A-Za-z0-9_]{1,16}$/.test(stored.user) && /^c\d+$/.test(stored.sid)) {
+    if (urlUser && stored.user !== urlUser) {
+      clearSession();
+      stored = null;
+    }
+  } else {
+    clearSession();
+    stored = null;
+  }
+  if (stored) {
+    input.value = stored.user;
+    btn.disabled = true;
+    userInput.classList.add("hidden");
+    waiting.classList.remove("hidden");
+    title.textContent = "正在恢复会话";
+    desc.textContent = "检测到上次会话未结束，正在恢复到你的游戏实例…";
+    waitMsg.textContent = "";
+    errBox.classList.add("hidden");
+    connect(stored.user, stored.sid);
+  } else {
+    input.focus();
+  }
+})();
+</script>
+</body>
+</html>

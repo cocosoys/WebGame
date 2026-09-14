@@ -4,3 +4,10 @@ docs/
 /eaglersrc/
 target/
 *.iml
+logs/
+*.png
+*.log
+NUL
+dependency-reduced-pom.xml
+client/instances/
+client/testmod/

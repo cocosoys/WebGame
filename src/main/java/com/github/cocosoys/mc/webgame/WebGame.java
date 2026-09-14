@@ -2,7 +2,11 @@ package com.github.cocosoys.mc.webgame;
 
 import com.github.cocosoys.mc.soyshttpovermc.HttpOverMcPlugin;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.control.ControlClient;
+import com.github.cocosoys.mc.webgame.control.InstanceRegistry;
 import com.github.cocosoys.mc.webgame.web.EaglerPageRegistrar;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudPageRegistrar;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -10,12 +14,18 @@ import org.bukkit.plugin.java.JavaPlugin;
  * WebGame 主类。
  *
  * <p>M1：页面托管 + 地址注入（SOYSHTTPOverMC 网关根路径托管 Eaglercraft HTML）。
- * M2：同端口 WS 隧道（WebGame 自装嗅探器首包分流 → 101 升级 → EaglerX 握手 → MC 回环登录）。</p>
+ * M2：同端口 WS 隧道（WebGame 自装嗅探器首包分流 → 101 升级 → EaglerX 握手 → MC 回环登录）。
+ * Cloud：云游戏通道（路线 C：插件为控制面，经管控契约驱动执行面控制客户端；
+ * 执行面在 WSL2 容器内跑 Xvnc + Forge 客户端 + KasmVNC，浏览器经 25574 信令
+ * 获取采集端点后 v1 直连、S2 起由插件 25574 反代）。</p>
  */
 public final class WebGame extends JavaPlugin {
 
     private EaglerPageRegistrar pageRegistrar;
     private WsGateway wsGateway;
+    private CloudSessionManager cloudManager;
+    private ControlClient controlClient;
+    private InstanceRegistry instanceRegistry;
 
     @Override
     public void onEnable() {
@@ -56,15 +66,50 @@ public final class WebGame extends JavaPlugin {
                     cfg.getServerBrand(),
                     cfg.getServerVersion(),
                     cfg.getMaxConnectionsPerDevice());
+
+            // Cloud 云游戏通道（路线 C）：管控契约 + 实例黑盒路由
+            if (cfg.isCloudEnabled()) {
+                int port = getServer().getPort();
+
+                // 管控契约客户端（连接执行面控制客户端）与实例注册表
+                instanceRegistry = new InstanceRegistry(this);
+                controlClient = new ControlClient(this,
+                        cfg.getControlHost(), cfg.getControlPort(), instanceRegistry, null);
+                controlClient.start();
+
+                cloudManager = new CloudSessionManager(this, cfg, wsGateway,
+                        controlClient, instanceRegistry);
+                instanceRegistry.setListener(cloudManager);
+
+                wsGateway.setCloudEndpoint(cfg.getCloudWsPath(), cfg, cloudManager);
+                cloudManager.install();
+                new CloudPageRegistrar(this, cfg, soys.getApi()).install();
+                getLogger().info("WebGame 云游戏通道已启用：页面 http://" + cfg.getPublicHost() + ":" + port + cfg.getCloudPath()
+                        + " | 信令 ws://" + cfg.getPublicHost() + ":" + port + cfg.getCloudWsPath()
+                        + " | 执行面 " + cfg.getControlHost() + ":" + cfg.getControlPort());
+            }
+
             wsGateway.install();
         } catch (Throwable t) {
-            getLogger().severe("WebGame WS 隧道初始化失败：");
+            getLogger().severe("WebGame WS 隧道/云游戏初始化失败：");
             t.printStackTrace();
         }
     }
 
     @Override
     public void onDisable() {
+        if (cloudManager != null) {
+            try {
+                cloudManager.uninstall();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (controlClient != null) {
+            try {
+                controlClient.stop();
+            } catch (Throwable ignored) {
+            }
+        }
         if (wsGateway != null) {
             try {
                 wsGateway.uninstall();
