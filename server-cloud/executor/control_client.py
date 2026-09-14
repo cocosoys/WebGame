@@ -204,22 +204,37 @@ def instance_worker(instance_id):
     # inst_root 整体归 webgame 所有（MC 以 webgame 运行，需写日志/gameDir/natives；
     # 残留的 root 属主文件一并回收）
     run_cmd(["chown", "-R", "webgame:webgame", inst_root], timeout=10)
-    # 1.5) 禁用"失焦暂停"：MC 默认 pauseOnLostFocus:true，云游戏下窗口频繁失焦
-    # 会自动弹暂停菜单并吞输入（KasmVNC/输入代理均受影响），必须置 false
+    # 1.5) 实例 options.txt：禁用"失焦暂停" + 低画质软渲染优化预设。
+    # llvmpipe 软渲染下，高画质/远视距/VBO 会显著拖慢世界渲染（长时间停留加载背景），
+    # 因此强制低画质：近视距 2chunk、maxFps 30、关粒子/平滑光照/阴影/VBO/mipmap。
     opt = os.path.join(inst_root, "options.txt")
+    low_gfx = {
+        "pauseOnLostFocus": "false",
+        "graphics": "fast",
+        "renderDistance": "2",
+        "maxFps": "30",
+        "particles": "2",
+        "ao": "0",
+        "smoothLighting": "false",
+        "entityShadows": "false",
+        "mipmapLevels": "0",
+        "vboUse": "false",
+        "vsync": "false",
+    }
     try:
+        _content = ""
         if os.path.exists(opt):
             with open(opt, encoding="utf-8", errors="replace") as f:
                 _content = f.read()
-            if "pauseOnLostFocus" in _content:
-                _content = _content.replace("pauseOnLostFocus:true", "pauseOnLostFocus:false")
+        # 保留既有键值，仅覆盖/追加优化项（MC 读入后重写会保留有效键）
+        for _k, _v in low_gfx.items():
+            if re.search(r"^%s:.*$" % re.escape(_k), _content, flags=re.M):
+                _content = re.sub(r"^%s:.*$" % re.escape(_k), "%s:%s" % (_k, _v), _content, flags=re.M)
             else:
-                _content += "\npauseOnLostFocus:false\n"
-        else:
-            _content = "pauseOnLostFocus:false\n"
+                _content += "%s:%s\n" % (_k, _v)
         with open(opt, "w", encoding="utf-8") as f:
             f.write(_content)
-        log("  已确保 %s 失焦暂停关闭" % opt)
+        log("  已写入实例 options.txt 优化预设（失焦暂停关闭 + 低画质软渲染）")
     except Exception as e:
         log("  写 options.txt 失败: %s" % e)
     launch_sh = os.path.join(inst_root, "launch.sh")
@@ -393,9 +408,13 @@ export LWJGL_DISABLE_XRANDR=true
 # MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
-# llvmpipe 16 线程在 WSL 下会触发 libc SIGSEGV（hs_err 实证），单线程太慢（加载>10min）
-# 折中：4 线程（多核加速 + 崩溃风险可控）
-export LP_NUM_THREADS=4
+# llvmpipe 多线程 SIGSEGV/死锁；单线程 llvmpipe 世界渲染仍挂起（进服瞬间冻结主菜单帧）
+# 换 Mesa softpipe（经典软渲染，GL 2.1 上下文，lwjgl2 时代兼容性最好）——慢但稳
+export LIBGL_ALWAYS_SOFTWARE=1
+export GALLIUM_DRIVER=softpipe
+export LP_NUM_THREADS=1
+export MESA_GL_VERSION_OVERRIDE=2.1
+export MESA_GLSL_VERSION_OVERRIDE=120
 exec java -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\
