@@ -133,9 +133,9 @@
         // 会塌陷为 0，canvas 100% 高度因此失效）
         var p = cv.parentElement;
         while (p && p !== d.documentElement) {
-          p.style.width = "100%";
-          p.style.height = "100%";
-          p.style.flex = "none";
+          p.style.setProperty("width", "100%", "important");
+          p.style.setProperty("height", "100%", "important");
+          p.style.setProperty("flex", "none", "important");
           p = p.parentElement;
         }
         d.documentElement.style.width = "100%";
@@ -144,9 +144,9 @@
         d.body.style.width = "100%";
         d.body.style.height = "100%";
         d.body.style.overflow = "hidden";
-        cv.style.width = "100%";
-        cv.style.height = "100%";
-        cv.style.display = "block";
+        cv.style.setProperty("width", "100%", "important");
+        cv.style.setProperty("height", "100%", "important");
+        cv.style.setProperty("display", "block", "important");
       } else {
         // 原始比例：清空内联样式，交还 KasmVNC 等比缩放
         var q = cv.parentElement;
@@ -168,13 +168,41 @@
       }
     } catch (e) {}
   }
-  function startFitWatch() {
+    function showGrabHint() {
+    try {
+      var h = document.getElementById("grabHint");
+      if (!h) {
+        h = document.createElement("div");
+        h.id = "grabHint";
+        h.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:9;background:rgba(0,0,0,0.72);color:#fff;padding:6px 16px;border-radius:6px;font-size:13px;pointer-events:none;transition:opacity 0.6s;white-space:nowrap;";
+        document.getElementById("stage").appendChild(h);
+      }
+      h.textContent = "点击游戏画面锁定鼠标，按 Esc 退出";
+      h.style.opacity = "1";
+      try {
+        var d = cloudFrame.contentDocument;
+        if (d) {
+          d.removeEventListener("click", hideGrabHintOnce, true);
+          d.addEventListener("click", hideGrabHintOnce, true);
+        }
+      } catch (e) {}
+    } catch (e) {}
+  }
+  function hideGrabHintOnce() {
+    var h = document.getElementById("grabHint");
+    if (h) { h.style.opacity = "0"; }
+  }
+function startFitWatch() {
     // KasmVNC 会周期性重建 canvas，watch 保持拉伸状态
     var apply = applyFit;
     var iv = setInterval(function () {
       if (cloudFrame.classList.contains("hidden")) { clearInterval(iv); return; }
       apply();
-    }, 1500);
+    }, 1000);
+    // 浏览器窗口尺寸变化时立即重算铺满（全屏/还原/缩放窗口）
+    window.addEventListener("resize", function () {
+      if (!cloudFrame.classList.contains("hidden")) { apply(); }
+    });
   }
 
   // ===== iframe 启动（含首次加载竞态自愈）=====
@@ -189,6 +217,10 @@
     quitBtn.classList.remove("hidden");
     kasmUrl = url;
     statusEl.textContent = "已连接游戏实例";
+    // 关闭 KasmVNC 自身等比缩放（resize=scale 会周期性覆盖 canvas 尺寸，
+    // 与铺满 CSS 拉锯导致黑边）；改由本页 applyFit 全权控制 canvas 拉伸
+    url = url.replace(/([?&])resize=scale/, "$1resize=off");
+    showGrabHint();
     // 预热关键资源，降低 KasmVNC 首次加载竞态（偶发 unhandledrejection 中断连接）
     try {
       var base = url.replace(/vnc\.html.*$/, "");

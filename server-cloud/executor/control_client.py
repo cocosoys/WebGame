@@ -252,36 +252,52 @@ def instance_worker(instance_id):
         fail_instance(instance_id, "写启动脚本失败: %s" % e)
         return
 
-    # 2) 启动 Xvnc（-noWebsocket 传统 RFB；绕过 KasmVNC WebSocket 模式的
-    #    vncExtInit EADDRINUSE 系统性问题）。WS 桥由独立 websockify 提供：
-    #    插件 WS 隧道(25574 /kasm/{sid}/{port}/websockify) -> websockify -> RFB
+    # 2) 启动 Xvfb（Xorg 标准栈 + x11vnc 提供 RFB）。
+    #    KasmVNC Xvnc 的 GLX 与 MC 1.12.2 世界渲染存在兼容问题（进服冻结主菜单帧），
+    #    换 Xvfb（X.Org Foundation GLX 1.4，mesa 软渲染）——路线 A。
+    #    浏览器 WS 隧道(25574 /kasm/{sid}/{port}/websockify) -> websockify -> x11vnc RFB
     disp = inst["display"]
     kasm_port = inst["kasmPort"]
     rfb_port = 5900 + disp
     if display_in_use(disp):
         log("  display :%d 占用，回收后重启" % disp)
         run_cmd(["bash", "-lc",
-                 "pkill -f 'Xvnc :%d ' 2>/dev/null; pkill -f 'websockify %d ' 2>/dev/null; sleep 1; true"
-                 % (disp, kasm_port)], timeout=10)
-    # 2.0) Xvnc（webgame 身份，后台）
+                 "pkill -f 'Xvfb :%d ' 2>/dev/null; pkill -f 'x11vnc -display :%d ' 2>/dev/null; "
+                 "pkill -f 'websockify %d ' 2>/dev/null; sleep 1; true"
+                 % (disp, disp, kasm_port)], timeout=10)
+    # 清残留 X 锁（Xvfb 被强杀时 /tmp/.X{disp}-lock 残留，导致 "Server is already
+    # active for display" 启动失败）
+    run_cmd(["bash", "-lc", "rm -f /tmp/.X%d-lock /tmp/.X11-unix/X%d 2>/dev/null; true"
+             % (disp, disp)], timeout=5)
+    # 2.0) Xvfb（webgame 身份，后台；-ac 允许 x11vnc/客户端连接）
     rc, out = run_cmd([
         "su", "-", "webgame", "-c",
-        "nohup Xvnc :%d -geometry 1280x720 -depth 24 -SecurityTypes None "
-        "-localhost yes -noWebsocket -rfbport %d >/tmp/xvnc-%d.log 2>&1 &" % (disp, rfb_port, disp)],
+        "nohup Xvfb :%d -screen 0 1280x720x24 -ac >/tmp/xvfb-%d.log 2>&1 &" % (disp, disp)],
         timeout=15)
     if rc != 0:
-        fail_instance(instance_id, "Xvnc 启动失败: %s" % out.strip())
+        fail_instance(instance_id, "Xvfb 启动失败: %s" % out.strip())
+        return
+    # 2.0.3) x11vnc（webgame 身份，RFB 服务器；-forever 断线续听 / -shared 多客户端 /
+    #        -noxdamage 规避软渲染下 xdamage 问题）
+    rc, out = run_cmd([
+        "su", "-", "webgame", "-c",
+        "nohup x11vnc -display :%d -rfbport %d -nopw -forever -shared -noxdamage "
+        ">/tmp/x11vnc-%d.log 2>&1 &" % (disp, rfb_port, disp)],
+        timeout=15)
+    if rc != 0:
+        fail_instance(instance_id, "x11vnc 启动失败: %s" % out.strip())
         return
     # 2.0.5) websockify 桥（root 身份，WS:kasmPort -> RFB:rfbPort；--web 提供
-    #        KasmVNC 静态资源 vnc.html/webapp/*，插件 httpForward 经此取页面）
+    #        noVNC 静态资源 vnc.html/*（KasmVNC 客户端与 x11vnc RFB 不兼容——连上即断，
+    #        标准 noVNC 客户端是 x11vnc 的正配），插件 httpForward 经此取页面）
     rc, out = run_cmd(["bash", "-lc",
-        "nohup websockify --web /usr/share/kasmvnc/www %d 127.0.0.1:%d >/tmp/ws-%d.log 2>&1 & sleep 2; "
+        "nohup websockify --web /usr/share/novnc %d 127.0.0.1:%d >/tmp/ws-%d.log 2>&1 & sleep 2; "
         "ss -tln | grep -q ':%d ' && echo WS_OK || echo WS_FAIL"
         % (kasm_port, rfb_port, disp, kasm_port)], timeout=15)
     if rc != 0 or "WS_OK" not in out:
         fail_instance(instance_id, "websockify 桥启动失败: %s" % out.strip()[:200])
         return
-    log("  Xvnc :%d + websockify :%d 已启动" % (disp, kasm_port))
+    log("  Xvfb :%d + x11vnc :%d + websockify :%d 已启动" % (disp, rfb_port, kasm_port))
 
     # 2.5) 等待 Xvnc 完全就绪：xdpyinfo 真实连接 X 成功才算就绪
     # （socket/端口存在不代表 X 内部完成初始化，刚重启时偶发 MC 静默退出；
@@ -507,10 +523,13 @@ def kill_instance(instance_id):
              "pkill -f 'net.minecraft.launchwrapper.Launch.*--username \\\"%s\\\"' 2>/dev/null; "
              "pkill -f '--gameDir %s' 2>/dev/null; pkill -f 'launchwrapper.*%s' 2>/dev/null || true" % (
                  uname, inst_root, inst_root)], timeout=10)
-    # Xvnc 留给 idle 回收（其它实例可能复用 display 池），仅停 MC 与 websockify 桥
+    # Xvfb 留给 idle 回收（其它实例可能复用 display 池），仅停 MC、x11vnc 与 websockify 桥
     kasm_port = inst.get("kasmPort", 0)
+    disp = inst.get("display", 0)
     if kasm_port:
         run_cmd(["bash", "-lc", "pkill -f 'websockify %d ' 2>/dev/null || true" % kasm_port], timeout=5)
+    if disp:
+        run_cmd(["bash", "-lc", "pkill -f 'x11vnc -display :%d ' 2>/dev/null || true" % disp], timeout=5)
     inst["state"] = ST_STOPPED
     fields = OrderedDict()
     fields["instanceId"] = instance_id
@@ -628,13 +647,14 @@ def main():
 
     os.makedirs(ARGS.instances, exist_ok=True)
 
-    # 启动清理：杀掉上一轮残留的 MC 客户端进程与 Xvnc（实例状态由内存重建，残留进程会占 display/端口）
+    # 启动清理：杀掉上一轮残留的 MC 客户端进程与 Xvfb/x11vnc/websockify（实例状态由内存
+    # 重建，残留进程会占 display/端口）
     try:
         subprocess.run(["bash", "-lc",
                         "pkill -f launchwrapper; pkill -f 'net.minecraft.launchwrapper'; "
-                        "pkill -f 'Xvnc :99'; pkill -f websockify; true"],
+                        "pkill -f 'Xvfb :'; pkill -f 'x11vnc -display :'; pkill -f websockify; true"],
                        timeout=10, capture_output=True)
-        log("启动清理完成（残留 MC/Xvnc 已回收）")
+        log("启动清理完成（残留 MC/Xvfb/x11vnc 已回收）")
     except Exception as _e:
         log("启动清理警告: %s" % _e)
     instances.clear()
