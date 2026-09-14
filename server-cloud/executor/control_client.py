@@ -46,7 +46,7 @@ instances = {}            # instanceId -> dict
 instances_lock = threading.Lock()
 next_seq = [0]
 base_display = 99         # :99 起
-base_kasm_port = 8542     # 8542 起
+base_kasm_port = 18500    # websockify 桥端口 18500 起（KasmVNC WebSocket 模式本机 EADDRINUSE，改用独立 websockify）
 capacity = 4              # 执行面可承载实例上限
 
 # ---------------- 工具 ----------------
@@ -237,24 +237,42 @@ def instance_worker(instance_id):
         fail_instance(instance_id, "写启动脚本失败: %s" % e)
         return
 
-    # 2) 启动 Xvnc（display 占用则先回收再统一拉起，确保 geometry/参数一致）
+    # 2) 启动 Xvnc（-noWebsocket 传统 RFB；绕过 KasmVNC WebSocket 模式的
+    #    vncExtInit EADDRINUSE 系统性问题）。WS 桥由独立 websockify 提供：
+    #    插件 WS 隧道(25574 /kasm/{sid}/{port}/websockify) -> websockify -> RFB
     disp = inst["display"]
+    kasm_port = inst["kasmPort"]
+    rfb_port = 5900 + disp
     if display_in_use(disp):
         log("  display :%d 占用，回收后重启" % disp)
-        run_cmd(["su", "-", "webgame", "-c", "vncserver -kill :%d" % disp], timeout=15)
-        time.sleep(2)
+        run_cmd(["bash", "-lc",
+                 "pkill -f 'Xvnc :%d ' 2>/dev/null; pkill -f 'websockify %d ' 2>/dev/null; sleep 1; true"
+                 % (disp, kasm_port)], timeout=10)
+    # 2.0) Xvnc（webgame 身份，后台）
     rc, out = run_cmd([
         "su", "-", "webgame", "-c",
-        "vncserver :%d -geometry 1280x720 -depth 24 -localhost yes "
-        "-SecurityTypes None -disableBasicAuth -udpPort 0" % disp], timeout=30)
+        "nohup Xvnc :%d -geometry 1280x720 -depth 24 -SecurityTypes None "
+        "-localhost yes -noWebsocket -rfbport %d >/tmp/xvnc-%d.log 2>&1 &" % (disp, rfb_port, disp)],
+        timeout=15)
     if rc != 0:
         fail_instance(instance_id, "Xvnc 启动失败: %s" % out.strip())
         return
+    # 2.0.5) websockify 桥（root 身份，WS:kasmPort -> RFB:rfbPort；--web 提供
+    #        KasmVNC 静态资源 vnc.html/webapp/*，插件 httpForward 经此取页面）
+    rc, out = run_cmd(["bash", "-lc",
+        "nohup websockify --web /usr/share/kasmvnc/www %d 127.0.0.1:%d >/tmp/ws-%d.log 2>&1 & sleep 2; "
+        "ss -tln | grep -q ':%d ' && echo WS_OK || echo WS_FAIL"
+        % (kasm_port, rfb_port, disp, kasm_port)], timeout=15)
+    if rc != 0 or "WS_OK" not in out:
+        fail_instance(instance_id, "websockify 桥启动失败: %s" % out.strip()[:200])
+        return
+    log("  Xvnc :%d + websockify :%d 已启动" % (disp, kasm_port))
 
     # 2.5) 等待 Xvnc 完全就绪：xdpyinfo 真实连接 X 成功才算就绪
-    # （socket/端口存在不代表 X 内部完成初始化，刚重启时偶发 MC 静默退出）
+    # （socket/端口存在不代表 X 内部完成初始化，刚重启时偶发 MC 静默退出；
+    #   Xvnc 启动时 dxg GPU 探测可能拖慢就绪到 60s+，等待放宽到 120s）
     x_ok = False
-    for _try in range(30):
+    for _try in range(120):
         r = run_cmd([
             "su", "-", "webgame", "-c",
             "DISPLAY=:%d xdpyinfo >/dev/null 2>&1 && echo YES || echo NO" % disp],
@@ -467,7 +485,10 @@ def kill_instance(instance_id):
              "pkill -f 'net.minecraft.launchwrapper.Launch.*--username \\\"%s\\\"' 2>/dev/null; "
              "pkill -f '--gameDir %s' 2>/dev/null; pkill -f 'launchwrapper.*%s' 2>/dev/null || true" % (
                  uname, inst_root, inst_root)], timeout=10)
-    # Xvnc 留给 idle 回收（其它实例可能复用 display 池），仅停 MC
+    # Xvnc 留给 idle 回收（其它实例可能复用 display 池），仅停 MC 与 websockify 桥
+    kasm_port = inst.get("kasmPort", 0)
+    if kasm_port:
+        run_cmd(["bash", "-lc", "pkill -f 'websockify %d ' 2>/dev/null || true" % kasm_port], timeout=5)
     inst["state"] = ST_STOPPED
     fields = OrderedDict()
     fields["instanceId"] = instance_id
@@ -588,7 +609,8 @@ def main():
     # 启动清理：杀掉上一轮残留的 MC 客户端进程与 Xvnc（实例状态由内存重建，残留进程会占 display/端口）
     try:
         subprocess.run(["bash", "-lc",
-                        "pkill -f launchwrapper; pkill -f 'net.minecraft.launchwrapper'; pkill -f 'Xvnc :99' || true"],
+                        "pkill -f launchwrapper; pkill -f 'net.minecraft.launchwrapper'; "
+                        "pkill -f 'Xvnc :99'; pkill -f websockify; true"],
                        timeout=10, capture_output=True)
         log("启动清理完成（残留 MC/Xvnc 已回收）")
     except Exception as _e:
