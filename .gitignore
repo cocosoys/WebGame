@@ -11,3 +11,7 @@ NUL
 dependency-reduced-pom.xml
 client/instances/
 client/testmod/
+
+__pycache__/
+*.pyc
+
