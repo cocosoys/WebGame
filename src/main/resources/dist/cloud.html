@@ -424,10 +424,15 @@ function startFitWatch() {
           }
           startCloud(url);
         } else if (type === 0x05) {
-          // ERROR：0x05 + u16 小端长度 + utf8 消息
+          // ERROR：0x05 + u16 小端长度 + UTF-8 消息（必须按 UTF-8 解码，逐字节
+          // String.fromCharCode 会把中文 3 字节拆成 3 个 Latin-1 乱码字符）
           var eLen = (arr[1] & 0xFF) | ((arr[2] & 0xFF) << 8);
           var msg = "";
-          for (var j = 3; j < 3 + eLen && j < arr.length; j++) { msg += String.fromCharCode(arr[j]); }
+          try {
+            msg = new TextDecoder("utf-8").decode(arr.subarray(3, 3 + eLen));
+          } catch (e2) {
+            for (var j = 3; j < 3 + eLen && j < arr.length; j++) { msg += String.fromCharCode(arr[j]); }
+          }
           clearInterval(timer);
           if (started && !cloudFrame.classList.contains("hidden")) {
             // 游戏进行中收到 ERROR（实例已退出）：关闭通道并提示重新连接
