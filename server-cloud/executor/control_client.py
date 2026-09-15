@@ -383,8 +383,15 @@ def instance_worker(instance_id):
             except OSError:
                 pass
         try:
+            # 实例 CPU 配额（2 核/实例）：taskset 绑定 {seq*2}, {seq*2+1}（16 核 → 8 实例容量）。
+            # su/bash/java 继承亲和性，llvmpipe LP_NUM_THREADS=2 恰好在绑定核上满载，实例间互不抢占。
+            try:
+                seq = int(instance_id.lstrip("iI")) if instance_id[:1].lower() == "i" else 0
+            except ValueError:
+                seq = 0
+            cores = "%d,%d" % ((seq * 2) % 16, (seq * 2 + 1) % 16)
             proc = subprocess.Popen(
-                ["su", "-", "webgame", "-c",
+                ["taskset", "-c", cores, "su", "-", "webgame", "-c",
                  "cd %s && DISPLAY=:%d nohup bash launch.sh >> %s 2>&1 & echo $!" % (
                      inst_root, disp, stdout_log)],
                 shell=False)
@@ -477,14 +484,9 @@ export LWJGL_DISABLE_XRANDR=true
 # WSL2 dxg GPU 接口不稳定（dxgkio_query_adapter_info Ioctl failed），
 # MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
 export LIBGL_ALWAYS_SOFTWARE=1
+# ===== A/B 实测组合 A：llvmpipe 2 线程 + 无 GL override（2026-09-14）=====
 export GALLIUM_DRIVER=llvmpipe
-# llvmpipe 多线程 SIGSEGV/死锁；单线程 llvmpipe 世界渲染仍挂起（进服瞬间冻结主菜单帧）
-# 换 Mesa softpipe（经典软渲染，GL 2.1 上下文，lwjgl2 时代兼容性最好）——慢但稳
-export LIBGL_ALWAYS_SOFTWARE=1
-export GALLIUM_DRIVER=softpipe
-export LP_NUM_THREADS=1
-export MESA_GL_VERSION_OVERRIDE=2.1
-export MESA_GLSL_VERSION_OVERRIDE=120
+export LP_NUM_THREADS=2
 exec java -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\

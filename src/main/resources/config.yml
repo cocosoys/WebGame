@@ -69,8 +69,8 @@ cloud:
     # 自动连服地址/端口（端口 0 = 跟随 server-port）
     server: "127.0.0.1"
     port: 0
-    # JVM 内存
-    xmx: "2G"
+    # JVM 内存（2核4G 配额：每实例 MC 堆 4G）
+    xmx: "4G"
   # 编码参数（下发执行面）
   fps: 30
   bitrate-kbps: 4000
