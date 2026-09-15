@@ -2,6 +2,7 @@ package com.github.cocosoys.mc.webgame.web.admin;
 
 import com.github.cocosoys.mc.soyshttpovermc.HttpOverMcPlugin;
 import com.github.cocosoys.mc.soyshttpovermc.command.SubCommand;
+import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -45,7 +46,7 @@ public final class AdminSubCommand extends SubCommand {
         try {
             int port = plugin.getDelegate().getMcPort();
             String host = plugin.getDelegate().getMcHost();
-            String url = "http://" + host + ":" + port + "/api/plugins/WebGame/admin/";
+            String url = "http://" + host + ":" + port + WebGameConfig.WEB_PLUGIN_PREFIX + "/admin/";
             msg(sender, "WebGame 管理员控制台（仅 OP，请勿外传）：");
             msg(sender, ChatColor.AQUA + "  " + url);
             msg(sender, "打开后按浏览器登录弹窗输入玩家名验证，即可进入终端/文件管理/系统设置。");

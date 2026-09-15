@@ -48,7 +48,7 @@ public final class WebGame extends JavaPlugin {
             pageRegistrar.install();
             int port = getServer().getPort();
             String host = cfg.getPublicHost();
-            getLogger().info("WebGame 已启用：页面 http://" + host + ":" + port + "/"
+            getLogger().info("WebGame 已启用：页面 http://" + host + ":" + port + cfg.getIndexFullUrl()
                     + " | 隧道 ws://" + host + ":" + port + cfg.getWsPath());
         } catch (Exception e) {
             getLogger().severe("WebGame 页面初始化失败：");
@@ -96,7 +96,7 @@ public final class WebGame extends JavaPlugin {
                 } catch (Throwable t) {
                     getLogger().warning("WebGame 设备容量接口注册失败：" + t);
                 }
-                getLogger().info("WebGame 云游戏通道已启用：页面 http://" + cfg.getPublicHost() + ":" + port + cfg.getCloudPath()
+                getLogger().info("WebGame 云游戏通道已启用：页面 http://" + cfg.getPublicHost() + ":" + port + cfg.getCloudFullUrl()
                         + " | 信令 ws://" + cfg.getPublicHost() + ":" + port + cfg.getCloudWsPath()
                         + " | 执行面 " + cfg.getControlHost() + ":" + cfg.getControlPort());
             }
@@ -128,10 +128,11 @@ public final class WebGame extends JavaPlugin {
         getLogger().info("WebGame 管理员 API 已注册（SOYS auth 保护）: /api/admin/*");
 
         // 2) 前端认证组件（复用 SOYS 的 soys-auth.js，登录弹窗/令牌管理/401 自动重试）
+        //    registerPage 自动挂到 /web/plugins/WebGame/soys-auth.js（页面标准命名空间）
         try (java.io.InputStream ain = getResource("dist/soys-auth.js")) {
             if (ain != null) {
                 soys.getApi().getWebPage()
-                        .registerProxyPage(this, "/api/plugins/WebGame/soys-auth.js", "GET",
+                        .registerPage(this, "/soys-auth.js", "GET",
                                 readAll(ain), "application/javascript; charset=utf-8", true,
                                 "SOYS 前端认证组件", null);
             } else {
@@ -146,10 +147,10 @@ public final class WebGame extends JavaPlugin {
             if (in != null) {
                 byte[] html = readAll(in);
                 soys.getApi().getWebPage()
-                        .registerProxyPage(this, "/api/plugins/WebGame/admin/", "GET", html,
+                        .registerPage(this, "/admin/", "GET", html,
                                 "text/html; charset=utf-8", true,
                                 "WebGame 管理员控制台", null);
-                getLogger().info("WebGame 管理员入口页已注册: /api/plugins/WebGame/admin/");
+                getLogger().info("WebGame 管理员入口页已注册: " + WebGameConfig.WEB_PLUGIN_PREFIX + "/admin/");
             } else {
                 getLogger().warning("dist/admin.html 资源缺失，管理员入口页未注册");
             }

@@ -9,7 +9,7 @@ import java.io.InputStream;
 
 /**
  * 云游戏页面登记器：把 {@code dist/cloud.html}（WebCodecs 播放器 + Pointer Lock 输入）
- * 注册到标准接口路径 {@code /api/plugins/WebGame/cloud/}。
+ * 注册到标准页面命名空间 {@code /web/plugins/WebGame/}（入口页 / 云游戏 / 设备选择）。
  *
  * <p>与 Eagler 页面并列，不占用根路径；媒体与信令共用同一条 WS（{@code /cloud}）。</p>
  */
@@ -26,24 +26,24 @@ public final class CloudPageRegistrar {
     }
 
     public void install() throws Exception {
-        // 入口页（index.html）：渲染 Eagler 与云游戏两种登录方式，挂载到标准接口根路径
+        // 入口页（index.html）：渲染 Eagler 与云游戏两种登录方式，registerPage 自动挂 /web/plugins/WebGame/
         byte[] index = readJarResource("index.html");
         String indexPath = config.getIndexPath();
-        api.getWebPage().registerProxyPage(plugin, indexPath, "GET", index,
+        api.getWebPage().registerPage(plugin, indexPath, "GET", index,
                 "text/html; charset=utf-8", true, "WebGame 游戏入口", null);
-        plugin.getLogger().info("WebGame 入口页已登记到 " + indexPath + " （" + index.length + " bytes）");
+        plugin.getLogger().info("WebGame 入口页已登记到 " + config.getIndexFullUrl() + " （" + index.length + " bytes）");
 
         byte[] html = readJarResource("cloud.html");
         String path = config.getCloudPath();
-        api.getWebPage().registerProxyPage(plugin, path, "GET", html,
+        api.getWebPage().registerPage(plugin, path, "GET", html,
                 "text/html; charset=utf-8", true, "WebGame 云游戏（WebCodecs）", null);
-        plugin.getLogger().info("WebGame 云游戏页面已登记到 " + path + " （" + html.length + " bytes）");
+        plugin.getLogger().info("WebGame 云游戏页面已登记到 " + config.getCloudFullUrl() + " （" + html.length + " bytes）");
         // 设备选择页（独立入口：输入用户名之前先选设备型号；未来可扩展更多设计）
         byte[] dev = readJarResource("device-select.html");
         String devPath = config.getCloudDevicePath();
-        api.getWebPage().registerProxyPage(plugin, devPath, "GET", dev,
+        api.getWebPage().registerPage(plugin, devPath, "GET", dev,
                 "text/html; charset=utf-8", true, "WebGame 设备选择", null);
-        plugin.getLogger().info("WebGame 设备选择页已登记到 " + devPath + " （" + dev.length + " bytes）");
+        plugin.getLogger().info("WebGame 设备选择页已登记到 " + config.getCloudDeviceFullUrl() + " （" + dev.length + " bytes）");
     }
 
     private byte[] readJarResource(String name) throws Exception {

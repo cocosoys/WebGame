@@ -1,11 +1,12 @@
-﻿# WebGame 第一版配置（M1：页面托管 + 地址注入）
+﻿# WebGame 配置（页面按 SOYS 标准命名空间挂载：/web/plugins/WebGame/<path>）
 page:
-  # 入口页（index.html）挂载路径：插件页面入口，渲染 Eagler 与云游戏两种登录方式
-  index-path: "/api/plugins/WebGame/"
-  # 游戏页面挂载路径（标准接口前缀，挂载 SOYSHTTPOverMC 无前缀路由）。
-  # 打开 http://127.0.0.1:25574/api/plugins/WebGame/eagler/?user=Tom 直接进入服务器；
+  # 入口页（index.html）挂载路径：相对 /web/plugins/WebGame/ 的子路径（"/" = 根）
+  # 完整访问地址：http://127.0.0.1:25574/web/plugins/WebGame/
+  index-path: "/"
+  # 游戏页面挂载路径（相对 /web/plugins/WebGame/ 的子路径）。
+  # 打开 http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom 直接进入服务器；
   # 不再占用根路径 "/"（SOYS 默认首页恢复）。
-  path: "/api/plugins/WebGame/eagler/"
+  path: "/eagler/"
   # 插件 jar 内 dist 目录下的 Eaglercraft HTML 文件名
   html-file: "Eaglercraft_IR_1.12.2.html"
   # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
@@ -51,10 +52,11 @@ control:
 # S2 起由插件 25574 反代（/kasm），浏览器不再直连执行面。
 cloud:
   enabled: true
-  # 云游戏页面挂载路径（SOYS 无前缀路由）
-  path: "/api/plugins/WebGame/cloud/"
+  # 云游戏页面挂载路径（相对 /web/plugins/WebGame/ 的子路径）
+  # 完整访问：http://127.0.0.1:25574/web/plugins/WebGame/cloud/?user=xxx
+  path: "/cloud/"
   # 设备选择页挂载路径（输入用户名之前先选设备型号）
-  device-path: "/api/plugins/WebGame/devices/"
+  device-path: "/devices/"
   # 信令 WebSocket 路径（WebGame 自接管，先于 SOYS 分流）
   ws-path: "/cloud"
   # 传输模式：ws（v1 同端口信令）| webrtc（v2 预留，分离端口）

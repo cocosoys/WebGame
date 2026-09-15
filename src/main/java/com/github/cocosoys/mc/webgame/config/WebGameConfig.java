@@ -73,8 +73,8 @@ public final class WebGameConfig {
         this.publicPort = Math.max(0, c.getInt("page.public-port", 0));
         this.wsPath = c.getString("tunnel.ws-path", "/eagler");
         this.htmlFile = c.getString("page.html-file", "Eaglercraft_IR_1.12.2.html");
-        this.indexPath = normalizePath(c.getString("page.index-path", "/api/plugins/WebGame/"));
-        this.pagePath = normalizePath(c.getString("page.path", "/api/plugins/WebGame/eagler/"));
+        this.indexPath = normalizePath(c.getString("page.index-path", "/"));
+        this.pagePath = normalizePath(c.getString("page.path", "/eagler/"));
         this.autoJoinEnabled = c.getBoolean("auto-join.enabled", true);
         this.defaultUsername = c.getString("auto-join.default-username", "WebPlayer").trim();
         this.loopbackHost = c.getString("tunnel.loopback-host", "127.0.0.1").trim();
@@ -88,8 +88,8 @@ public final class WebGameConfig {
         this.maxConnectionsPerDevice = Math.max(1, c.getInt("tunnel.max-connections-per-device", 2));
 
         this.cloudEnabled = c.getBoolean("cloud.enabled", true);
-        this.cloudPath = normalizePath(c.getString("cloud.path", "/api/plugins/WebGame/cloud/"));
-        this.cloudDevicePath = normalizePath(c.getString("cloud.device-path", "/api/plugins/WebGame/devices/"));
+        this.cloudPath = normalizePath(c.getString("cloud.path", "/cloud/"));
+        this.cloudDevicePath = normalizePath(c.getString("cloud.device-path", "/devices/"));
         this.cloudWsPath = normalizeWsPath(c.getString("cloud.ws-path", "/cloud"));
         this.cloudTransport = c.getString("cloud.transport", "ws").trim().toLowerCase();
         this.cloudUdpPortRange = c.getString("cloud.udp-port-range", "").trim();
@@ -144,19 +144,35 @@ public final class WebGameConfig {
         return htmlFile;
     }
 
-    /** 游戏页面挂载路径（以 / 开头、以 / 结尾），如 /api/plugins/WebGame/eagler/。 */
+    /**
+     * SOYS WebRegistry 对附属插件页面自动补充的前缀（registerPage 时无需手写，
+     * 此处用于生成完整访问 URL / 注入前端绝对路径引用）。
+     */
+    public static final String WEB_PLUGIN_PREFIX = "/web/plugins/WebGame";
+
+    /** 游戏页面挂载路径（相对 WEB_PLUGIN_PREFIX 的子路径，以 / 开头、以 / 结尾），如 /eagler/。 */
     public String getPagePath() {
         return pagePath;
     }
 
-    /** Entry page (index.html) mount path. */
+    /** 完整访问 URL（如 /web/plugins/WebGame/eagler/）。 */
+    public String getPageFullUrl() {
+        return WEB_PLUGIN_PREFIX + pagePath;
+    }
+
+    /** Entry page (index.html) mount path (relative). */
     public String getIndexPath() {
         return indexPath;
     }
 
+    /** 完整入口 URL（如 /web/plugins/WebGame/）。 */
+    public String getIndexFullUrl() {
+        return WEB_PLUGIN_PREFIX + indexPath;
+    }
+
     /** 规范化页面路径：确保以 / 开头并以 / 结尾（根路径 "/" 原样返回）。 */
     private static String normalizePath(String p) {
-        String s = (p == null || p.trim().isEmpty()) ? "/api/plugins/WebGame/eagler/" : p.trim();
+        String s = (p == null || p.trim().isEmpty()) ? "/eagler/" : p.trim();
         if (!s.startsWith("/")) {
             s = "/" + s;
         }
@@ -218,9 +234,14 @@ public final class WebGameConfig {
         return cloudEnabled;
     }
 
-    /** 云游戏页面挂载路径（以 / 开头、以 / 结尾）。 */
+    /** 云游戏页面挂载路径（相对 WEB_PLUGIN_PREFIX 的子路径，以 / 开头、以 / 结尾）。 */
     public String getCloudPath() {
         return cloudPath;
+    }
+
+    /** 完整云游戏页 URL（如 /web/plugins/WebGame/cloud/）。 */
+    public String getCloudFullUrl() {
+        return WEB_PLUGIN_PREFIX + cloudPath;
     }
 
     /** 云游戏 WS 媒体通道路径（以 / 开头、无结尾斜杠）。 */
@@ -490,9 +511,14 @@ public final class WebGameConfig {
 
     // ===== 设备选择页 / 容量 =====
 
-    /** 设备选择页挂载路径（以 / 开头、以 / 结尾）。 */
+    /** 设备选择页挂载路径（相对 WEB_PLUGIN_PREFIX 的子路径，以 / 开头、以 / 结尾）。 */
     public String getCloudDevicePath() {
         return cloudDevicePath;
+    }
+
+    /** 完整设备选择页 URL（如 /web/plugins/WebGame/devices/）。 */
+    public String getCloudDeviceFullUrl() {
+        return WEB_PLUGIN_PREFIX + cloudDevicePath;
     }
 
     /** 执行面 CPU 核数（容量核算）。 */
