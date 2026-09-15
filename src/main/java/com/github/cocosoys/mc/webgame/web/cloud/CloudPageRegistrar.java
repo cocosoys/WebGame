@@ -26,6 +26,13 @@ public final class CloudPageRegistrar {
     }
 
     public void install() throws Exception {
+        // 入口页（index.html）：渲染 Eagler 与云游戏两种登录方式，挂载到标准接口根路径
+        byte[] index = readJarResource("index.html");
+        String indexPath = config.getIndexPath();
+        api.getWebPage().registerProxyPage(plugin, indexPath, "GET", index,
+                "text/html; charset=utf-8", true, "WebGame 游戏入口", null);
+        plugin.getLogger().info("WebGame 入口页已登记到 " + indexPath + " （" + index.length + " bytes）");
+
         byte[] html = readJarResource("cloud.html");
         String path = config.getCloudPath();
         api.getWebPage().registerProxyPage(plugin, path, "GET", html,

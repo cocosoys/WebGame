@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGame 游戏入口</title>
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100%; background: #101014; color: #e8e8e8;
+    font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+  .logo { font-size: 34px; font-weight: 700; letter-spacing: 2px; }
+  .logo span { color: #6b8afd; }
+  .sub { font-size: 13px; color: #9a9aa5; margin-top: 8px; }
+  .user-row { margin: 26px 0 8px; display: flex; gap: 8px; align-items: center; }
+  #username { padding: 10px 14px; font-size: 15px; border-radius: 8px; border: 1px solid #3a3a48;
+    background: #1a1a22; color: #e8e8e8; width: 220px; outline: none; box-sizing: border-box; }
+  #username:focus { border-color: #6b8afd; }
+  .hint { font-size: 12px; color: #6a6a75; margin-top: 4px; }
+  .cards { display: flex; gap: 18px; margin-top: 20px; flex-wrap: wrap; justify-content: center; }
+  .card { width: 300px; padding: 22px 20px; border-radius: 14px; background: #1a1a22;
+    border: 1px solid #2a2a34; cursor: pointer; transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
+  .card:hover { transform: translateY(-3px); border-color: #6b8afd; background: #20202b; }
+  .card.disabled { opacity: 0.55; cursor: not-allowed; }
+  .card .icon { font-size: 30px; }
+  .card .name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 400; }
+  .tag-eagler { background: #2f5f3f; color: #8ce99a; }
+  .tag-cloud { background: #3a3f66; color: #a5b8ff; }
+  .card .desc { font-size: 12.5px; color: #9a9aa5; line-height: 1.6; flex: 1; }
+  .card .go { font-size: 13px; color: #6b8afd; margin-top: 6px; }
+  .err { color: #ff7b7b; font-size: 13px; min-height: 18px; margin-top: 12px; }
+  .foot { margin-top: 28px; font-size: 11px; color: #555560; }
+  @media (max-width: 700px) {
+    .card { width: 100%; max-width: 340px; }
+  }
+</style>
+</head>
+<body>
+  <div class="logo">Web<span>Game</span></div>
+  <div class="sub">Minecraft 网页游玩入口 · 选择一种方式进入服务器</div>
+
+  <div class="user-row">
+    <input id="username" maxlength="16" placeholder="输入玩家名称" autocomplete="off">
+  </div>
+  <div class="hint">名称 3-16 位字符，不含空格与特殊符号</div>
+
+  <div class="cards">
+    <div class="card" id="cardEagler">
+      <div class="icon">🌐</div>
+      <div class="name">Eagler 网页客户端 <span class="tag tag-eagler">1.12.2 原版</span></div>
+      <div class="desc">浏览器直接运行 Eaglercraft，无需下载任何文件；仅支持 1.12.2 原版，无法加载 Mod。</div>
+      <div class="go">立即进入 →</div>
+    </div>
+    <div class="card" id="cardCloud">
+      <div class="icon">🖥️</div>
+      <div class="name">云游戏 <span class="tag tag-cloud">支持所有版本</span></div>
+      <div class="desc">服务器容器内运行完整 Java 客户端，画面实时回传；支持任意版本与 Forge Mod，推荐方式。</div>
+      <div class="go">选择设备进入 →</div>
+    </div>
+  </div>
+
+  <div class="err" id="err"></div>
+  <div class="foot">WebGame · 同端口 25574 统一入口</div>
+
+<script>
+(function () {
+  "use strict";
+  var base = location.pathname.replace(/\/+$/, "") + "/";
+  var userEl = document.getElementById("username");
+  var errEl = document.getElementById("err");
+
+  // 优先沿用 URL 中的用户名（?user=X 直达）
+  var urlUser = new URLSearchParams(location.search).get("user") || "";
+  if (urlUser) { userEl.value = urlUser; }
+
+  function cleanName(n) {
+    n = (n || "").trim().replace(/[^\w\u4e00-\u9fa5]/g, "");
+    return n.length >= 3 && n.length <= 16 ? n : "";
+  }
+
+  function go(path) {
+    var name = cleanName(userEl.value);
+    if (!name) { errEl.textContent = "请输入 3-16 位的玩家名称"; userEl.focus(); return; }
+    errEl.textContent = "";
+    location.href = base + path + "?user=" + encodeURIComponent(name);
+  }
+
+  document.getElementById("cardEagler").addEventListener("click", function () { go("eagler/"); });
+  document.getElementById("cardCloud").addEventListener("click", function () { go("devices/"); });
+  userEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { go("devices/"); }
+  });
+
+  // URL 带 user 且指定了 mode（?user=X&mode=cloud|eagler）时自动进入
+  var mode = new URLSearchParams(location.search).get("mode") || "";
+  if (urlUser && mode) {
+    setTimeout(function () {
+      go(mode === "cloud" ? "devices/" : "eagler/");
+    }, 300);
+  }
+})();
+</script>
+</body>
+</html>
