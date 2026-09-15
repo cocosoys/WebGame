@@ -487,6 +487,9 @@ def build_launch_script(username, server, port, xmx, mc_base, inst_root, cores=2
     return """#!/bin/bash
 # WebGame 执行面实例脚本（S1 契约生成）
 cd {inst_root}
+# 管理员切换 Java（系统设置：写 /home/webgame/java.conf 的 JAVA_HOME，缺省用默认 java）
+if [ -f /home/webgame/java.conf ]; then . /home/webgame/java.conf; fi
+JAVA_BIN="${{JAVA_HOME:+$JAVA_HOME/bin/}}java"
 export LWJGL_DISABLE_XRANDR=true
 # WSL2 dxg GPU 接口不稳定（dxgkio_query_adapter_info Ioctl failed），
 # MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
@@ -494,7 +497,7 @@ export LIBGL_ALWAYS_SOFTWARE=1
 # ===== A/B 实测组合 A：llvmpipe + LP_NUM_THREADS=cores + 无 GL override（2026-09-14）=====
 export GALLIUM_DRIVER=llvmpipe
 export LP_NUM_THREADS={cores}
-exec java -Xmx{xmx} \\
+exec "$JAVA_BIN" -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\
   -Dorg.lwjgl.opengl.Display.allowSoftwareOpenGL=true \\

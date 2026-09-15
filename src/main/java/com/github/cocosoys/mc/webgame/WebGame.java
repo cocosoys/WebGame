@@ -5,6 +5,9 @@ import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.control.ControlClient;
 import com.github.cocosoys.mc.webgame.control.InstanceRegistry;
 import com.github.cocosoys.mc.webgame.web.EaglerPageRegistrar;
+import com.github.cocosoys.mc.webgame.web.admin.AdminController;
+import com.github.cocosoys.mc.webgame.web.admin.AdminExecutor;
+import com.github.cocosoys.mc.webgame.web.admin.AdminSubCommand;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudCapacityController;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPageRegistrar;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager;
@@ -99,10 +102,74 @@ public final class WebGame extends JavaPlugin {
             }
 
             wsGateway.install();
+
+            // 管理员控制台（SOYS auth + 仅 OP）：/api/admin/* 非豁免路径由网关鉴权
+            try {
+                installAdmin(soys, cfg, cloudManager);
+            } catch (Throwable t) {
+                getLogger().warning("WebGame 管理员控制台注册失败：" + t);
+            }
         } catch (Throwable t) {
             getLogger().severe("WebGame WS 隧道/云游戏初始化失败：");
             t.printStackTrace();
         }
+    }
+
+    /**
+     * 安装管理员控制台：入口页 + 受保护 API（/api/admin/*）+ 游戏内 OP 入口指令。
+     */
+    private void installAdmin(HttpOverMcPlugin soys, WebGameConfig cfg,
+                              CloudSessionManager cloudManager) {
+        AdminExecutor adminExecutor = new AdminExecutor();
+
+        // 1) 受保护 API：主插件代理注册（无 /plugins/WebGame 前缀，落在非豁免 /api/admin/*）
+        soys.getApi().getApiRegistration()
+                .registerProxyController(new AdminController(adminExecutor, cfg, cloudManager));
+        getLogger().info("WebGame 管理员 API 已注册（SOYS auth 保护）: /api/admin/*");
+
+        // 2) 前端认证组件（复用 SOYS 的 soys-auth.js，登录弹窗/令牌管理/401 自动重试）
+        try (java.io.InputStream ain = getResource("dist/soys-auth.js")) {
+            if (ain != null) {
+                soys.getApi().getWebPage()
+                        .registerProxyPage(this, "/api/plugins/WebGame/soys-auth.js", "GET",
+                                readAll(ain), "application/javascript; charset=utf-8", true,
+                                "SOYS 前端认证组件", null);
+            } else {
+                getLogger().warning("dist/soys-auth.js 资源缺失");
+            }
+        } catch (Exception e) {
+            getLogger().warning("注册 soys-auth.js 失败: " + e);
+        }
+
+        // 3) 入口页（HTML 壳公开加载，实际数据经 /api/admin/* 鉴权）
+        try (java.io.InputStream in = getResource("dist/admin.html")) {
+            if (in != null) {
+                byte[] html = readAll(in);
+                soys.getApi().getWebPage()
+                        .registerProxyPage(this, "/api/plugins/WebGame/admin/", "GET", html,
+                                "text/html; charset=utf-8", true,
+                                "WebGame 管理员控制台", null);
+                getLogger().info("WebGame 管理员入口页已注册: /api/plugins/WebGame/admin/");
+            } else {
+                getLogger().warning("dist/admin.html 资源缺失，管理员入口页未注册");
+            }
+        } catch (Exception e) {
+            getLogger().warning("注册管理员入口页失败: " + e);
+        }
+
+        // 4) 游戏内入口引导（/soyshttp webadmin，SubCommand requireOp 默认 true）
+        soys.getApi().getExtension().registerSubCommand(new AdminSubCommand(soys));
+        getLogger().info("WebGame 管理员指令已注册: /soyshttp webadmin");
+    }
+
+    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            bos.write(buf, 0, n);
+        }
+        return bos.toByteArray();
     }
 
     @Override

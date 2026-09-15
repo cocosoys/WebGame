@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGame 管理员控制台</title>
+<script src="/api/plugins/WebGame/soys-auth.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #070a07; color: #7dff8a; font-family: Consolas, "Courier New", monospace; }
+  body { display: flex; flex-direction: column; }
+  #topbar {
+    background: #0c120c; border-bottom: 1px solid #1d3a1d; padding: 8px 16px;
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+  }
+  #topbar .title { font-size: 16px; font-weight: bold; color: #4ade5e; text-shadow: 0 0 8px rgba(74,222,94,.4); }
+  #topbar .who { font-size: 12px; color: #5fa86a; }
+  #topbar .menu { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  #topbar .menu button {
+    background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 16px;
+    font-family: inherit; font-size: 13px; cursor: pointer;
+  }
+  #topbar .menu button:hover { background: #122712; }
+  #topbar .menu button.active { background: #1c3a1c; color: #b6ffbe; border-color: #2f7a3f; }
+  #main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 12px 16px; gap: 10px; }
+  .panel { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  .panel.active { display: flex; }
+  .panel-head { font-size: 12px; color: #5fa86a; margin-bottom: 6px; }
+  .panel-head b { color: #4ade5e; }
+  /* ===== 终端 ===== */
+  #termOut {
+    flex: 1; overflow-y: auto; background: #040604; border: 1px solid #1d3a1d;
+    padding: 10px 12px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+  }
+  #termOut .in { color: #9be8a4; }
+  #termOut .err { color: #ff7a7a; }
+  #termInRow { display: flex; align-items: center; background: #040604; border: 1px solid #1d3a1d; padding: 6px 12px; }
+  #termPrompt { color: #4ade5e; font-size: 13px; margin-right: 8px; white-space: nowrap; }
+  #termInput {
+    flex: 1; background: transparent; border: none; outline: none; color: #d6ffda;
+    font-family: inherit; font-size: 13px; caret-color: #4ade5e;
+  }
+  /* ===== 文件管理 ===== */
+  #fsBar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #fsPath { flex: 1; min-width: 240px; background: #040604; border: 1px solid #1d3a1d; color: #d6ffda;
+    font-family: inherit; font-size: 12px; padding: 6px 10px; }
+  #fsGo, #fsUp { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 14px; cursor: pointer; font-family: inherit; }
+  #fsGo:hover, #fsUp:hover { background: #122712; }
+  #fsList { flex: 1; overflow-y: auto; background: #040604; border: 1px solid #1d3a1d; font-size: 13px; }
+  #fsList table { width: 100%; border-collapse: collapse; }
+  #fsList td, #fsList th { padding: 5px 10px; text-align: left; border-bottom: 1px solid #0f1a0f; }
+  #fsList th { color: #5fa86a; font-weight: normal; font-size: 12px; }
+  #fsList .d { color: #4ade5e; cursor: pointer; }
+  #fsList .f { color: #d6ffda; }
+  #fsList .sz { color: #5fa86a; }
+  #fsList .del { color: #ff7a7a; cursor: pointer; text-decoration: none; }
+  #fsList .del:hover { text-decoration: underline; }
+  #fsUpload { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  #fsUpload input[type=file] { color: #5fa86a; font-size: 12px; }
+  #fsUploadBtn { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 14px; cursor: pointer; font-family: inherit; }
+  #fsUploadBtn:hover { background: #122712; }
+  #fsMsg { font-size: 12px; color: #5fa86a; }
+  /* ===== 系统设置 ===== */
+  #setCards { display: flex; gap: 12px; flex-wrap: wrap; }
+  .card { flex: 1 1 220px; min-width: 0; background: #0c120c; border: 1px solid #1d3a1d; padding: 12px; }
+  .card h3 { font-size: 13px; color: #4ade5e; margin-bottom: 8px; }
+  .card .kv { font-size: 12px; color: #7dff8a; line-height: 1.8; word-break: break-all; }
+  .card .kv b { color: #d6ffda; }
+  #javaForm { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  #javaInput { flex: 1; min-width: 220px; background: #040604; border: 1px solid #1d3a1d; color: #d6ffda;
+    font-family: inherit; font-size: 12px; padding: 6px 10px; }
+  #javaBtn { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 14px; cursor: pointer; font-family: inherit; }
+  #javaBtn:hover { background: #122712; }
+  #setMsg { font-size: 12px; color: #5fa86a; margin-top: 8px; }
+  #banner { display: none; background: #1a0d0d; border: 1px solid #5a2020; color: #ff9a9a;
+    padding: 8px 12px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="title">WebGame 管理员控制台</span>
+  <span class="who" id="whoLine">未认证</span>
+  <div class="menu">
+    <button id="mTerm" class="active" onclick="showPanel('term')">终端</button>
+    <button id="mFs" onclick="showPanel('fs')">文件管理</button>
+    <button id="mSet" onclick="showPanel('set')">系统设置</button>
+  </div>
+</div>
+<div id="banner"></div>
+<div id="main">
+  <!-- 终端 -->
+  <div class="panel active" id="panel-term">
+    <div class="panel-head">终端 — 模板容器指令控制（<b>/home/webgame/mc</b> 及执行面）</div>
+    <div id="termOut"></div>
+    <div id="termInRow"><span id="termPrompt">webgame@exec:~$</span><input id="termInput" autocomplete="off" spellcheck="false"></div>
+  </div>
+  <!-- 文件管理 -->
+  <div class="panel" id="panel-fs">
+    <div class="panel-head">文件管理 — 模板容器 <b>/home/webgame/mc</b>（新实例由此派生）</div>
+    <div id="fsBar">
+      <button id="fsUp" onclick="fsUp()">⬆ 上级</button>
+      <input id="fsPath" value="/home/webgame/mc" spellcheck="false">
+      <button id="fsGo" onclick="fsList()">跳转</button>
+    </div>
+    <div id="fsList"></div>
+    <div id="fsUpload">
+      <input type="file" id="fsFile">
+      <button id="fsUploadBtn" onclick="fsUpload()">上传到当前目录</button>
+      <span id="fsMsg"></span>
+    </div>
+  </div>
+  <!-- 系统设置 -->
+  <div class="panel" id="panel-set">
+    <div class="panel-head">系统设置 — 执行面运行时配置</div>
+    <div id="setCards">
+      <div class="card">
+        <h3>执行面状态</h3>
+        <div class="kv" id="setStatus">加载中...</div>
+      </div>
+      <div class="card">
+        <h3>Java 运行时</h3>
+        <div class="kv" id="setJava">加载中...</div>
+        <div id="javaForm">
+          <input id="javaInput" placeholder="JAVA_HOME 路径，如 /usr/lib/jvm/java-8-openjdk-amd64" spellcheck="false">
+          <button id="javaBtn" onclick="setJava()">切换 Java</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>模板容器</h3>
+        <div class="kv" id="setMc">加载中...</div>
+      </div>
+    </div>
+    <div id="setMsg"></div>
+  </div>
+</div>
+<script>
+(function(){
+  'use strict';
+  SoysAuth.patchFetch();
+  SoysAuth.onLoginSuccess = function(player){ document.getElementById('whoLine').textContent = '已认证: ' + player; };
+
+  function showBanner(t){ var b=document.getElementById('banner'); b.style.display=t?'block':'none'; b.textContent=t||''; }
+  window.showPanel = function(name){
+    ['term','fs','set'].forEach(function(n){
+      document.getElementById('panel-'+n).classList.toggle('active', n===name);
+      document.getElementById('m'+n.charAt(0).toUpperCase()+n.slice(1)).classList.toggle('active', n===name);
+    });
+  };
+
+  function jfetch(url, opts){
+    opts = opts || {};
+    return fetch(url, opts).then(function(r){
+      return r.text().then(function(t){
+        var body=null; try{ body=JSON.parse(t); }catch(e){}
+        // SOYS 双层包装：业务 data 是字符串 JSON，解一层便于统一判断
+        if (body && typeof body.data === 'string' && body.data !== ''){
+          try { body.data = JSON.parse(body.data); } catch(e){}
+        }
+        return { status: r.status, body: body, raw: t };
+      });
+    });
+  }
+  function bizCode(r){ return r.body && r.body.data && typeof r.body.data.code === 'number' ? r.body.data.code : (r.body && r.body.code === 200 ? 200 : -1); }
+  function bizMsg(r){ return r.body && r.body.data && r.body.data.msg ? r.body.data.msg : (r.body ? r.body.msg : ('HTTP '+r.status)); }
+  window.__jfetch = jfetch;
+
+  // ===== 认证探测 =====
+  function checkAuth(){
+    jfetch('/api/admin/status').then(function(r){
+      if (bizCode(r) === 200 && r.body.data && r.body.data.ok){
+        var d = r.body.data;
+        document.getElementById('whoLine').textContent = '已认证: ' + (d.operator || '');
+        renderStatus(d);
+        fsList();
+      } else if (bizCode(r) === 403){
+        showBanner('403 无权限：' + bizMsg(r) + '（管理员入口仅在线 OP 可进入）');
+      } else if (r.status === 401 || (r.body && r.body.code === 401)){
+        showBanner('需要登录。请在弹出的登录窗口输入游戏内玩家名完成验证。');
+      } else {
+        showBanner('状态接口异常: ' + bizMsg(r) + ' (HTTP ' + r.status + ')');
+      }
+    });
+  }
+
+  // ===== 终端 =====
+  var termOut = document.getElementById('termOut');
+  function termPrint(t, cls){ var d=document.createElement('div'); d.className=cls||''; d.textContent=t; termOut.appendChild(d); termOut.scrollTop=termOut.scrollHeight; }
+  function termRun(cmd){
+    termPrint('webgame@exec:~$ ' + cmd, 'in');
+    jfetch('/api/admin/exec', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cmd: cmd }) }).then(function(r){
+      if (bizCode(r) !== 200){
+        termPrint('错误: ' + bizMsg(r), 'err');
+        return;
+      }
+      var d = r.body.data.data || {};
+      var out = d.output || '';
+      var code = d.exitCode;
+      termPrint(out.length ? out : '(无输出)');
+      if (code !== 0) termPrint('[退出码 ' + code + ']', 'err');
+    }).catch(function(e){ termPrint('请求失败: ' + e.message, 'err'); });
+  }
+  var termInput = document.getElementById('termInput');
+  termInput.addEventListener('keydown', function(e){
+    if (e.key === 'Enter'){
+      var c = termInput.value.trim();
+      termInput.value = '';
+      if (c) termRun(c);
+    }
+  });
+  termPrint('WebGame 管理员终端 — 命令经插件转发至执行面(WSL)执行');
+  termPrint('输入 help 查看常用命令，exit 无意义(会话常驻)。');
+
+  // ===== 文件管理 =====
+  var fsRoot = '/home/webgame/mc';
+  var fsCur = fsRoot;
+  function fsEsc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  window.fsList = function(){
+    var p = document.getElementById('fsPath').value.trim() || fsRoot;
+    fsCur = p;
+    jfetch('/api/admin/fs?path=' + encodeURIComponent(p)).then(function(r){
+      var box = document.getElementById('fsList');
+      if (bizCode(r) !== 200 || !r.body.data.data){
+        box.innerHTML = '<div style="padding:10px;color:#ff7a7a;">无法读取: ' + fsEsc(bizMsg(r)) + '</div>';
+        return;
+      }
+      var d = r.body.data.data;
+      var html = '<table><tr><th>名称</th><th>类型</th><th>大小</th><th></th></tr>';
+      if (p !== '/'){
+        html += '<tr><td class="d" onclick="fsCd(upPath())">..</td><td>目录</td><td></td><td></td></tr>';
+      }
+      (d.entries || []).forEach(function(it){
+        if (it.dir){
+          html += '<tr><td class="d" onclick="fsCd(' + JSON.stringify(it.path) + ')">' + fsEsc(it.name) + '/</td><td>目录</td><td class="sz">' + fsEsc(it.size || '') + '</td><td><a class="del" onclick="fsDel(' + JSON.stringify(it.path) + ')">删除</a></td></tr>';
+        } else {
+          html += '<tr><td class="f">' + fsEsc(it.name) + '</td><td>文件</td><td class="sz">' + fsEsc(it.size || '') + '</td><td><a class="del" onclick="fsDel(' + JSON.stringify(it.path) + ')">删除</a></td></tr>';
+        }
+      });
+      html += '</table>';
+      box.innerHTML = html;
+      document.getElementById('fsMsg').textContent = '路径: ' + p;
+    });
+  };
+  window.fsCd = function(p){ document.getElementById('fsPath').value = p; fsList(); };
+  window.fsUp = function(){
+    var p = document.getElementById('fsPath').value.trim() || fsRoot;
+    p = p.replace(/\/+$/,'');
+    var i = p.lastIndexOf('/');
+    document.getElementById('fsPath').value = i > 0 ? p.substring(0,i) : '/';
+    fsList();
+  };
+  window.upPath = function(){
+    var p = document.getElementById('fsPath').value.trim() || fsRoot;
+    p = p.replace(/\/+$/,'');
+    var i = p.lastIndexOf('/');
+    return i > 0 ? p.substring(0,i) : '/';
+  };
+  window.fsDel = function(path){
+    if (!confirm('确认删除 ' + path + ' ?')) return;
+    jfetch('/api/admin/fs?path=' + encodeURIComponent(path), { method:'DELETE' }).then(function(r){
+      document.getElementById('fsMsg').textContent = bizCode(r) === 200 ? '已删除' : ('删除失败: ' + bizMsg(r));
+      fsList();
+    });
+  };
+  window.fsUpload = function(){
+    var f = document.getElementById('fsFile').files[0];
+    if (!f){ document.getElementById('fsMsg').textContent = '请先选择文件'; return; }
+    var target = (document.getElementById('fsPath').value.trim() || fsRoot).replace(/\/+$/,'') + '/' + f.name;
+    var msg = document.getElementById('fsMsg');
+    msg.textContent = '上传中 ' + f.name + ' (' + f.size + ' B)...';
+    var reader = new FileReader();
+    reader.onload = function(){
+      var b64 = reader.result.split(',')[1];
+      jfetch('/api/admin/fs/upload', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ path: target, data: b64 }) }).then(function(r){
+        msg.textContent = bizCode(r) === 200 ? ('上传成功: ' + target) : ('上传失败: ' + bizMsg(r));
+        fsList();
+      });
+    };
+    reader.readAsDataURL(f);
+  };
+
+  // ===== 系统设置 =====
+  function renderStatus(d){
+    var s = document.getElementById('setStatus');
+    s.innerHTML = '实例运行中: <b>' + (d.instances||0) + '</b> 台<br>设备容量: <b>' + (d.usedCapacity||0) + ' / ' + (d.maxCapacity||'-') + '</b>';
+    var j = document.getElementById('setJava');
+    j.innerHTML = '当前 JAVA_HOME: <b>' + (d.javaHome || '(未配置，使用默认 java)') + '</b><br>生效 Java: <b>' + (d.javaVersion || '未知') + '</b>';
+    var m = document.getElementById('setMc');
+    m.innerHTML = '模板容器: <b>' + fsRoot + '</b><br>MC 版本: <b>' + (d.mcVersion || '未知') + '</b><br>Forge: <b>' + (d.forgeVersion || '未知') + '</b>';
+  }
+  window.setJava = function(){
+    var v = document.getElementById('javaInput').value.trim();
+    if (!v){ document.getElementById('setMsg').textContent = '请输入 JAVA_HOME 路径'; return; }
+    jfetch('/api/admin/java', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ javaHome: v }) }).then(function(r){
+      document.getElementById('setMsg').textContent = bizCode(r) === 200
+        ? ('已更新 JAVA_HOME=' + v + '（下次启动实例生效）')
+        : ('切换失败: ' + bizMsg(r));
+      checkAuth();
+    });
+  };
+
+  checkAuth();
+  setInterval(function(){ if (document.getElementById('whoLine').textContent.indexOf('未认证') < 0) checkAuth(); }, 30000);
+})();
+</script>
+</body>
+</html>
