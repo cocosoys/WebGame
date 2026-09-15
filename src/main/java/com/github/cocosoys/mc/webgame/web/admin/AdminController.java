@@ -163,6 +163,77 @@ public final class AdminController {
                 : "{\"code\":500,\"msg\":" + escJson(err) + ",\"data\":null}";
     }
 
+    @ApiPublic
+    @GetMapping(value = "/admin/fs/read", path = "/admin/fs/read")
+    @ApiName("管理员文件读取(记事本)")
+    public String fsRead(ApiRequestContext ctx,
+                         @RequestParam(name = "path", required = false) String path) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        String[] res = executor.readText(path);
+        if (res[0] != null) {
+            return "{\"code\":500,\"msg\":" + escJson(res[0]) + ",\"data\":null}";
+        }
+        return "{\"code\":200,\"msg\":\"ok\",\"data\":{\"content\":" + escJson(res[1]) + "}}";
+    }
+
+    @ApiPublic
+    @GetMapping(value = "/admin/fs/download", path = "/admin/fs/download")
+    @ApiName("管理员文件下载")
+    public String fsDownload(ApiRequestContext ctx,
+                             @RequestParam(name = "path", required = false) String path) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        String[] res = executor.downloadB64(path);
+        if (res[0] != null) {
+            return "{\"code\":500,\"msg\":" + escJson(res[0]) + ",\"data\":null}";
+        }
+        return "{\"code\":200,\"msg\":\"ok\",\"data\":{\"name\":" + escJson(res[2])
+                + ",\"size\":" + res[3] + ",\"b64\":" + escJson(res[1]) + "}}";
+    }
+
+    @ApiPublic
+    @PostMapping(value = "/admin/fs/create", path = "/admin/fs/create")
+    @ApiName("管理员新建目录/文件")
+    public String fsCreate(ApiRequestContext ctx, @RequestBody String body) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        String path = jsonField(body, "path");
+        String type = jsonField(body, "type");
+        if (path == null || type == null) {
+            return "{\"code\":400,\"msg\":\"缺少 path/type 参数\",\"data\":null}";
+        }
+        String err = executor.create(path, "dir".equalsIgnoreCase(type));
+        return err == null
+                ? "{\"code\":200,\"msg\":\"ok\",\"data\":{\"created\":\"" + esc(path) + "\"}}"
+                : "{\"code\":500,\"msg\":" + escJson(err) + ",\"data\":null}";
+    }
+
+    @ApiPublic
+    @PostMapping(value = "/admin/fs/rename", path = "/admin/fs/rename")
+    @ApiName("管理员文件重命名")
+    public String fsRename(ApiRequestContext ctx, @RequestBody String body) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        String from = jsonField(body, "from");
+        String to = jsonField(body, "to");
+        if (from == null || to == null) {
+            return "{\"code\":400,\"msg\":\"缺少 from/to 参数\",\"data\":null}";
+        }
+        String err = executor.rename(from, to);
+        return err == null
+                ? "{\"code\":200,\"msg\":\"ok\",\"data\":{\"renamed\":\"" + esc(from) + "\"}}"
+                : "{\"code\":500,\"msg\":" + escJson(err) + ",\"data\":null}";
+    }
+
     // ================= 系统设置：Java 切换 =================
 
     @ApiPublic

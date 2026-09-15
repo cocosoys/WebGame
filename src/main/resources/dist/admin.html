@@ -55,6 +55,11 @@
   #fsList .sz { color: #5fa86a; }
   #fsList .del { color: #ff7a7a; cursor: pointer; text-decoration: none; }
   #fsList .del:hover { text-decoration: underline; }
+  #fsList .op { color: #7db9ff; cursor: pointer; text-decoration: none; }
+  #fsList .op:hover { text-decoration: underline; }
+  #fsSelBar { display: flex; gap: 8px; align-items: center; padding: 6px 0; color: #7dff8a; font-size: 12px; }
+  #fsSelBar button { background: #0e1a0e; color: #ff9a7a; border: 1px solid #3a1d1d; padding: 4px 10px; cursor: pointer; }
+  #fsSelBar button:hover { background: #1a0e0e; }
   #fsUpload { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
   #fsUpload input[type=file] { color: #5fa86a; font-size: 12px; }
   #fsUploadBtn { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 14px; cursor: pointer; font-family: inherit; }
@@ -101,10 +106,16 @@
       <button id="fsUp" onclick="fsUp()">⬆ 上级</button>
       <input id="fsPath" value="/home/webgame/mc" spellcheck="false">
       <button id="fsGo" onclick="fsList()">跳转</button>
+      <button id="fsNew" onclick="fsNewMenu()">新建</button>
     </div>
     <div id="fsList"></div>
+    <div id="fsSelBar" style="display:none;">
+      <span id="fsSelCount"></span>
+      <button onclick="fsDelSelected()">批量删除</button>
+      <button onclick="fsClearSel()">取消选择</button>
+    </div>
     <div id="fsUpload">
-      <input type="file" id="fsFile">
+      <input type="file" id="fsFile" multiple>
       <button id="fsUploadBtn" onclick="fsUpload()">上传到当前目录</button>
       <span id="fsMsg"></span>
     </div>
@@ -131,6 +142,21 @@
       </div>
     </div>
     <div id="setMsg"></div>
+  </div>
+</div>
+
+<!-- 记事本编辑弹窗 -->
+<div id="fsEditBox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99;align-items:center;justify-content:center;">
+  <div style="width:min(860px,94vw);max-height:86vh;display:flex;flex-direction:column;background:#050805;border:1px solid #1d3a1d;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.6);">
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#0a140a;border-bottom:1px solid #1d3a1d;">
+      <span id="fsEditTitle" style="flex:1;color:#7dff8a;font-size:13px;font-family:Consolas,'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
+      <button onclick="fsEditSave()" style="background:#0e3a0e;color:#7dff8a;border:1px solid #1d5a1d;padding:4px 12px;cursor:pointer;">保存</button>
+      <button onclick="fsEditClose()" style="background:#0e1a0e;color:#ff7a7a;border:1px solid #3a1d1d;padding:4px 12px;cursor:pointer;">关闭</button>
+    </div>
+    <textarea id="fsEditBody" spellcheck="false" style="flex:1;min-height:60vh;background:#040604;color:#d6ffda;border:none;outline:none;padding:12px;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.5;resize:none;white-space:pre;overflow:auto;"></textarea>
+    <div style="padding:6px 12px;background:#0a140a;border-top:1px solid #1d3a1d;color:#5fa86a;font-size:12px;">
+      <span id="fsEditMsg">UTF-8 文本 · ≤512KB · 保存将覆盖原文件</span>
+    </div>
   </div>
 </div>
 <script>
@@ -214,7 +240,13 @@
   // ===== 文件管理 =====
   var fsRoot = '/home/webgame/mc';
   var fsCur = fsRoot;
+  var fsSel = {};          // 已选中的 path -> true
+  var TXT_EXT = /\.(txt|log|json|yml|yaml|properties|conf|cfg|ini|sh|bat|cmd|java|py|js|html|css|xml|md|toml|mcmeta|mcfunction|datapack)$/i;
   function fsEsc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function fsUrl(p){ return encodeURIComponent(p); }
+  function fsFull(p){ return (document.getElementById('fsPath').value.trim() || fsRoot).replace(/\/+$/,'') + '/' + p; }
+  function fsName(p){ return p.split('/').pop() || p; }
+
   window.fsList = function(){
     var p = document.getElementById('fsPath').value.trim() || fsRoot;
     fsCur = p;
@@ -225,20 +257,72 @@
         return;
       }
       var d = r.body.data.data;
-      var html = '<table><tr><th>名称</th><th>类型</th><th>大小</th><th></th></tr>';
+      fsSel = {};
+      var html = '<table><tr><th><input type="checkbox" id="fsSelAll" title="全选"></th><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr>';
       if (p !== '/'){
-        html += '<tr><td class="d" onclick="fsCd(upPath())">..</td><td>目录</td><td></td><td></td></tr>';
+        html += '<tr><td></td><td class="d" data-act="cd" data-path="' + fsEsc(window.upPath()) + '">..</td><td>目录</td><td></td><td></td></tr>';
       }
       (d.entries || []).forEach(function(it){
+        var nm = fsEsc(it.name);
         if (it.dir){
-          html += '<tr><td class="d" onclick="fsCd(' + JSON.stringify(it.path) + ')">' + fsEsc(it.name) + '/</td><td>目录</td><td class="sz">' + fsEsc(it.size || '') + '</td><td><a class="del" onclick="fsDel(' + JSON.stringify(it.path) + ')">删除</a></td></tr>';
+          html += '<tr><td><input type="checkbox" class="fs-chk" data-path="' + fsEsc(it.path) + '"></td>'
+            + '<td class="d" data-act="cd" data-path="' + fsEsc(it.path) + '">' + nm + '/</td><td>目录</td><td class="sz">' + fsEsc(it.size || '') + '</td>'
+            + '<td><a class="op" data-act="rename" data-path="' + fsEsc(it.path) + '">重命名</a> <a class="del" data-act="del" data-path="' + fsEsc(it.path) + '">删除</a></td></tr>';
         } else {
-          html += '<tr><td class="f">' + fsEsc(it.name) + '</td><td>文件</td><td class="sz">' + fsEsc(it.size || '') + '</td><td><a class="del" onclick="fsDel(' + JSON.stringify(it.path) + ')">删除</a></td></tr>';
+          var act = TXT_EXT.test(it.name) ? 'edit' : 'dl';
+          html += '<tr><td><input type="checkbox" class="fs-chk" data-path="' + fsEsc(it.path) + '"></td>'
+            + '<td class="f" data-act="' + act + '" data-path="' + fsEsc(it.path) + '" style="cursor:pointer;" title="' + (act==='edit'?'记事本打开':'下载') + '">' + nm + '</td><td>文件</td><td class="sz">' + fsEsc(it.size || '') + '</td>'
+            + '<td><a class="op" data-act="rename" data-path="' + fsEsc(it.path) + '">重命名</a> <a class="op" data-act="dl" data-path="' + fsEsc(it.path) + '">下载</a> <a class="del" data-act="del" data-path="' + fsEsc(it.path) + '">删除</a></td></tr>';
         }
       });
       html += '</table>';
       box.innerHTML = html;
       document.getElementById('fsMsg').textContent = '路径: ' + p;
+      var all = document.getElementById('fsSelAll');
+      if (all) all.onchange = function(){ document.querySelectorAll('.fs-chk').forEach(function(c){ c.checked = all.checked; }); refreshSel(); };
+      // 事件委托：避免 onclick 内嵌 JSON 转义问题
+      box.querySelectorAll('[data-act]').forEach(function(el){
+        el.addEventListener('click', function(ev){
+          var path = el.getAttribute('data-path');
+          var act = el.getAttribute('data-act');
+          if (act === 'cd'){ fsCd(path); }
+          else if (act === 'del'){ fsDel(path); }
+          else if (act === 'rename'){ fsRename(path); }
+          else if (act === 'dl'){ fsDownload(path); }
+          else if (act === 'edit'){ fsEdit(path); }
+        });
+      });
+      box.querySelectorAll('.fs-chk').forEach(function(c){
+        c.addEventListener('change', function(){
+          if (c.checked){ fsSel[c.getAttribute('data-path')] = true; } else { delete fsSel[c.getAttribute('data-path')]; }
+          refreshSel();
+        });
+      });
+    });
+  };
+  function refreshSel(){
+    var n = Object.keys(fsSel).length;
+    var bar = document.getElementById('fsSelBar');
+    bar.style.display = n ? 'flex' : 'none';
+    document.getElementById('fsSelCount').textContent = '已选择 ' + n + ' 项';
+  }
+  window.fsClearSel = function(){ fsSel = {}; fsList(); };
+  window.fsDelSelected = function(){
+    var paths = Object.keys(fsSel);
+    if (!paths.length) return;
+    if (!confirm('确认删除选中的 ' + paths.length + ' 项？')) return;
+    var done = 0, fails = [];
+    paths.forEach(function(p){
+      jfetch('/api/admin/fs?path=' + encodeURIComponent(p), { method:'DELETE' }).then(function(r){
+        done++;
+        if (bizCode(r) !== 200) fails.push(fsName(p));
+        if (done === paths.length){
+          document.getElementById('fsMsg').textContent = fails.length
+            ? ('删除完成，失败 ' + fails.length + ' 项: ' + fails.join(', '))
+            : ('已删除 ' + paths.length + ' 项');
+          fsList();
+        }
+      });
     });
   };
   window.fsCd = function(p){ document.getElementById('fsPath').value = p; fsList(); };
@@ -262,22 +346,111 @@
       fsList();
     });
   };
-  window.fsUpload = function(){
-    var f = document.getElementById('fsFile').files[0];
-    if (!f){ document.getElementById('fsMsg').textContent = '请先选择文件'; return; }
-    var target = (document.getElementById('fsPath').value.trim() || fsRoot).replace(/\/+$/,'') + '/' + f.name;
+  window.fsRename = function(path){
+    var name = fsName(path);
+    var next = prompt('重命名（输入新名称，含扩展名）:', name);
+    if (!next || next === name) return;
+    var dir = path.substring(0, Math.max(path.lastIndexOf('/'), 0));
+    var to = (dir || '/') + '/' + next;
+    jfetch('/api/admin/fs/rename', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ from: path, to: to }) }).then(function(r){
+      document.getElementById('fsMsg').textContent = bizCode(r) === 200 ? ('已重命名: ' + next) : ('重命名失败: ' + bizMsg(r));
+      fsList();
+    });
+  };
+  window.fsNewMenu = function(){
+    var kind = prompt('新建内容：\n输入 目录名 创建文件夹\n输入 文件名.扩展名 创建空白文件', '新文件夹');
+    if (!kind) return;
+    var p = (document.getElementById('fsPath').value.trim() || fsRoot).replace(/\/+$/,'') + '/' + kind.trim();
+    var isDir = !/\./.test(kind.trim()); // 无扩展名 → 目录；有扩展名 → 空白文件
+    jfetch('/api/admin/fs/create', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: p, type: isDir ? 'dir' : 'file' }) }).then(function(r){
+      document.getElementById('fsMsg').textContent = bizCode(r) === 200 ? ('已创建: ' + kind) : ('创建失败: ' + bizMsg(r));
+      fsList();
+    });
+  };
+  window.fsDownload = function(path){
     var msg = document.getElementById('fsMsg');
-    msg.textContent = '上传中 ' + f.name + ' (' + f.size + ' B)...';
-    var reader = new FileReader();
-    reader.onload = function(){
-      var b64 = reader.result.split(',')[1];
-      jfetch('/api/admin/fs/upload', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ path: target, data: b64 }) }).then(function(r){
-        msg.textContent = bizCode(r) === 200 ? ('上传成功: ' + target) : ('上传失败: ' + bizMsg(r));
+    msg.textContent = '准备下载 ' + fsName(path) + ' ...';
+    jfetch('/api/admin/fs/download?path=' + encodeURIComponent(path)).then(function(r){
+      if (bizCode(r) !== 200 || !r.body.data.data){ msg.textContent = '下载失败: ' + bizMsg(r); return; }
+      var d = r.body.data.data;
+      var ab = new Uint8Array(atob(d.b64).length);
+      var raw = atob(d.b64);
+      for (var i=0;i<raw.length;i++) ab[i] = raw.charCodeAt(i);
+      var blob = new Blob([ab]);
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = d.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+      msg.textContent = '已下载: ' + d.name + ' (' + d.size + ' B)';
+    });
+  };
+  window.fsEdit = function(path){
+    var msg = document.getElementById('fsMsg');
+    msg.textContent = '读取 ' + fsName(path) + ' ...';
+    jfetch('/api/admin/fs/read?path=' + encodeURIComponent(path)).then(function(r){
+      if (bizCode(r) !== 200 || !r.body.data.data){
+        msg.textContent = '无法打开: ' + bizMsg(r);
+        return;
+      }
+      var content = r.body.data.data.content || '';
+      var box = document.getElementById('fsEditBox');
+      box.style.display = 'flex';
+      document.getElementById('fsEditTitle').textContent = '记事本 — ' + path;
+      document.getElementById('fsEditBody').value = content;
+      document.getElementById('fsEditBody').dataset.path = path;
+      document.getElementById('fsEditBody').focus();
+    });
+  };
+  window.fsEditClose = function(){ document.getElementById('fsEditBox').style.display = 'none'; };
+  window.fsEditSave = function(){
+    var ta = document.getElementById('fsEditBody');
+    var path = ta.dataset.path;
+    if (!path) return;
+    var msg = document.getElementById('fsEditMsg');
+    msg.textContent = '保存中...';
+    var bytes = new TextEncoder().encode(ta.value);
+    var b64 = '';
+    var chunk = 0x8000;
+    for (var i=0;i<bytes.length;i+=chunk){
+      b64 += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+    }
+    b64 = btoa(b64);
+    jfetch('/api/admin/fs/upload', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: path, data: b64 }) }).then(function(r){
+      if (bizCode(r) === 200){ msg.textContent = '已保存'; fsEditClose(); fsList(); }
+      else { msg.textContent = '保存失败: ' + bizMsg(r); }
+    });
+  };
+  window.fsUpload = function(){
+    var files = document.getElementById('fsFile').files;
+    if (!files || !files.length){ document.getElementById('fsMsg').textContent = '请先选择文件'; return; }
+    var msg = document.getElementById('fsMsg');
+    var idx = 0, ok = 0, fails = [];
+    function next(){
+      if (idx >= files.length){
+        msg.textContent = fails.length ? ('上传完成: 成功 ' + ok + ' 项，失败 ' + fails.length + ' 项 (' + fails.join(', ') + ')') : ('全部上传成功: ' + ok + ' 项');
+        document.getElementById('fsFile').value = '';
         fsList();
-      });
-    };
-    reader.readAsDataURL(f);
+        return;
+      }
+      var f = files[idx++];
+      var target = fsFull(f.name);
+      msg.textContent = '上传中 (' + idx + '/' + files.length + ') ' + f.name + ' ...';
+      var reader = new FileReader();
+      reader.onload = function(){
+        var b64 = reader.result.split(',')[1];
+        jfetch('/api/admin/fs/upload', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ path: target, data: b64 }) }).then(function(r){
+          if (bizCode(r) === 200) ok++; else fails.push(f.name);
+          next();
+        });
+      };
+      reader.readAsDataURL(f);
+    }
+    next();
   };
 
   // ===== 系统设置 =====
@@ -299,6 +472,20 @@
         : ('切换失败: ' + bizMsg(r));
       checkAuth();
     });
+  };
+
+  window.showPanel = function(name){
+    var map = { term: 'panel-term', fs: 'panel-fs', set: 'panel-set' };
+    var panels = document.querySelectorAll('.panel');
+    for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
+    var p = document.getElementById(map[name]);
+    if (p) p.classList.add('active');
+    var btns = { term: 'mTerm', fs: 'mFs', set: 'mSet' };
+    for (var k in btns) {
+      var b = document.getElementById(btns[k]);
+      if (b) b.className = (k === name) ? 'active' : '';
+    }
+    if (name === 'fs') fsList();
   };
 
   checkAuth();

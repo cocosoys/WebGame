@@ -120,6 +120,105 @@ public final class AdminExecutor {
     }
 
     /**
+     * 读取文本文件内容（记事本查看/编辑），限 ≤ 512KB。
+     *
+     * @param path 容器内绝对路径
+     * @return [0]=null 成功或 [0]=错误信息；成功时 [1]=内容
+     */
+    public String[] readText(String path) {
+        String p = sanitizePath(path);
+        if (p.equals(MC_BASE) || p.equals("/home/webgame") || p.equals("/")) {
+            return new String[]{"禁止读取根路径: " + p, null};
+        }
+        String qp = q(p);
+        Result r = run("bash", "-lc", "[ -f " + qp + " ] || { echo '__ERR__NOT_FILE__'; exit 3; }; "
+                + "[ \"$(stat -c %s " + qp + " 2>/dev/null || echo 0)\" -le 524288 ] || { echo '__ERR__TOO_BIG__'; exit 4; }; cat " + qp);
+        if (r.exitCode != 0) {
+            if (r.output.contains("__ERR__NOT_FILE__")) {
+                return new String[]{"不是文件或不存在: " + p, null};
+            }
+            if (r.output.contains("__ERR__TOO_BIG__")) {
+                return new String[]{"文件超过 512KB，请用下载查看: " + p, null};
+            }
+            return new String[]{r.output.isEmpty() ? ("读取失败(退出码 " + r.exitCode + ")") : r.output, null};
+        }
+        return new String[]{null, r.output};
+    }
+
+    /**
+     * 下载：以 base64 返回文件内容（浏览器端解码保存），限 ≤ 16MB。
+     *
+     * @param path 容器内绝对路径
+     * @return [0]=null 成功或 [0]=错误信息；成功时 [1]=base64、[2]=文件名、[3]=字节数
+     */
+    public String[] downloadB64(String path) {
+        String p = sanitizePath(path);
+        if (p.equals(MC_BASE) || p.equals("/home/webgame") || p.equals("/")) {
+            return new String[]{"禁止下载根路径: " + p, null, null, null};
+        }
+        String qp = q(p);
+        Result r = run("bash", "-lc", "[ -f " + qp + " ] || { echo '__ERR__NOT_FILE__'; exit 3; }; "
+                + "[ \"$(stat -c %s " + qp + " 2>/dev/null || echo 0)\" -le 16777216 ] || { echo '__ERR__TOO_BIG__'; exit 4; }; "
+                + "base64 -w0 " + qp);
+        if (r.exitCode != 0) {
+            if (r.output.contains("__ERR__NOT_FILE__")) {
+                return new String[]{"不是文件或不存在: " + p, null, null, null};
+            }
+            if (r.output.contains("__ERR__TOO_BIG__")) {
+                return new String[]{"文件超过 16MB，暂不支持下载: " + p, null, null, null};
+            }
+            return new String[]{r.output.isEmpty() ? ("下载失败(退出码 " + r.exitCode + ")") : r.output, null, null, null};
+        }
+        String b64 = r.output.replaceAll("[\\r\\n]", "");
+        String name = p.substring(p.lastIndexOf('/') + 1);
+        return new String[]{null, b64, name, String.valueOf(b64.length() * 3L / 4)};
+    }
+
+    /**
+     * 新建目录（含父目录链）或空白文件。
+     *
+     * @param path  容器内绝对路径
+     * @param isDir true=目录，false=空白文件
+     * @return 错误信息（成功返回 null）
+     */
+    public String create(String path, boolean isDir) {
+        String p = sanitizePath(path);
+        if (!p.startsWith(MC_BASE + "/") && !p.equals(MC_BASE)) {
+            return "仅允许在模板容器内创建: " + MC_BASE;
+        }
+        if (p.equals(MC_BASE) || p.equals("/home/webgame") || p.equals("/")) {
+            return "禁止操作根路径: " + p;
+        }
+        Result r = isDir
+                ? run("bash", "-lc", "mkdir -p " + q(p) + " && chown -R webgame:webgame " + q(p) + " && echo OK")
+                : run("bash", "-lc", "mkdir -p \"$(dirname " + q(p) + ")\" && touch " + q(p)
+                + " && chown webgame:webgame " + q(p) + " && echo OK");
+        return r.exitCode == 0 ? null
+                : (r.output.isEmpty() ? ("创建失败(退出码 " + r.exitCode + ")") : r.output);
+    }
+
+    /**
+     * 重命名/移动：仅限模板容器内同路径（mv）。
+     *
+     * @param from 原路径
+     * @param to   目标路径
+     * @return 错误信息（成功返回 null）
+     */
+    public String rename(String from, String to) {
+        String p1 = sanitizePath(from);
+        String p2 = sanitizePath(to);
+        if (!p1.startsWith(MC_BASE + "/") || !p2.startsWith(MC_BASE + "/")) {
+            return "仅允许在模板容器内重命名: " + MC_BASE;
+        }
+        if (p1.equals(MC_BASE) || p2.equals(MC_BASE)) {
+            return "禁止重命名根路径";
+        }
+        Result r = run("bash", "-lc", "mv " + q(p1) + " " + q(p2) + " && chown -R webgame:webgame " + q(p2) + " && echo OK");
+        return r.exitCode == 0 ? null
+                : (r.output.isEmpty() ? ("重命名失败(退出码 " + r.exitCode + ")") : r.output);
+    }
+
+    /**
      * 上传（流式实现）：把 base64 解码后经 stdin 写入目标文件。
      */
     public String uploadStdin(String target, String base64Data) {
