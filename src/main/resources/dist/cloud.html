@@ -9,7 +9,9 @@
     font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; }
   #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
   #topbar { height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 14px;
-    background: #1a1a22; border-bottom: 1px solid #2a2a34; gap: 10px; font-size: 13px; }
+    background: #1a1a22; border-bottom: 1px solid #2a2a34; gap: 10px; font-size: 13px;
+    transition: transform 0.25s ease; position: relative; z-index: 20; }
+  #topbar.auto-hide { transform: translateY(-45px); }
   #topbar .title { font-weight: 600; }
   #topbar button { background: #2a2a34; color: #c8c8d0; border: 1px solid #3a3a48; border-radius: 6px;
     padding: 4px 12px; font-size: 12px; cursor: pointer; }
@@ -87,6 +89,7 @@
   var fitMode = true;        // true=铺满  false=原始比例
   var reconnectAttempts = 0; // 当前连接失败重连次数
   var reconnectTimer = null;
+  var gameEnded = false;     // 实例异常结束标志：禁止自动重连，提示用户重新连接
 
   var STORE_KEY = "wg_cloud_session";
 
@@ -205,6 +208,97 @@ function startFitWatch() {
     });
   }
 
+  // ===== 铺满时顶部标题栏自动隐藏（鼠标靠近顶部滑出，远离收回）=====
+
+  function applyTopbarHide(hide) {
+    var tb = document.getElementById("topbar");
+    if (!tb) { return; }
+    if (hide) {
+      tb.classList.add("auto-hide");
+      tb.style.transform = "translateY(-" + (tb.offsetHeight + 2) + "px)";
+    } else {
+      tb.classList.remove("auto-hide");
+      tb.style.transform = "";
+    }
+  }
+
+  function updateTopbarAutoHide() {
+    var tb = document.getElementById("topbar");
+    if (tb) { applyTopbarHide(!!(fitMode && started && !gameEnded)); }
+  }
+
+  function initAutoHideTopbar() {
+    var tb = document.getElementById("topbar");
+    var stage = document.getElementById("stage");
+    updateTopbarAutoHide();
+    function onMove(y) {
+      if (!fitMode || !started || gameEnded) { return; }
+      applyTopbarHide(y >= 80);
+    }
+    // 父文档监听：鼠标在标题栏/stage 空白区移动
+    stage.addEventListener("mousemove", function (e) { onMove(e.clientY); }, true);
+    // iframe 内监听：鼠标进入云游戏画面时父文档收不到 mousemove，
+    // 需在 iframe 文档内判断顶部区域。锁定中事件被 pointer lock 捕获，不触发。
+    try {
+      var d = cloudFrame.contentDocument;
+      if (d) {
+        d.addEventListener("mousemove", function (e) { onMove(e.clientY); }, true);
+      }
+    } catch (e) {}
+  }
+
+  // ===== 鼠标进入云游戏窗口自动锁定 =====
+  // 浏览器安全限制：requestPointerLock 必须由用户激活手势（click/mousedown/keydown）
+  // 触发，纯 mouseenter 无法锁定。这里用"任意鼠标按下即锁定"（比仅点击画面更灵敏），
+  // 锁定后指针被浏览器捕获，不再移出浏览器窗口；Esc 退出锁定后再次按下即可重锁。
+  function initAutoPointerLock() {
+    try {
+      var d = cloudFrame.contentDocument;
+      if (!d) { return; }
+      d.addEventListener("mousedown", function () {
+        if (gameEnded) { return; }
+        var el = d.querySelector("canvas") || d.body;
+        if (el && el.requestPointerLock) {
+          try { el.requestPointerLock(); } catch (e) {}
+        }
+      }, true);
+      d.addEventListener("pointerlockchange", function () {
+        var locked = d.pointerLockElement != null;
+        var h = document.getElementById("grabHint");
+        if (h) { h.style.opacity = locked ? "0" : "1"; }
+        if (locked) { updateTopbarAutoHide(); }
+      });
+    } catch (e) {}
+  }
+
+  // ===== 实例异常结束：清理通道并提示重新连接 =====
+
+  function endGameWithMessage(msg) {
+    gameEnded = true;
+    clearSession();
+    started = false;
+    reconnectAttempts = 5; // 禁止自动重连
+    if (reconnectTimer) { clearTimeout(reconnectTimer); }
+    try {
+      cloudFrame.src = "about:blank";
+      cloudFrame.classList.add("hidden");
+    } catch (e) {}
+    fitBtn.classList.add("hidden");
+    quitBtn.classList.add("hidden");
+    var h = document.getElementById("grabHint");
+    if (h) { h.style.opacity = "0"; }
+    overlay.classList.remove("hidden");
+    title.textContent = "连接已断开";
+    desc.textContent = "游戏实例已退出或画面消失，请点击下方按钮重新连接。";
+    errBox.textContent = msg;
+    errBox.classList.remove("hidden");
+    userInput.classList.remove("hidden");
+    btn.disabled = false;
+    btn.textContent = "重新连接";
+    waiting.classList.add("hidden");
+    statusEl.textContent = "游戏已断开";
+  }
+
   // ===== iframe 启动（含首次加载竞态自愈）=====
 
   var kasmUrl = "";
@@ -231,6 +325,8 @@ function startFitWatch() {
     cloudFrame.src = url;
     applyFit();
     startFitWatch();
+    initAutoHideTopbar();
+    initAutoPointerLock();
   }
 
   // ===== 全局独立自愈轮询（不依赖 startCloud 闭包，定时检测 iframe 是否真正连上画面）=====
@@ -239,10 +335,12 @@ function startFitWatch() {
   window.__healCount = 0;
   setInterval(function () {
     if (cloudFrame.classList.contains("hidden")) { return; }
+    if (gameEnded) { return; }
     var d;
     try { d = cloudFrame.contentDocument; } catch (e) { return; }
     if (!d || !d.title) { return; }
-    var connected = d.title.indexOf("(webgame)") > 0;
+    // noVNC 标题形如 "DESKTOP-xxx:99 - noVNC"；KasmVNC 为 "...(webgame) - KasmVNC"
+    var connected = d.title.indexOf("noVNC") > 0 || d.title.indexOf("(webgame)") > 0;
     var cv = d.querySelector("canvas");
     var painted = cv && cv.width > 100 && cv.height > 100;
     if (connected && painted) {
@@ -250,7 +348,13 @@ function startFitWatch() {
       applyFit();
       return;
     }
-    if (window.__healCount < 4 && kasmUrl) {
+    if (window.__healCount >= 4 && kasmUrl) {
+      // 连续重载仍无画面：视为游戏画面消失/实例异常 → 关闭通道并提示重连
+      try { ws.close(1000, "ended"); } catch (e) {}
+      endGameWithMessage("游戏画面已断开，请重新连接");
+      return;
+    }
+    if (kasmUrl) {
       window.__healCount++;
       cloudFrame.src = kasmUrl; // 自愈重载（等执行面服务完全就绪后重连）
     }
@@ -260,6 +364,7 @@ function startFitWatch() {
     fitMode = !fitMode;
     fitBtn.textContent = fitMode ? "铺满" : "原始比例";
     applyFit();
+    updateTopbarAutoHide();
   }
 
   // ===== 信令连接 =====
@@ -324,7 +429,14 @@ function startFitWatch() {
           var msg = "";
           for (var j = 3; j < 3 + eLen && j < arr.length; j++) { msg += String.fromCharCode(arr[j]); }
           clearInterval(timer);
-          fail("无法进入服务器：" + msg);
+          if (started && !cloudFrame.classList.contains("hidden")) {
+            // 游戏进行中收到 ERROR（实例已退出）：关闭通道并提示重新连接
+            gameEnded = true;
+            try { ws.close(1000, "ended"); } catch (e) {}
+            endGameWithMessage(msg || "游戏实例已退出，请重新连接");
+          } else {
+            fail("无法进入服务器：" + msg);
+          }
         }
       };
       fr.readAsArrayBuffer(ev.data);
@@ -332,6 +444,7 @@ function startFitWatch() {
     ws.onclose = function (ev) {
       clearInterval(timer);
       if (!started) { return; }
+      if (gameEnded) { return; } // 实例异常结束：endGameWithMessage 已提示，不自动重连
       // 短时掉线自动重连：指数退避 3/6/12/24/48s，最多 5 次；重连带 sid 恢复同一实例
       if (reconnectAttempts < 5 && sessionSid) {
         reconnectAttempts++;
@@ -357,18 +470,26 @@ function startFitWatch() {
 
   function fail(msg) {
     clearSession();
+    gameEnded = true;
+    started = false;
+    reconnectAttempts = 5;
     errBox.textContent = msg;
     errBox.classList.remove("hidden");
     waiting.classList.add("hidden");
     userInput.classList.remove("hidden");
     btn.disabled = false;
+    btn.textContent = "重新连接";
     fitBtn.classList.add("hidden");
     quitBtn.classList.add("hidden");
+    overlay.classList.remove("hidden");
+    try { cloudFrame.classList.add("hidden"); } catch (e) {}
     statusEl.textContent = "路线 C · 执行面 KasmVNC";
   }
 
   function enter() {
     if (started) { return; }
+    btn.textContent = "进入服务器";
+    gameEnded = false;
     var user = input.value.trim();
     if (!/^[A-Za-z0-9_]{1,16}$/.test(user)) {
       errBox.textContent = "用户名须为 1-16 位字母/数字/下划线";

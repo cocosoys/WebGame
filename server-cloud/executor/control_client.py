@@ -426,6 +426,29 @@ def instance_worker(instance_id):
     inst["readyAt"] = time.time()
     log("READY %s display=:%d kasm=%d" % (instance_id, disp, inst["kasmPort"]))
 
+    # 5) MC 进程退出监控：游戏窗口关闭/崩溃 → 上报 STOPPED（前端据此关闭通道并提示重连）。
+    #    java 启动参数含唯一标识 --gameDir {inst_root}，pgrep 精确匹配该实例的 MC 进程；
+    #    进程消失（正常退出/崩溃/被杀）即上报，避免前端永久停留在"已连接"假象。
+    def _mc_exit_monitor(instance_id=instance_id, inst=inst):
+        while True:
+            time.sleep(5)
+            with instances_lock:
+                cur = instances.get(instance_id)
+                if cur is None or cur is not inst or inst["state"] in (ST_STOPPED, ST_FAILED):
+                    return
+            r = run_cmd(["bash", "-lc",
+                         "pgrep -f '[g]ameDir %s' >/dev/null 2>&1 && echo 1 || echo 0" % inst_root],
+                        timeout=5)
+            if r[0] == 0 and r[1].strip() == "0":
+                log("实例 %s MC 进程已退出（游戏窗口关闭/崩溃），上报 STOPPED" % instance_id)
+                with instances_lock:
+                    inst["state"] = ST_STOPPED
+                broadcast(S_STOPPED, OrderedDict([("instanceId", instance_id),
+                                                  ("reason", "mc exited")]))
+                return
+
+    threading.Thread(target=_mc_exit_monitor, daemon=True).start()
+
     fields = OrderedDict()
     fields["instanceId"] = instance_id
     fields["display"] = ":%d" % disp
