@@ -85,6 +85,16 @@ cloud:
       sort: 1
       enabled: true
       desc: "低配网络 / 快速进入（1核2G）"
+    - id: "mid-2c2g"
+      name: "均衡型"
+      cpu-cores: 2
+      xmx: "2G"
+      resolution: "1280x720"
+      fps: 30
+      gfx: "low"
+      sort: 2
+      enabled: true
+      desc: "均衡配置（2核2G）"
     - id: "std-2c4g"
       name: "标准型"
       cpu-cores: 2
@@ -92,7 +102,7 @@ cloud:
       resolution: "1280x720"
       fps: 30
       gfx: "low"
-      sort: 2
+      sort: 3
       enabled: true
       desc: "推荐配置（2核4G）"
     - id: "hd-2c4g"
@@ -102,7 +112,7 @@ cloud:
       resolution: "1600x900"
       fps: 30
       gfx: "mid"
-      sort: 3
+      sort: 4
       enabled: true
       desc: "高分辨率画面（2核4G）"
   # 实例参数（经管控契约随 SPAWN 下发给执行面；本机不再直接 spawn 客户端进程）
