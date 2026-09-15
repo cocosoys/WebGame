@@ -379,7 +379,11 @@ function startFitWatch() {
     var url = proto + location.host + "/cloud?user=" + encodeURIComponent(user)
         + (sessionSid ? "&sid=" + encodeURIComponent(sessionSid) : "")
         + (reqW > 0 ? "&w=" + reqW : "")
-        + (reqH > 0 ? "&h=" + reqH : "");
+        + (reqH > 0 ? "&h=" + reqH : "")
+        + (reqCores > 0 ? "&cores=" + reqCores : "")
+        + (reqXmx ? "&xmx=" + encodeURIComponent(reqXmx) : "")
+        + (reqFps > 0 ? "&fps=" + reqFps : "")
+        + (reqProfile ? "&profile=" + encodeURIComponent(reqProfile) : "");
     ws = new WebSocket(url);
 
     var t0 = Date.now();
@@ -524,6 +528,8 @@ function startFitWatch() {
 
   // URL ?user=xxx 预填（URL 显式指定的用户优先于本地会话恢复）
   var urlUser = "";
+  // 设备型号参数（设备选择页跳转携带；缺省由服务端 config 兜底）
+  var reqCores = 0, reqXmx = "", reqFps = 0, reqProfile = "";
   // 容器分辨率：?res=1600x900 或 ?w=1600&h=900，透传给执行面 Xvfb/MC 全屏；
   // 未指定/非法时 0 = 使用服务端 config cloud.scale（默认 1280x720）。
   var reqW = 0, reqH = 0;
@@ -544,6 +550,15 @@ function startFitWatch() {
       if (mw) { reqW = clamp(mw[1]); }
       if (mh) { reqH = clamp(mh[1]); }
     }
+    // 设备型号：cores 1-4 / xmx 1G-4G / fps 10-60 / profile 记录用（服务端 clamp 兜底）
+    var mc = q.match(/[?&]cores=([^&]*)/);
+    if (mc) { var cv = parseInt(mc[1], 10); reqCores = (cv >= 1 && cv <= 4) ? cv : 0; }
+    var mx = q.match(/[?&]xmx=([^&]*)/);
+    if (mx && /^[1-4]G$/i.test(mx[1])) { reqXmx = mx[1].toUpperCase(); }
+    var mf = q.match(/[?&]fps=([^&]*)/);
+    if (mf) { var fv = parseInt(mf[1], 10); reqFps = (fv >= 10 && fv <= 60) ? fv : 0; }
+    var mp = q.match(/[?&]profile=([^&]*)/);
+    if (mp) { reqProfile = mp[1]; }
   })();
 
   btn.addEventListener("click", enter);
@@ -573,6 +588,17 @@ function startFitWatch() {
     waitMsg.textContent = "";
     errBox.classList.add("hidden");
     connect(stored.user, stored.sid);
+  } else if (urlUser && /^[A-Za-z0-9_]{1,16}$/.test(urlUser)) {
+    // URL 显式指定用户名（设备选择页跳转 / 标准接口直达）：自动进入，无需再点按钮
+    input.value = urlUser;
+    btn.disabled = true;
+    userInput.classList.add("hidden");
+    waiting.classList.remove("hidden");
+    title.textContent = "正在进入服务器";
+    desc.textContent = "正在为你分配隔离的游戏实例…";
+    waitMsg.textContent = "";
+    errBox.classList.add("hidden");
+    connect(urlUser, "");
   } else {
     input.focus();
   }

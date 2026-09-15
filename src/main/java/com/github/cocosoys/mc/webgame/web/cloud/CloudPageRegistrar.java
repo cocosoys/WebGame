@@ -31,6 +31,12 @@ public final class CloudPageRegistrar {
         api.getWebPage().registerProxyPage(plugin, path, "GET", html,
                 "text/html; charset=utf-8", true, "WebGame 云游戏（WebCodecs）", null);
         plugin.getLogger().info("WebGame 云游戏页面已登记到 " + path + " （" + html.length + " bytes）");
+        // 设备选择页（独立入口：输入用户名之前先选设备型号；未来可扩展更多设计）
+        byte[] dev = readJarResource("device-select.html");
+        String devPath = config.getCloudDevicePath();
+        api.getWebPage().registerProxyPage(plugin, devPath, "GET", dev,
+                "text/html; charset=utf-8", true, "WebGame 设备选择", null);
+        plugin.getLogger().info("WebGame 设备选择页已登记到 " + devPath + " （" + dev.length + " bytes）");
     }
 
     private byte[] readJarResource(String name) throws Exception {

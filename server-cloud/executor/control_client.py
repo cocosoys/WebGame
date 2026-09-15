@@ -137,6 +137,11 @@ def spawn_instance(fields):
     server = fields.get("server", "127.0.0.1")
     port = int(fields.get("port", "25574") or 25574)
     xmx = fields.get("xmx", "2G")
+    # 设备型号核数（SPAWN 透传；缺省 2）。clamp 1-4，防止型号参数注入拖垮/占满整机。
+    try:
+        cores = max(1, min(4, int(fields.get("cores", "2") or 2)))
+    except (TypeError, ValueError):
+        cores = 2
     client_dir = fields.get("clientDir", "/home/webgame/mc")
     # 容器分辨率（插件透传 width/height；缺省 1280x720）。校验范围并取偶数，
     # 非法值回落默认——防止 Xvfb -screen 参数注入与极端分辨率拖垮软渲染。
@@ -181,13 +186,14 @@ def spawn_instance(fields):
         inst = {
             "id": instance_id, "username": username, "state": ST_SPAWNING,
             "display": disp, "kasmPort": kasm_port,
-            "server": server, "port": port, "xmx": xmx,
+            "server": server, "port": port, "xmx": xmx, "cores": cores,
             "clientDir": client_dir, "width": width, "height": height,
             "proc": None, "startedAt": time.time(),
         }
         instances[instance_id] = inst
 
-    log("SPAWN %s user=%s display=:%d kasm=%d res=%dx%d" % (instance_id, username, disp, kasm_port, width, height))
+    log("SPAWN %s user=%s display=:%d kasm=%d res=%dx%d cores=%d xmx=%s"
+        % (instance_id, username, disp, kasm_port, width, height, cores, xmx))
     t = threading.Thread(target=instance_worker, args=(instance_id,), daemon=True)
     t.start()
     return True, ""
@@ -257,7 +263,7 @@ def instance_worker(instance_id):
     mc_base = inst["clientDir"] or ARGS.mc_base
     launch = build_launch_script(
         username=inst["username"], server=inst["server"], port=inst["port"],
-        xmx=inst["xmx"], mc_base=mc_base, inst_root=inst_root)
+        xmx=inst["xmx"], mc_base=mc_base, inst_root=inst_root, cores=inst.get("cores", 2))
     try:
         with open(launch_sh, "w") as f:
             f.write(launch)
@@ -383,15 +389,16 @@ def instance_worker(instance_id):
             except OSError:
                 pass
         try:
-            # 实例 CPU 配额（2 核/实例）：taskset 绑定 {seq*2}, {seq*2+1}（16 核 → 8 实例容量）。
-            # su/bash/java 继承亲和性，llvmpipe LP_NUM_THREADS=2 恰好在绑定核上满载，实例间互不抢占。
+            # 实例 CPU 配额：taskset 按型号核数绑定连续核 {seq*cores..seq*cores+cores-1}（16 核 → 8 实例容量）。
+            # su/bash/java 继承亲和性，llvmpipe LP_NUM_THREADS=cores 恰好在绑定核上满载，实例间互不抢占。
             try:
                 seq = int(instance_id.lstrip("iI")) if instance_id[:1].lower() == "i" else 0
             except ValueError:
                 seq = 0
-            cores = "%d,%d" % ((seq * 2) % 16, (seq * 2 + 1) % 16)
+            cores = inst.get("cores", 2)
+            core_list = ",".join(str((seq * cores + k) % 16) for k in range(cores))
             proc = subprocess.Popen(
-                ["taskset", "-c", cores, "su", "-", "webgame", "-c",
+                ["taskset", "-c", core_list, "su", "-", "webgame", "-c",
                  "cd %s && DISPLAY=:%d nohup bash launch.sh >> %s 2>&1 & echo $!" % (
                      inst_root, disp, stdout_log)],
                 shell=False)
@@ -465,7 +472,7 @@ def instance_worker(instance_id):
     broadcast(S_READY, fields)
 
 
-def build_launch_script(username, server, port, xmx, mc_base, inst_root):
+def build_launch_script(username, server, port, xmx, mc_base, inst_root, cores=2):
     """生成 Forge 1.12.2 离线客户端启动脚本（复用 S0 验证过的命令形态）。"""
     lib = os.path.join(mc_base, ".minecraft", "libraries")
     versions = os.path.join(mc_base, ".minecraft", "versions")
@@ -484,9 +491,9 @@ export LWJGL_DISABLE_XRANDR=true
 # WSL2 dxg GPU 接口不稳定（dxgkio_query_adapter_info Ioctl failed），
 # MC/LWJGL 初始化会触发 WSL 实例崩溃重启 → 强制纯软件渲染，完全绕开 /dev/dxg
 export LIBGL_ALWAYS_SOFTWARE=1
-# ===== A/B 实测组合 A：llvmpipe 2 线程 + 无 GL override（2026-09-14）=====
+# ===== A/B 实测组合 A：llvmpipe + LP_NUM_THREADS=cores + 无 GL override（2026-09-14）=====
 export GALLIUM_DRIVER=llvmpipe
-export LP_NUM_THREADS=2
+export LP_NUM_THREADS={cores}
 exec java -Xmx{xmx} \\
   -Djava.library.path={natives} \\
   -Dfml.ignoreInvalidMinecraftCertificates=true \\
@@ -502,7 +509,7 @@ exec java -Xmx{xmx} \\
 """.format(
         inst_root=inst_root, xmx=xmx, natives=natives, classpath=classpath,
         username=username, version_id=version_id, assets=assets,
-        uuid=uuid_for(username), server=server, port=port)
+        uuid=uuid_for(username), server=server, port=port, cores=cores)
 
 
 def uuid_for(name):

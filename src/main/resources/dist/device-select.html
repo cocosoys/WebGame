@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGame 设备选择</title>
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100%; background: #101014; color: #e8e8e8;
+    font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; }
+  #wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px 32px; }
+  header { padding: 18px 0 10px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 12px; color: #9a9aa5; }
+  #capBar { background: #1a1a22; border: 1px solid #2a2a34; border-radius: 10px;
+    padding: 10px 14px; margin: 8px 0 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  #capBar .lbl { font-size: 13px; color: #9a9aa5; }
+  #capBar .num { font-size: 15px; font-weight: 600; color: #6b8afd; }
+  #capTrack { flex: 1; min-width: 140px; height: 6px; background: #2a2a34; border-radius: 3px; overflow: hidden; }
+  #capFill { height: 100%; width: 0; background: linear-gradient(90deg, #6b8afd, #9aa7f5); transition: width .4s; }
+  #capText { font-size: 12px; color: #9a9aa5; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .card { background: #1a1a22; border: 1px solid #2a2a34; border-radius: 12px; padding: 14px;
+    cursor: pointer; position: relative; transition: border-color .15s, background .15s; }
+  .card:hover { border-color: #3a3a48; }
+  .card.sel { border-color: #6b8afd; background: #1d2130; }
+  .card .nm { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card .tag { font-size: 10px; color: #9a9aa5; border: 1px solid #3a3a48; border-radius: 4px; padding: 1px 5px; }
+  .card .spec { font-size: 12px; color: #c8c8d0; margin-top: 8px; line-height: 1.7; }
+  .card .spec b { color: #e8e8e8; font-weight: 600; }
+  .card .desc { font-size: 11.5px; color: #9a9aa5; margin-top: 8px; line-height: 1.5; }
+  .card .cap { font-size: 11.5px; color: #8f9bb3; margin-top: 8px; line-height: 1.5; }
+  .card .cap b { color: #6b8afd; }
+  .card .cap.full { color: #ff9a8a; }
+  .card .cap.full b { color: #ff7b7b; }
+  .card.full { border-color: #4a3040; opacity: 0.85; }
+  .card .rec { position: absolute; top: 10px; right: 10px; font-size: 10px; color: #6b8afd;
+    border: 1px solid #6b8afd; border-radius: 4px; padding: 1px 6px; }
+  .card .del { position: absolute; top: 8px; right: 8px; font-size: 12px; color: #9a9aa5;
+    border: none; background: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; display: none; }
+  .card .del:hover { color: #ff7b7b; background: #2a2a34; }
+  .card.custom:hover .del { display: block; }
+  #customForm { margin-top: 12px; border-top: 1px dashed #2a2a34; padding-top: 10px; display: none; }
+  #customForm.open { display: block; }
+  #customForm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  #customForm label { font-size: 12px; color: #9a9aa5; }
+  #customForm select, #customForm input { background: #101014; color: #e8e8e8; border: 1px solid #3a3a48;
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; outline: none; }
+  #customForm select:focus, #customForm input:focus { border-color: #6b8afd; }
+  #customForm .btns { display: flex; gap: 8px; }
+  #customForm button { font-size: 12px; border-radius: 6px; padding: 6px 14px; cursor: pointer; border: none; }
+  #saveCustom { background: #6b8afd; color: #fff; }
+  #saveCustom:hover { background: #5578f0; }
+  #resetCustom { background: #2a2a34; color: #c8c8d0; border: 1px solid #3a3a48 !important; }
+  footer { margin-top: 20px; background: #1a1a22; border: 1px solid #2a2a34; border-radius: 12px;
+    padding: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #username { flex: 1; min-width: 160px; padding: 9px 12px; font-size: 14px; border-radius: 8px;
+    border: 1px solid #3a3a48; background: #101014; color: #e8e8e8; outline: none; }
+  #username:focus { border-color: #6b8afd; }
+  #enterBtn { padding: 9px 26px; font-size: 14px; border-radius: 8px; border: none; cursor: pointer;
+    background: #6b8afd; color: #fff; }
+  #enterBtn:hover { background: #5578f0; }
+  #enterBtn:disabled { opacity: 0.5; cursor: default; }
+  #err { color: #ff7b7b; font-size: 12.5px; flex-basis: 100%; min-height: 16px; }
+  .note { font-size: 11.5px; color: #6b7280; margin-top: 10px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>选择设备型号</h1>
+    <span class="sub">为本次云游戏分配容器资源（CPU / 内存 / 分辨率）</span>
+  </header>
+
+  <div id="capBar">
+    <span class="lbl">云游戏容量</span>
+    <span class="num" id="capMax">–</span><span class="lbl">台（最多）</span>
+    <span class="lbl">已使用</span>
+    <span class="num" id="capUsed">–</span><span class="lbl">台</span>
+    <div id="capTrack"><div id="capFill"></div></div>
+    <span id="capText"></span>
+  </div>
+
+  <div id="grid"></div>
+
+  <footer>
+    <input id="username" maxlength="16" placeholder="玩家名称（1-16 位字母/数字/下划线）" autocomplete="off">
+    <button id="enterBtn">进入服务器</button>
+    <div id="err"></div>
+  </footer>
+  <div class="note">提示：自定义型号保存在本浏览器（localStorage）；预置型号与容量由服务器下发。选择型号后确认用户名即直接进入服务器，无需在游戏内操作。</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var grid = document.getElementById("grid");
+  var capMax = document.getElementById("capMax");
+  var capUsed = document.getElementById("capUsed");
+  var capFill = document.getElementById("capFill");
+  var capText = document.getElementById("capText");
+  var username = document.getElementById("username");
+  var enterBtn = document.getElementById("enterBtn");
+  var errBox = document.getElementById("err");
+
+  var CUSTOM_KEY = "wg_custom_devices";
+  var DEFAULT_PROFILE = "std-2c4g";
+  var selected = null;      // 当前选中的型号对象（含参数）
+  var selectedId = "";
+  var profiles = [];        // 服务端预置
+  var usedNow = 0;          // 当前已用实例数
+  // 执行面资源（容量核算用；接口下发，缺省按 16核/10G/4实例）
+  var totalCores = 16, totalMemoryMb = 10240, maxInstances = 4;
+  // 按型号静态容量：min(⌊总核/型号核⌋, ⌊总内存/型号堆(MB)⌋, max-instances)
+  function calcCustomMax(cpu, xmxG) {
+    cpu = Math.max(1, cpu | 0);
+    xmxG = Math.max(1, xmxG | 0);
+    var byCores = Math.floor(totalCores / cpu);
+    var byMem = Math.floor(totalMemoryMb / (xmxG * 1024));
+    return Math.max(1, Math.min(byCores, Math.min(byMem, maxInstances)));
+  }
+  // 自定义表单容量实时提示（fCpu/fXmx 变化时调用）
+  function updateCustomHint() {
+    var hint = document.getElementById("capHint");
+    if (!hint) { return; }
+    var cpu = clampInt(val("#fCpu"), 1, 4, 2);
+    var xmx = clampInt(val("#fXmx"), 1, 4, 2);
+    var n = calcCustomMax(cpu, xmx);
+    var full = usedNow >= n;
+    hint.innerHTML = '该配置最多可同时启动 <b>' + n + '</b> 台' + (full ? " · 已满" : "");
+    hint.className = "cap" + (full ? " full" : "");
+  }
+
+  // ===== localStorage 自定义型号 =====
+
+  function loadCustoms() {
+    try { var a = JSON.parse(localStorage.getItem(CUSTOM_KEY) || "[]");
+      return Array.isArray(a) ? a : []; } catch (e) { return []; }
+  }
+  function saveCustoms(list) {
+    try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+  function delCustom(id) {
+    saveCustoms(loadCustoms().filter(function (c) { return c.id !== id; }));
+    render();
+    if (selectedId === id) { selectCard(DEFAULT_PROFILE); }
+  }
+
+  // ===== 容量 =====
+
+  function loadCapacity() {
+    fetch("/api/plugins/WebGame/devices/capacity")
+      .then(function (r) { return r.text(); })
+      .then(function (txt) {
+        var o = JSON.parse(txt);
+        // SOYS 包装：{code,msg,data:"<json 字符串>"}——data 内才是容量 JSON
+        if (o && o.data && typeof o.data === "string") { o = JSON.parse(o.data); }
+        profiles = o.profiles || [];
+        usedNow = o.used | 0;
+        if (o.totalCores) { totalCores = o.totalCores; }
+        if (o.totalMemoryMb) { totalMemoryMb = o.totalMemoryMb; }
+        if (o.maxInstances) { maxInstances = o.maxInstances; }
+        capMax.textContent = o.max;
+        capUsed.textContent = o.used;
+        var pct = o.max > 0 ? Math.min(100, Math.round(o.used / o.max * 100)) : 0;
+        capFill.style.width = pct + "%";
+        capText.textContent = (o.max - o.used) > 0 ? "还可启动 " + (o.max - o.used) + " 台" : "容量已满";
+        render();
+        // 默认选中推荐型号
+        if (!selectedId || !document.querySelector(".card.sel")) {
+          selectCard(findProfile(DEFAULT_PROFILE) ? DEFAULT_PROFILE : (profiles[0] ? profiles[0].id : ""));
+        }
+      })
+      .catch(function () {
+        capMax.textContent = "–"; capUsed.textContent = "–";
+        capText.textContent = "容量获取失败";
+        render();
+      });
+  }
+
+  function findProfile(id) {
+    for (var i = 0; i < profiles.length; i++) { if (profiles[i].id === id) { return profiles[i]; } }
+    return null;
+  }
+
+  // ===== 渲染 =====
+
+  function cardHtml(c) {
+    var isCustom = c.custom;
+    var isSel = c.id === selectedId;
+    // 型号容量：预置用服务端算好的 max；自定义按公式前端实时算
+    var capN = isCustom ? calcCustomMax(c.cpu, parseInt(c.xmx, 10)) : (c.max != null ? c.max : calcCustomMax(c.cpu, parseInt(c.xmx, 10)));
+    var full = usedNow >= capN;
+    var rec = (!isCustom && c.id === DEFAULT_PROFILE) ? '<span class="rec">推荐</span>' : "";
+    var del = isCustom ? '<button class="del" data-del="' + c.id + '" title="删除该自定义型号">✕</button>' : "";
+    var spec = '<div class="spec"><b>' + c.cpu + '</b> 核 · <b>' + c.xmx + '</b> 内存 · <b>' + c.width + 'x' + c.height + '</b> · <b>' + c.fps + '</b> fps</div>';
+    var capLine = '<div class="cap' + (full ? " full" : "") + '">本型号最多 <b>' + capN + '</b> 台' + (full ? " · 已满" : "") + "</div>";
+    var desc = '<div class="desc">' + (c.desc || "") + "</div>";
+    var tag = isCustom ? '<span class="tag">自定义</span>' : "";
+    var extra = "";
+    if (isCustom) {
+      extra = '<div id="customForm' + (isSel ? ' class="open"' : '') + '">' +
+        '<div class="row">' +
+        '<label>CPU 核</label><select id="fCpu">' + opt(1, 4, c.cpu) + "</select>" +
+        '<label>内存</label><select id="fXmx">' + opt(1, 4, parseInt(c.xmx, 10), "G") + "</select>" +
+        '<label>宽</label><input id="fW" type="number" min="640" max="2560" step="2" value="' + c.width + '">' +
+        '<label>高</label><input id="fH" type="number" min="360" max="1440" step="2" value="' + c.height + '">' +
+        '<label>fps</label><select id="fFps">' + opt(10, 60, c.fps, "", 5) + "</select>" +
+        "</div>" +
+        '<div class="cap" id="capHint">该配置最多可同时启动 <b>' + capN + '</b> 台</div>' +
+        '<div class="btns"><button id="saveCustom">保存并使用</button><button id="resetCustom">恢复默认</button></div>' +
+        "</div>";
+    }
+    return '<div class="card' + (isSel ? " sel" : "") + (isCustom ? " custom" : "") + (full ? " full" : "") + '" data-id="' + c.id + '">' +
+      rec + del +
+      '<div class="nm">' + c.name + tag + "</div>" + spec + capLine + desc + extra + "</div>";
+  }
+
+  function opt(from, to, val, suffix, step) {
+    var s = "";
+    for (var i = from; i <= to; i += (step || 1)) {
+      s += '<option value="' + i + '"' + (i === val ? " selected" : "") + ">" + i + (suffix || "") + "</option>";
+    }
+    return s;
+  }
+
+  function render() {
+    var html = "";
+    profiles.forEach(function (p) {
+      if (p.enabled === false) { return; }
+      html += cardHtml({ id: p.id, name: p.name, cpu: p.cpu, xmx: p.xmx,
+        width: p.width, height: p.height, fps: p.fps, desc: p.desc, max: p.max, custom: false });
+    });
+    // 自定义型号卡片（localStorage）
+    loadCustoms().forEach(function (c) {
+      html += cardHtml({ id: c.id, name: c.name || "自定义", cpu: c.cpu, xmx: c.xmx,
+        width: c.width, height: c.height, fps: c.fps, desc: "本浏览器保存的配置", custom: true });
+    });
+    // 新建自定义卡片
+    html += '<div class="card custom" data-id="__new__">' +
+      '<div class="nm">完全自定义 <span class="tag">新建</span></div>' +
+      '<div class="spec">自行设置 CPU / 内存 / 分辨率 / 帧率</div>' +
+      '<div class="cap" id="capHint">该配置最多可同时启动 <b>' + calcCustomMax(2, 2) + '</b> 台</div>' +
+      '<div class="desc">参数校验：核 1-4 · 内存 1-4G · 宽 640-2560 · 高 360-1440 · fps 10-60</div>' +
+      '<div id="customForm' + (selectedId === "__new__" ? ' class="open"' : '') + '">' +
+      '<div class="row">' +
+      '<label>CPU 核</label><select id="fCpu">' + opt(1, 4, 2) + "</select>" +
+      '<label>内存</label><select id="fXmx">' + opt(1, 4, 2, "G") + "</select>" +
+      '<label>宽</label><input id="fW" type="number" min="640" max="2560" step="2" value="1280">' +
+      '<label>高</label><input id="fH" type="number" min="360" max="1440" step="2" value="720">' +
+      '<label>fps</label><select id="fFps">' + opt(10, 60, 30, "", 5) + "</select>" +
+      "</div>" +
+      '<div class="btns"><button id="saveCustom">保存并使用</button><button id="resetCustom">恢复默认</button></div>' +
+      "</div></div>";
+    grid.innerHTML = html;
+    bindGrid();
+    updateCustomHint();
+  }
+
+  // ===== 交互 =====
+
+  function bindGrid() {
+    grid.querySelectorAll(".card").forEach(function (card) {
+      card.addEventListener("click", function (e) {
+        if (e.target.closest(".del")) { return; }
+        if (e.target.closest("#saveCustom") || e.target.closest("#resetCustom")) { return; }
+        // 已满型号拦截（预置型号用接口 max；自定义按公式实时算）
+        var id = card.getAttribute("data-id");
+        var isCustomCard = card.classList.contains("custom");
+        var capN = isCustomCard && id !== "__new__"
+          ? calcCustomMax(parseInt(val("#fCpu"), 10) || 2, parseInt(val("#fXmx"), 10) || 2)
+          : (findProfile(id) && findProfile(id).max != null ? findProfile(id).max : 0);
+        if (capN > 0 && usedNow >= capN) {
+          errBox.textContent = "该型号已达上限（" + capN + " 台），请等待其他玩家退出或更换型号";
+          return;
+        }
+        selectCard(id);
+      });
+    });
+    // 自定义表单参数变化 → 实时刷新容量提示
+    grid.addEventListener("change", function (e) {
+      if (e.target && (e.target.id === "fCpu" || e.target.id === "fXmx")) {
+        updateCustomHint();
+      }
+    });
+    grid.querySelectorAll(".del").forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        delCustom(b.getAttribute("data-del"));
+      });
+    });
+    grid.querySelectorAll("#saveCustom").forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var card = b.closest(".card");
+        var id = card.getAttribute("data-id");
+        var cpu = clampInt(val("#fCpu"), 1, 4, 2);
+        var xmx = clampInt(val("#fXmx"), 1, 4, 2) + "G";
+        var w = clampInt(val("#fW"), 640, 2560, 1280);
+        var h = clampInt(val("#fH"), 360, 1440, 720);
+        var fps = clampInt(val("#fFps"), 10, 60, 30);
+        if (w % 2) { w--; } if (h % 2) { h--; }
+        var c = { id: id === "__new__" ? "custom-" + Date.now() : id,
+          name: id === "__new__" ? "自定义 " + cpu + "核" + xmx : (findCustom(id) || {}).name || "自定义",
+          cpu: cpu, xmx: xmx, width: w, height: h, fps: fps };
+        var list = loadCustoms().filter(function (x) { return x.id !== c.id; });
+        list.push(c);
+        saveCustoms(list);
+        selectCard(c.id, c);
+        render();
+      });
+    });
+    grid.querySelectorAll("#resetCustom").forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var card = b.closest(".card");
+        if (card.getAttribute("data-id") === "__new__") {
+          setVal("#fCpu", 2); setVal("#fXmx", 2); setVal("#fW", 1280); setVal("#fH", 720); setVal("#fFps", 30);
+        }
+      });
+    });
+  }
+
+  function findCustom(id) {
+    var list = loadCustoms();
+    for (var i = 0; i < list.length; i++) { if (list[i].id === id) { return list[i]; } }
+    return null;
+  }
+  function val(sel) { var el = document.querySelector(sel); return el ? el.value : ""; }
+  function setVal(sel, v) { var el = document.querySelector(sel); if (el) { el.value = v; } }
+  function clampInt(v, lo, hi, fb) {
+    v = parseInt(v, 10);
+    if (isNaN(v)) { return fb; }
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  function selectCard(id, override) {
+    selectedId = id;
+    selected = null;
+    if (id === "__new__") { selected = { custom: true }; }
+    else {
+      var p = findProfile(id);
+      if (p) { selected = { profile: p.id, cpu: p.cpu, xmx: p.xmx, width: p.width, height: p.height, fps: p.fps }; }
+      else {
+        var c = override || findCustom(id);
+        if (c) { selected = { profile: "custom", cpu: c.cpu, xmx: c.xmx, width: c.width, height: c.height, fps: c.fps }; }
+      }
+    }
+    grid.querySelectorAll(".card").forEach(function (card) {
+      card.classList.toggle("sel", card.getAttribute("data-id") === id);
+    });
+    var form = grid.querySelector('#customForm[class*="open"]');
+    grid.querySelectorAll(".card #customForm").forEach(function (f) { f.classList.remove("open"); });
+    var target = grid.querySelector('.card[data-id="' + id + '"] #customForm');
+    if (target) { target.classList.add("open"); }
+  }
+
+  // ===== 进入 =====
+
+  function enter() {
+    var user = username.value.trim();
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(user)) {
+      errBox.textContent = "用户名须为 1-16 位字母/数字/下划线";
+      return;
+    }
+    if (!selected) {
+      errBox.textContent = "请先选择设备型号";
+      return;
+    }
+    if (selected.custom) {
+      // 未保存的自定义：从表单读取（默认值兜底）
+      var cpu = clampInt(val("#fCpu"), 1, 4, 2);
+      var xmx = clampInt(val("#fXmx"), 1, 4, 2) + "G";
+      var w = clampInt(val("#fW"), 640, 2560, 1280);
+      var h = clampInt(val("#fH"), 360, 1440, 720);
+      var fps = clampInt(val("#fFps"), 10, 60, 30);
+      if (w % 2) { w--; } if (h % 2) { h--; }
+      selected = { profile: "custom", cpu: cpu, xmx: xmx, width: w, height: h, fps: fps };
+    }
+    var q = "?user=" + encodeURIComponent(user)
+      + "&profile=" + encodeURIComponent(selected.profile)
+      + "&cores=" + selected.cpu
+      + "&xmx=" + encodeURIComponent(selected.xmx)
+      + "&w=" + selected.width + "&h=" + selected.height
+      + "&fps=" + selected.fps;
+    // 云游戏页与设备选择页同目录（同一路径前缀，取上级目录）
+    var base = location.pathname.replace(/\/devices\/?$/, "/cloud/");
+    location.href = base + q;
+  }
+
+  username.addEventListener("keydown", function (e) { if (e.key === "Enter") { enter(); } });
+  enterBtn.addEventListener("click", enter);
+
+  // URL 预填用户名
+  (function () {
+    var q = location.search;
+    if (q.indexOf("user=") >= 0) {
+      q.replace(/[?&]user=([^&]*)/, function (m, v) {
+        try { username.value = decodeURIComponent(v); } catch (e) {}
+        return m;
+      });
+    }
+  })();
+
+  loadCapacity();
+})();
+</script>
+</body>
+</html>

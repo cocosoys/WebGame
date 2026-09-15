@@ -28,6 +28,7 @@ public final class WebGameConfig {
     // ---- cloud 云游戏通道 ----
     private final boolean cloudEnabled;
     private final String cloudPath;
+    private final String cloudDevicePath;
     private final String cloudWsPath;
     private final String cloudTransport;
     private final String cloudUdpPortRange;
@@ -41,6 +42,12 @@ public final class WebGameConfig {
     private final int cloudPingIntervalSeconds;
     private final int cloudIdleTimeoutSeconds;
     private final int cloudResumeGraceSeconds;
+
+    // ---- 设备容量（静态 min）与预置型号 ----
+    private final int capacityTotalCores;
+    private final int capacityTotalMemoryMb;
+    private final int capacityMaxInstances;
+    private final java.util.List<DeviceProfile> deviceProfiles;
 
     // ---- cloud 容器客户端（游戏实例，路线 B 遗留，S1 起由执行面管控，仅保留参数下发）----
     private final boolean clientEnabled;
@@ -80,6 +87,7 @@ public final class WebGameConfig {
 
         this.cloudEnabled = c.getBoolean("cloud.enabled", true);
         this.cloudPath = normalizePath(c.getString("cloud.path", "/api/plugins/WebGame/cloud/"));
+        this.cloudDevicePath = normalizePath(c.getString("cloud.device-path", "/api/plugins/WebGame/devices/"));
         this.cloudWsPath = normalizeWsPath(c.getString("cloud.ws-path", "/cloud"));
         this.cloudTransport = c.getString("cloud.transport", "ws").trim().toLowerCase();
         this.cloudUdpPortRange = c.getString("cloud.udp-port-range", "").trim();
@@ -94,6 +102,12 @@ public final class WebGameConfig {
         this.cloudIdleTimeoutSeconds = Math.max(5, c.getInt("cloud.idle-timeout-seconds", 15));
         // 断线/刷新重连宽限期：连接断开后实例保留时间（秒），期间同一用户可凭 sessionId 恢复
         this.cloudResumeGraceSeconds = Math.max(10, c.getInt("cloud.resume-grace-seconds", 60));
+
+        // ---- 容量与预置型号 ----
+        this.capacityTotalCores = Math.max(1, c.getInt("cloud.capacity.total-cores", 16));
+        this.capacityTotalMemoryMb = Math.max(1024, c.getInt("cloud.capacity.total-memory-mb", 11264));
+        this.capacityMaxInstances = Math.max(1, c.getInt("cloud.capacity.max-instances", 4));
+        this.deviceProfiles = parseDeviceProfiles(c);
 
         this.clientEnabled = c.getBoolean("cloud.client.enabled", false);
         this.clientBaseDir = c.getString("cloud.client.base-dir", "").trim();
@@ -363,5 +377,168 @@ public final class WebGameConfig {
             s = s.substring(0, s.length() - 1);
         }
         return s;
+    }
+
+    // ===== 设备型号（cloud.profiles）=====
+
+    /** 解析 config 中 cloud.profiles 列表为不可变模型列表（缺失/非法条目跳过）。 */
+    private static java.util.List<DeviceProfile> parseDeviceProfiles(FileConfiguration c) {
+        java.util.List<DeviceProfile> out = new java.util.ArrayList<>();
+        java.util.List<?> raw = c.getList("cloud.profiles");
+        if (raw == null) {
+            return out;
+        }
+        for (Object o : raw) {
+            if (!(o instanceof java.util.Map)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
+            String id = str(m.get("id"));
+            if (id.isEmpty()) {
+                continue;
+            }
+            String res = str(m.get("resolution"));
+            int w = parseScale(res, 0, 1280);
+            int h = parseScale(res, 1, 720);
+            int cores = Math.max(1, Math.min(4, intOf(m.get("cpu-cores"), 2)));
+            int fps = Math.max(10, Math.min(60, intOf(m.get("fps"), 30)));
+            String xmx = normalizeXmx(str(m.get("xmx")));
+            out.add(new DeviceProfile(
+                    id, str(m.get("name")).isEmpty() ? id : str(m.get("name")),
+                    cores, xmx, w, h, fps,
+                    str(m.get("gfx")).isEmpty() ? "low" : str(m.get("gfx")),
+                    Math.max(0, intOf(m.get("sort"), out.size())),
+                    !m.containsKey("enabled") || Boolean.parseBoolean(String.valueOf(m.get("enabled"))),
+                    str(m.get("desc"))));
+        }
+        out.sort(java.util.Comparator.comparingInt(DeviceProfile::getSort));
+        return java.util.Collections.unmodifiableList(out);
+    }
+
+    private static String str(Object v) {
+        return v == null ? "" : String.valueOf(v).trim();
+    }
+
+    private static int intOf(Object v, int fallback) {
+        try {
+            if (v != null && !String.valueOf(v).trim().isEmpty()) {
+                return Integer.parseInt(String.valueOf(v).trim());
+            }
+        } catch (NumberFormatException ignored) {
+        }
+        return fallback;
+    }
+
+    /** 规范化内存参数：1G/2G/4G 等（大写 G，1-8G 范围，非法回落 2G）。 */
+    private static String normalizeXmx(String raw) {
+        String s = raw == null ? "" : raw.trim().toUpperCase();
+        if (!s.matches("[1-8]G")) {
+            return "2G";
+        }
+        return s;
+    }
+
+    /** 预置设备型号（cloud.profiles 条目）。 */
+    public static final class DeviceProfile {
+        private final String id;
+        private final String name;
+        private final int cpuCores;
+        private final String xmx;
+        private final int width;
+        private final int height;
+        private final int fps;
+        private final String gfx;
+        private final int sort;
+        private final boolean enabled;
+        private final String desc;
+
+        DeviceProfile(String id, String name, int cpuCores, String xmx, int width, int height,
+                      int fps, String gfx, int sort, boolean enabled, String desc) {
+            this.id = id;
+            this.name = name;
+            this.cpuCores = cpuCores;
+            this.xmx = xmx;
+            this.width = width;
+            this.height = height;
+            this.fps = fps;
+            this.gfx = gfx;
+            this.sort = sort;
+            this.enabled = enabled;
+            this.desc = desc;
+        }
+
+        public String getId() { return id; }
+        public String getName() { return name; }
+        public int getCpuCores() { return cpuCores; }
+        public String getXmx() { return xmx; }
+        public int getWidth() { return width; }
+        public int getHeight() { return height; }
+        public int getFps() { return fps; }
+        public String getGfx() { return gfx; }
+        public int getSort() { return sort; }
+        public boolean isEnabled() { return enabled; }
+        public String getDesc() { return desc; }
+    }
+
+    // ===== 设备选择页 / 容量 =====
+
+    /** 设备选择页挂载路径（以 / 开头、以 / 结尾）。 */
+    public String getCloudDevicePath() {
+        return cloudDevicePath;
+    }
+
+    /** 执行面 CPU 核数（容量核算）。 */
+    public int getCapacityTotalCores() {
+        return capacityTotalCores;
+    }
+
+    /** 执行面可用内存 MB（容量核算，与 WSL 分配一致）。 */
+    public int getCapacityTotalMemoryMb() {
+        return capacityTotalMemoryMb;
+    }
+
+    /** 实例硬上限（对齐执行面 capacity）。 */
+    public int getCapacityMaxInstances() {
+        return capacityMaxInstances;
+    }
+
+    /** 预置设备型号（按 sort 排序）。 */
+    public java.util.List<DeviceProfile> getDeviceProfiles() {
+        return deviceProfiles;
+    }
+
+    /**
+     * 全局静态 min 容量（用户拍板 2026-09-15）：按系统允许的最耗资源型号（核上限 4、堆上限 4G）
+     * 计算全局最大可同时启动实例数。used 由会话管理器实时提供。
+     */
+    public int computeMaxInstances() {
+        int byCores = capacityTotalCores / 4;
+        int byMem = capacityTotalMemoryMb / (4 * 1024);
+        return Math.max(1, Math.min(byCores, Math.min(byMem, capacityMaxInstances)));
+    }
+
+    /**
+     * 按型号静态容量（用户拍板 2026-09-15）：
+     *   型号上限 = min(⌊总核/型号核⌋, ⌊总内存/型号堆(MB)⌋, max-instances)
+     *   标准型 2核4G → min(8, 2, 4) = 2；流畅型 1核2G → min(16, 5, 4) = 4
+     */
+    public int computeProfileMax(DeviceProfile p) {
+        if (p == null) {
+            return computeMaxInstances();
+        }
+        int xmxMb = xmxToMb(p.getXmx());
+        int byCores = capacityTotalCores / Math.max(1, p.getCpuCores());
+        int byMem = capacityTotalMemoryMb / Math.max(512, xmxMb);
+        return Math.max(1, Math.min(byCores, Math.min(byMem, capacityMaxInstances)));
+    }
+
+    private static int xmxToMb(String xmx) {
+        try {
+            int n = Integer.parseInt((xmx == null ? "2G" : xmx).trim().toUpperCase().replaceAll("[^0-9]", ""));
+            return Math.max(512, n * 1024);
+        } catch (Exception e) {
+            return 2048;
+        }
     }
 }

@@ -247,7 +247,8 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
     }
 
     /**
-     * 会话建立：从 URL query 提取用户名与 sessionId（?user=xxx&sid=yyy）。
+     * 会话建立：从 URL query 提取用户名、sessionId 与设备型号参数
+     * （?user=xxx&sid=yyy&cores=2&xmx=4G&fps=30&profile=std-2c4g）。
      * 有 sessionId 先尝试恢复（复用同一实例），失败或无可恢复会话则新建
      * （设备限流 + 同名检查 + 登记实例黑盒并下发 SPAWN）。
      */
@@ -263,7 +264,9 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
             }
         }
         CloudSession s = manager.create(ctx, username, deviceIp,
-                parseResParam("w", 0), parseResParam("h", 0));
+                parseResParam("w", 0), parseResParam("h", 0),
+                parseIntParam("cores", 2), parseParam("xmx", config.getClientXmx()),
+                parseIntParam("fps", config.getCloudFps()), parseParam("profile", ""));
         if (s == null) {
             ctx.writeAndFlush(EaglerXProtocol.encodeFrame(EaglerXProtocol.WS_BINARY,
                     CloudProtocol.buildError("本设备会话已达上限或用户名已在线，请更换用户名")));
@@ -276,6 +279,19 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
         s.touch();
         // 实例就绪后由 CloudSessionManager.onInstanceReady 下发 KasmVNC 采集端点 URL，
         // 浏览器收到后跳转直连（v1）；S2 起由插件 25574 反代。
+    }
+
+    /** 解析整数查询参数（非法/越界回落 fallback，并夹取到安全范围）。 */
+    private int parseIntParam(String name, int fallback) {
+        String raw = parseParam(name, null);
+        if (raw == null || raw.isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     /** 从升级请求 URL query 提取参数（升级头已在 frameBuffer 中被消费，需先保存）。 */

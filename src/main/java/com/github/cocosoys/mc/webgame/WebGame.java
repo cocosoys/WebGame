@@ -5,6 +5,7 @@ import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.control.ControlClient;
 import com.github.cocosoys.mc.webgame.control.InstanceRegistry;
 import com.github.cocosoys.mc.webgame.web.EaglerPageRegistrar;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudCapacityController;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPageRegistrar;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
@@ -84,6 +85,14 @@ public final class WebGame extends JavaPlugin {
                 wsGateway.setCloudEndpoint(cfg.getCloudWsPath(), cfg, cloudManager);
                 cloudManager.install();
                 new CloudPageRegistrar(this, cfg, soys.getApi()).install();
+                // 设备选择页容量接口（静态 min + 已用数 + 预置型号）
+                try {
+                    soys.getApi().getApiRegistration()
+                            .registerController(new CloudCapacityController(cfg, cloudManager), this);
+                    getLogger().info("WebGame 设备容量接口已注册 /api/plugins/WebGame/devices/capacity");
+                } catch (Throwable t) {
+                    getLogger().warning("WebGame 设备容量接口注册失败：" + t);
+                }
                 getLogger().info("WebGame 云游戏通道已启用：页面 http://" + cfg.getPublicHost() + ":" + port + cfg.getCloudPath()
                         + " | 信令 ws://" + cfg.getPublicHost() + ":" + port + cfg.getCloudWsPath()
                         + " | 执行面 " + cfg.getControlHost() + ":" + cfg.getControlPort());

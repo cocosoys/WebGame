@@ -51,6 +51,8 @@ cloud:
   enabled: true
   # 云游戏页面挂载路径（SOYS 无前缀路由）
   path: "/api/plugins/WebGame/cloud/"
+  # 设备选择页挂载路径（输入用户名之前先选设备型号）
+  device-path: "/api/plugins/WebGame/devices/"
   # 信令 WebSocket 路径（WebGame 自接管，先于 SOYS 分流）
   ws-path: "/cloud"
   # 传输模式：ws（v1 同端口信令）| webrtc（v2 预留，分离端口）
@@ -60,6 +62,49 @@ cloud:
   # 心跳：服务器下发间隔秒、失活判定秒（实例启动约 90s，失活窗口须覆盖）
   ping-interval-seconds: 2
   idle-timeout-seconds: 120
+  # 容量核算（静态 min：按最耗资源型号算全局上限）：
+  # max = min(⌊total-cores/最大核⌋, ⌊total-memory-mb/(最大xmx+1024)⌋, max-instances)
+  # total-memory-mb 须与执行面可用内存一致（WSL 12G ≈ 11264MiB）
+  capacity:
+    # 容量口径（用户拍板 2026-09-15）：静态按型号分别算
+    #   型号上限 = min(⌊总核/型号核⌋, ⌊总内存/型号堆⌋, max-instances)
+    #   标准型 2核4G → min(⌊16/2⌋, ⌊10240/4096⌋, 4) = 2
+    #   流畅型 1核2G → min(⌊16/1⌋, ⌊10240/2048⌋, 4) = 4
+    total-cores: 16
+    total-memory-mb: 10240
+    max-instances: 4
+  # 预置设备型号（选择页渲染；自定义型号存浏览器 localStorage）
+  profiles:
+    - id: "lite-1c2g"
+      name: "流畅型"
+      cpu-cores: 1
+      xmx: "2G"
+      resolution: "854x480"
+      fps: 30
+      gfx: "low"
+      sort: 1
+      enabled: true
+      desc: "低配网络 / 快速进入（1核2G）"
+    - id: "std-2c4g"
+      name: "标准型"
+      cpu-cores: 2
+      xmx: "4G"
+      resolution: "1280x720"
+      fps: 30
+      gfx: "low"
+      sort: 2
+      enabled: true
+      desc: "推荐配置（2核4G）"
+    - id: "hd-2c4g"
+      name: "高清型"
+      cpu-cores: 2
+      xmx: "4G"
+      resolution: "1600x900"
+      fps: 30
+      gfx: "mid"
+      sort: 3
+      enabled: true
+      desc: "高分辨率画面（2核4G）"
   # 实例参数（经管控契约随 SPAWN 下发给执行面；本机不再直接 spawn 客户端进程）
   client:
     # 执行面侧客户端根目录（含 .minecraft；libraries/assets/versions/mods 均在此）

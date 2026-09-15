@@ -88,9 +88,13 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
      *
      * @param reqWidth  浏览器请求的容器宽度（0 = 服务端 config）
      * @param reqHeight 浏览器请求的容器高度（0 = 服务端 config）
+     * @param cores     设备型号核数（1-4；0 = 服务端默认 2）
+     * @param xmx       设备型号 JVM 堆（空 = 服务端 config）
+     * @param fps       设备型号帧率（0 = 服务端 config）
+     * @param profileId 设备型号 id（预置 id / custom；仅记录）
      */
     public CloudSession create(io.netty.channel.ChannelHandlerContext ctx, String username, String deviceIp,
-                               int reqWidth, int reqHeight) {
+                               int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId) {
         if (!gateway.tryAcquireDeviceSlot(deviceIp)) {
             plugin.getLogger().info("Cloud 设备限制拒绝 user=" + username + " ip=" + deviceIp
                     + " 超过每设备上限 " + gateway.getMaxConnectionsPerDevice());
@@ -103,7 +107,8 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
             return null;
         }
         String id = "c" + sessionSeq.incrementAndGet();
-        CloudSession session = new CloudSession(plugin, this, id, username, deviceIp, ctx, reqWidth, reqHeight);
+        CloudSession session = new CloudSession(plugin, this, id, username, deviceIp, ctx,
+                reqWidth, reqHeight, cores, xmx, fps, profileId);
         sessions.put(id, session);
         // 登记实例黑盒 + 下发 SPAWN（执行面异步起 Xvnc + Forge 客户端）
         String instanceId = "i" + id.substring(1);
@@ -111,8 +116,20 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         session.setInstance(handle);
         sendSpawn(handle);
         plugin.getLogger().info("Cloud 会话创建 id=" + id + " user=" + username + " ip=" + deviceIp
-                + " instance=" + instanceId);
+                + " instance=" + instanceId + " cores=" + session.getCores()
+                + " xmx=" + session.getXmx() + " profile=" + session.getProfileId());
         return session;
+    }
+
+    /** 当前已用云游戏实例数（含悬挂但仍占资源的会话）。 */
+    public int usedInstances() {
+        int n = 0;
+        for (CloudSession s : sessions.values()) {
+            if (!s.isClosed()) {
+                n++;
+            }
+        }
+        return n;
     }
 
     private boolean isNameOnline(String username) {
@@ -260,6 +277,47 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
     // ===== 管控指令 =====
 
     private void sendSpawn(InstanceHandle h) {
+        spawnAttempt(h, 1);
+    }
+
+    /**
+     * SPAWN 下发（带持续重试）：执行面（WSL cc）可能正处重启/断连窗口（WSL 崩溃
+     * 重启可能需数分钟），发送失败后按 2/4/6/…/30s 退避持续重试（会话存活期间
+     * 最多 30 次，约 10 分钟），cc 恢复后实例即可启动；resume 路径复用同一机制（幂等）。
+     */
+    private void spawnAttempt(InstanceHandle h, int attempt) {
+        if (attempt > 30) {
+            CloudSession s = findSession(h);
+            if (s != null && !s.isClosed()) {
+                s.sendError("执行面长时间未就绪，实例启动失败，请重新连接");
+            }
+            return;
+        }
+        Map<String, String> f = buildSpawnFields(h);
+        if (control.send(ControlProtocol.C_SPAWN, f)) {
+            return;
+        }
+        int delaySec = Math.min(attempt * 2, 30);
+        if (attempt <= 3 || attempt % 5 == 0) {
+            plugin.getLogger().warning("Cloud SPAWN 发送失败（执行面未连接） instance=" + h.getInstanceId()
+                    + " user=" + h.getUsername() + "，" + delaySec + "s 后重试 (" + attempt + "/30)");
+        }
+        final int next = attempt + 1;
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            CloudSession s = findSession(h);
+            if (s != null && !s.isClosed()) {
+                spawnAttempt(h, next);
+            }
+        }, delaySec * 20L);
+    }
+
+    private Map<String, String> buildSpawnFields(InstanceHandle h) {
+        // 会话级设备型号参数（cores/xmx/fps），缺省用服务端 config
+        CloudSession s = sessions.get(h.getInstanceId().startsWith("i")
+                ? "c" + h.getInstanceId().substring(1) : "");
+        int cores = s != null ? s.getCores() : 2;
+        String xmx = s != null ? s.getXmx() : config.getClientXmx();
+        int fps = s != null ? s.getFps() : config.getCloudFps();
         Map<String, String> f = new LinkedHashMap<>();
         f.put("instanceId", h.getInstanceId());
         f.put("username", h.getUsername());
@@ -268,14 +326,13 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         f.put("port", String.valueOf(config.getClientPort() > 0
                 ? config.getClientPort() : Bukkit.getServer().getPort()));
         f.put("display", "");
-        f.put("xmx", config.getClientXmx());
+        f.put("cores", String.valueOf(cores));
+        f.put("xmx", xmx);
         f.put("scale", config.getCloudScale());
-        f.put("fps", String.valueOf(config.getCloudFps()));
+        f.put("fps", String.valueOf(fps));
         f.put("bitrate", String.valueOf(config.getCloudBitrateKbps()));
         f.put("clientDir", config.getClientBaseDir());
         // 容器分辨率：浏览器请求（reqWidth/reqHeight）优先，否则用服务端 cloud.scale
-        CloudSession s = sessions.get(h.getInstanceId().startsWith("i")
-                ? "c" + h.getInstanceId().substring(1) : "");
         int rw = 0, rh = 0;
         if (s != null) {
             rw = s.getReqWidth();
@@ -283,11 +340,7 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         }
         f.put("width", String.valueOf(rw > 0 ? rw : config.getCloudResolutionWidth()));
         f.put("height", String.valueOf(rh > 0 ? rh : config.getCloudResolutionHeight()));
-        boolean sent = control.send(ControlProtocol.C_SPAWN, f);
-        if (!sent) {
-            plugin.getLogger().warning("Cloud SPAWN 发送失败（执行面未连接） instance=" + h.getInstanceId()
-                    + " user=" + h.getUsername());
-        }
+        return f;
     }
 
     private void sendKill(InstanceHandle h) {

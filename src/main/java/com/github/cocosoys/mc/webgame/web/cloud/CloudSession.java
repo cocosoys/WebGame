@@ -35,9 +35,15 @@ public final class CloudSession {
     private final int reqWidth;
     private final int reqHeight;
 
+    /** 设备型号参数（浏览器经设备选择页下发；默认 = 服务端 config 值）。 */
+    private final int cores;
+    private final String xmx;
+    private final int fps;
+    private final String profileId;
+
     CloudSession(JavaPlugin plugin, CloudSessionManager manager, String id,
                  String username, String deviceIp, io.netty.channel.ChannelHandlerContext ctx,
-                 int reqWidth, int reqHeight) {
+                 int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId) {
         this.plugin = plugin;
         this.manager = manager;
         this.id = id;
@@ -46,6 +52,10 @@ public final class CloudSession {
         this.ctx = ctx;
         this.reqWidth = Math.max(0, reqWidth);
         this.reqHeight = Math.max(0, reqHeight);
+        this.cores = Math.max(1, Math.min(4, cores));
+        this.xmx = (xmx == null || xmx.trim().isEmpty()) ? "2G" : xmx.trim().toUpperCase();
+        this.fps = Math.max(10, Math.min(60, fps));
+        this.profileId = profileId == null ? "" : profileId;
     }
 
     // ===== getters =====
@@ -70,6 +80,26 @@ public final class CloudSession {
     /** 浏览器请求的容器高度（0 = 使用服务端 config）。 */
     public int getReqHeight() {
         return reqHeight;
+    }
+
+    /** 设备型号 CPU 核数（1-4，绑核 + 渲染线程）。 */
+    public int getCores() {
+        return cores;
+    }
+
+    /** 设备型号 JVM 堆（1G-4G）。 */
+    public String getXmx() {
+        return xmx;
+    }
+
+    /** 设备型号帧率上限（10-60）。 */
+    public int getFps() {
+        return fps;
+    }
+
+    /** 设备型号 id（预置 id 或 "custom"；仅记录展示）。 */
+    public String getProfileId() {
+        return profileId;
     }
 
     public Channel getChannel() {
