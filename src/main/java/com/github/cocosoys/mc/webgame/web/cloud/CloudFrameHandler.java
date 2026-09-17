@@ -268,8 +268,11 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
                 parseIntParam("cores", 2), parseParam("xmx", config.getClientXmx()),
                 parseIntParam("fps", config.getCloudFps()), parseParam("profile", ""));
         if (s == null) {
+            String err = manager.isBanned(username)
+                    ? "你已被管理员封禁，无法进入服务器"
+                    : "本设备会话已达上限或用户名已在线，请更换用户名";
             ctx.writeAndFlush(EaglerXProtocol.encodeFrame(EaglerXProtocol.WS_BINARY,
-                    CloudProtocol.buildError("本设备会话已达上限或用户名已在线，请更换用户名")));
+                    CloudProtocol.buildError(err)));
             ctx.writeAndFlush(EaglerXProtocol.encodeFrame(EaglerXProtocol.WS_CLOSE, new byte[0]));
             cleanup(ctx);
             ctx.close();

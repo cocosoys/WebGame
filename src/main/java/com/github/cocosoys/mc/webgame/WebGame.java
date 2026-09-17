@@ -8,6 +8,7 @@ import com.github.cocosoys.mc.webgame.web.EaglerPageRegistrar;
 import com.github.cocosoys.mc.webgame.web.admin.AdminController;
 import com.github.cocosoys.mc.webgame.web.admin.AdminExecutor;
 import com.github.cocosoys.mc.webgame.web.admin.AdminSubCommand;
+import com.github.cocosoys.mc.webgame.web.admin.CloudAdminSubCommands;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudCapacityController;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPageRegistrar;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager;
@@ -161,6 +162,17 @@ public final class WebGame extends JavaPlugin {
         // 4) 游戏内入口引导（/soyshttp webadmin，SubCommand requireOp 默认 true）
         soys.getApi().getExtension().registerSubCommand(new AdminSubCommand(soys));
         getLogger().info("WebGame 管理员指令已注册: /soyshttp webadmin");
+
+        // 5) 云游戏容器管理指令（cloudstatus / cloudkick / cloudban / cloudunban，仅 OP）
+        soys.getApi().getExtension().registerSubCommand(
+                new CloudAdminSubCommands.CloudStatusCommand(soys, cloudManager));
+        soys.getApi().getExtension().registerSubCommand(
+                new CloudAdminSubCommands.CloudKickCommand(soys, cloudManager));
+        soys.getApi().getExtension().registerSubCommand(
+                new CloudAdminSubCommands.CloudBanCommand(soys, cloudManager));
+        soys.getApi().getExtension().registerSubCommand(
+                new CloudAdminSubCommands.CloudUnbanCommand(soys, cloudManager));
+        getLogger().info("WebGame 云游戏容器指令已注册: /soyshttp cloudstatus|cloudkick|cloudban|cloudunban");
     }
 
     private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {

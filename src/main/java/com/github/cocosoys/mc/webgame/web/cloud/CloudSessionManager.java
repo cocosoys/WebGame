@@ -31,6 +31,7 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
     private final WsGateway gateway;
     private final ControlClient control;
     private final InstanceRegistry registry;
+    private final BanStore banStore;
 
     private final Map<String, CloudSession> sessions = new ConcurrentHashMap<>();
     private final AtomicInteger sessionSeq = new AtomicInteger();
@@ -45,6 +46,12 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         this.gateway = gateway;
         this.control = control;
         this.registry = registry;
+        this.banStore = new BanStore(plugin);
+    }
+
+    /** 云游戏封禁库（管理指令 /soyshttp cloudban / cloudunban 读写）。 */
+    public BanStore getBanStore() {
+        return banStore;
     }
 
     JavaPlugin plugin() {
@@ -53,6 +60,11 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
 
     /** 供会话访问配置。 */
     WebGameConfig config() {
+        return config;
+    }
+
+    /** 公开配置访问（管理指令/容量计算用）。 */
+    public WebGameConfig configOf() {
         return config;
     }
 
@@ -95,6 +107,12 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
      */
     public CloudSession create(io.netty.channel.ChannelHandlerContext ctx, String username, String deviceIp,
                                int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId) {
+        // 封禁检查：WebGame 云游戏封禁库（指令 cloudban 维护）
+        if (banStore.isBanned(username)) {
+            plugin.getLogger().info("Cloud 封禁拒绝 user=" + username + " ip=" + deviceIp
+                    + " reason=" + banStore.getBan(username).getReason());
+            return null;
+        }
         if (!gateway.tryAcquireDeviceSlot(deviceIp)) {
             plugin.getLogger().info("Cloud 设备限制拒绝 user=" + username + " ip=" + deviceIp
                     + " 超过每设备上限 " + gateway.getMaxConnectionsPerDevice());
@@ -158,6 +176,11 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         if (sessionId == null || sessionId.isEmpty()) {
             return null;
         }
+        // 封禁检查：已封禁用户不可恢复既有会话（同 create 规则）
+        if (banStore.isBanned(username)) {
+            plugin.getLogger().info("Cloud 封禁拒绝恢复 user=" + username + " session=" + sessionId);
+            return null;
+        }
         CloudSession s = sessions.get(sessionId);
         if (s == null || s.isClosed()) {
             return null;
@@ -195,6 +218,89 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
 
     public int size() {
         return sessions.size();
+    }
+
+    // ===== 管理指令支撑（cloudstatus / cloudkick / cloudban / cloudunban）=====
+
+    /** 全部会话（含悬挂中未关闭的）。 */
+    public java.util.List<CloudSession> allSessions() {
+        return new java.util.ArrayList<>(sessions.values());
+    }
+
+    /** 按用户名（忽略大小写）查找第一个未关闭会话。 */
+    public CloudSession findSessionByUser(String username) {
+        if (username == null || username.isEmpty()) {
+            return null;
+        }
+        for (CloudSession s : sessions.values()) {
+            if (!s.isClosed() && s.getUsername().equalsIgnoreCase(username)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** 执行面控制客户端是否已连接（容器机器整体运行状态）。 */
+    public boolean isControlConnected() {
+        return control.isConnected();
+    }
+
+    /**
+     * 踢出指定用户的云游戏会话：下发错误帧 + 关闭会话（释放设备名额 + KILL 实例）。
+     *
+     * @return 是否存在并踢出了会话（无会话返回 false）
+     */
+    public boolean kickUser(String username, String reason) {
+        CloudSession s = findSessionByUser(username);
+        if (s == null) {
+            return false;
+        }
+        String text = (reason == null || reason.trim().isEmpty())
+                ? "你已被管理员踢出" : "你已被踢出：" + reason.trim();
+        s.sendError(text);
+        s.close();
+        plugin.getLogger().info("Cloud 管理员踢出 user=" + username + " session=" + s.getId());
+        return true;
+    }
+
+    /**
+     * 封禁用户：写入 WebGame 封禁库 + 踢出现有会话 + 同步 Bukkit NAME BanList
+     * （拦 Eagler 回环登录 / 容器内同名 MC 进服）。
+     */
+    public void ban(String username, String reason) {
+        banStore.ban(username, reason);
+        kickUser(username, reason == null ? "已被管理员封禁" : "封禁：" + reason);
+        try {
+            Bukkit.getBanList(org.bukkit.BanList.Type.NAME)
+                    .addBan(username, reason == null ? "WebGame 管理员封禁" : reason,
+                            null, "WebGame");
+        } catch (Throwable t) {
+            plugin.getLogger().warning("同步 Bukkit 封禁失败 user=" + username + ": " + t);
+        }
+        plugin.getLogger().info("Cloud 管理员封禁 user=" + username);
+    }
+
+    /**
+     * 解封用户：移除 WebGame 封禁库记录 + 同步解除 Bukkit NAME ban。
+     *
+     * @return 是否存在 WebGame 封禁记录（无记录返回 false，但仍尝试解 Bukkit ban）
+     */
+    public boolean unban(String username) {
+        boolean removed = banStore.unban(username);
+        try {
+            Bukkit.getBanList(org.bukkit.BanList.Type.NAME).pardon(username);
+        } catch (Throwable t) {
+            plugin.getLogger().warning("同步解除 Bukkit 封禁失败 user=" + username + ": " + t);
+        }
+        if (removed) {
+            plugin.getLogger().info("Cloud 管理员解封 user=" + username);
+        }
+        return removed;
+    }
+
+    /** 是否已被 WebGame 云游戏封禁。 */
+    public boolean isBanned(String username) {
+        return banStore.isBanned(username);
     }
 
     // ===== 实例黑盒事件（InstanceRegistry.Listener） =====
