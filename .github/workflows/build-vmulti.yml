@@ -27,19 +27,28 @@ jobs:
           if (-not $haveWdm) {
             curl.exe -L -o "$env:RUNNER_TEMP\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
             "Downloaded wdksetup: $((Get-Item "$env:RUNNER_TEMP\wdksetup.exe" -ErrorAction SilentlyContinue).Length) bytes" | Add-Content wdk-check.txt
-            Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait
+            $p = Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait -PassThru
+            "wdksetup exit1: $($p.ExitCode)" | Add-Content wdk-check.txt
             Start-Sleep -Seconds 15
             $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
           }
           if (-not $haveWdm) {
             "RETRY WDK install (2nd attempt)" | Add-Content wdk-check.txt
             curl.exe -L -o "$env:RUNNER_TEMP\wdksetup2.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
-            Start-Process "$env:RUNNER_TEMP\wdksetup2.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait
+            $p2 = Start-Process "$env:RUNNER_TEMP\wdksetup2.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait -PassThru
+            "wdksetup exit2: $($p2.ExitCode)" | Add-Content wdk-check.txt
             Start-Sleep -Seconds 15
             $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
           }
           if (-not $haveWdm) {
-            "RETRY via choco (3rd channel)" | Add-Content wdk-check.txt
+            "RETRY via winget SDK+WDK (3rd channel)" | Add-Content wdk-check.txt
+            winget install --id Microsoft.WindowsSDK.10.0.22621.1 -e --accept-source-agreements --accept-package-agreements --silent 2>&1 | Select-Object -Last 4 | Add-Content wdk-check.txt
+            winget install --id Microsoft.WindowsWDK.10.0.22621.1 -e --accept-source-agreements --accept-package-agreements --silent 2>&1 | Select-Object -Last 4 | Add-Content wdk-check.txt
+            Start-Sleep -Seconds 15
+            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
+          }
+          if (-not $haveWdm) {
+            "RETRY via choco (4th channel)" | Add-Content wdk-check.txt
             choco install windowsdriverkit -y --no-progress 2>&1 | Select-Object -Last 5 | Add-Content wdk-check.txt
             Start-Sleep -Seconds 10
             $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
