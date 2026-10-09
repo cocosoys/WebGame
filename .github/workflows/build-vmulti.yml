@@ -63,7 +63,7 @@ jobs:
             $rcCmd = "`"$rc`" /i`"$sdk\Include\$sdkVer\um`" /i`"$sdk\Include\$sdkVer\shared`" /i`"$sdk\Include\$sdkVer\ucrt`" /i`"$msvcInc`" /fo`"$objDir\vmulti.res`" `"drivers/vmulti-mod/sys/vmulti.rc`" 2>&1"
             cmd /c $rcCmd | Add-Content build.log
             "RC EXIT: $LASTEXITCODE" | Add-Content build.log
-            $linkCmd = "`"$link`" /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /OUT:`"$objDir\vmulti.sys`" `"$objDir\vmulti.obj`" `"$objDir\vmulti.res`" /LIBPATH:`"$wdk\lib\$ver\km\x64`" /LIBPATH:`"$wdk\lib\wdf\kmdf\x64\$kmdf`" /LIBPATH:`"$msvc\lib\x64`" wdfdriverentry.lib wdfldr.lib ntstrsafe.lib hidclass.lib 2>&1"
+            $linkCmd = "`"$link`" /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /OUT:`"$objDir\vmulti.sys`" `"$objDir\vmulti.obj`" `"$objDir\vmulti.res`" /LIBPATH:`"$wdk\lib\$ver\km\x64`" /LIBPATH:`"$wdk\lib\wdf\kmdf\x64\$kmdf`" /LIBPATH:`"$vs\VC\Tools\MSVC\$msvcVer\lib\x64`" wdfdriverentry.lib wdfldr.lib ntstrsafe.lib hidclass.lib 2>&1"
             cmd /c $linkCmd | Add-Content build.log
             "LINK EXIT: $LASTEXITCODE" | Add-Content build.log
           }
