@@ -86,7 +86,7 @@ jobs:
             Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
             "PFX: $(Test-Path $pfx)" | Add-Content sign.log
             $sdk = "C:\Program Files (x86)\Windows Kits\10"
-            $sdkVer = (Get-ChildItem "$sdk\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
+            $sdkVer = (Get-ChildItem "$sdk\bin" -Directory | Where-Object { $_.Name -match "^\d+\.\d+" } | Sort-Object Name -Descending | Select-Object -First 1).Name
             $signtool = "$sdk\bin\$sdkVer\x64\signtool.exe"
             "SIGNTOOL: $signtool" | Add-Content sign.log
             & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName 2>&1 | ForEach-Object { Add-Content sign.log $_ }
