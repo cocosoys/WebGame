@@ -56,7 +56,7 @@ jobs:
           New-Item -ItemType Directory -Force $objDir | Out-Null
           "KIT=$wdk VER=$ver KMDF=$kmdf VS=$vs MSVC=$msvcVer SDKVER=$sdkVer" | Out-File build.log -Encoding utf8
           $rc = "$sdk\bin\$sdkVer\x64\rc.exe"
-          $clCmd = "`"$cl`" /c /I`"$msvcInc`" /I`"drivers/vmulti-mod/sys`" /I`"$wdk\Include\$ver\km`" /I`"$wdk\Include\$ver\shared`" /I`"$wdk\Include\wdf\kmdf\$kmdf`" /I`"$sdk\Include\$sdkVer\ucrt`" /I`"$sdk\Include\$sdkVer\shared`" /I`"$sdk\Include\$sdkVer\um`" /DWDF_BUILD_DRIVER /DWIN32 /DWINNT=1 /D_WIN64 /D_AMD64_ /D_WIN32_WINNT=0x0601 /W1 /TC `"drivers/vmulti-mod/sys/vmulti.c`" /Fo`"$objDir\vmulti.obj`" 2>&1"
+          $clCmd = "`"$cl`" /c /I`"$msvcInc`" /I`"drivers/vmulti-mod/sys`" /I`"drivers/vmulti-mod/inc`" /I`"$wdk\Include\$ver\km`" /I`"$wdk\Include\$ver\shared`" /I`"$wdk\Include\wdf\kmdf\$kmdf`" /I`"$sdk\Include\$sdkVer\ucrt`" /I`"$sdk\Include\$sdkVer\shared`" /I`"$sdk\Include\$sdkVer\um`" /DWDF_BUILD_DRIVER /DWIN32 /DWINNT=1 /D_WIN64 /D_AMD64_ /D_WIN32_WINNT=0x0601 /W1 /TC `"drivers/vmulti-mod/sys/vmulti.c`" /Fo`"$objDir\vmulti.obj`" 2>&1"
           cmd /c $clCmd | Add-Content build.log
           "CL EXIT: $LASTEXITCODE" | Add-Content build.log
           if ($LASTEXITCODE -eq 0) {
