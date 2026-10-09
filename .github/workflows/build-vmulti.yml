@@ -29,17 +29,30 @@ jobs:
       - name: Build KMDF driver (Release x64)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (-not $vs) { throw "VS not found via vswhere" }
-          Write-Host "VS: $vs"
-          $devCmd = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          $msvcVer = (Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $cl = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\cl.exe"
+          $link = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\link.exe"
           $kit = "C:\Program Files (x86)\Windows Kits\10"
           $ver = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).Name
-          Write-Host "Windows Kits Include: $ver"
-          $inc = "$kit\Include\$ver\km;$kit\Include\$ver\shared;$kit\Include\$ver\ucrt;$kit\Include\$ver\um"
-          $lib = "$kit\Lib\$ver\km\x64;$kit\Lib\$ver\kmdf\x64;$kit\Lib\$ver\ucrt\x64"
-          cmd /c "call `"$devCmd`" -arch=amd64 && msbuild drivers/vmulti-mod/sys/vmulti.vcxproj /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=$ver /p:IncludePath=`"$inc`" /p:LibraryPath=`"$lib`" /m /v:n > build.log 2>&1"
+          $rc = "$kit\bin\$ver\x64\rc.exe"
+          $objDir = "drivers/vmulti-mod/sys/Release/x64"
+          New-Item -ItemType Directory -Force $objDir | Out-Null
+          "KIT=$kit VER=$ver VS=$vs MSVC=$msvcVer" | Out-File build.log -Encoding utf8
+          & $cl /c /I..\inc /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
+          $clExit = $LASTEXITCODE
+          "CL EXIT: $clExit" | Add-Content build.log
+          if ($clExit -eq 0) {
+            & $rc /fo"$objDir\vmulti.res" "drivers/vmulti-mod/sys/vmulti.rc" 2>&1 | Add-Content build.log
+            "RC EXIT: $LASTEXITCODE" | Add-Content build.log
+            & $link /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry "/OUT:$objDir\vmulti.sys" "$objDir\vmulti.obj" "$objDir\vmulti.res" /LIBPATH:"$kit\Lib\$ver\km\x64" kmdf.lib WdfLdr.lib ntstrsafe.lib hidclass.lib 2>&1 | Add-Content build.log
+            "LINK EXIT: $LASTEXITCODE" | Add-Content build.log
+          }
+          Get-Content build.log | Select-Object -Last 30
+        continue-on-error: true
           Get-Content build.log -ErrorAction SilentlyContinue | Select-Object -Last 20
         continue-on-error: true
 
