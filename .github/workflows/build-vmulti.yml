@@ -42,7 +42,7 @@ jobs:
           $objDir = "drivers/vmulti-mod/sys/Release/x64"
           New-Item -ItemType Directory -Force $objDir | Out-Null
           "KIT=$kit VER=$ver VS=$vs MSVC=$msvcVer" | Out-File build.log -Encoding utf8
-          & $cl /c /I..\inc /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
+          & $cl /c /I"drivers/vmulti-mod/sys" /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
           $clExit = $LASTEXITCODE
           "CL EXIT: $clExit" | Add-Content build.log
           if ($clExit -eq 0) {
