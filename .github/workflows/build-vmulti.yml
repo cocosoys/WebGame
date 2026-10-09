@@ -81,6 +81,19 @@ jobs:
           path: sign.log
           retention-days: 7
 
+      - name: Publish driver release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (Test-Path "drivers/vmulti-mod/dist/vmulti.sys") {
+            gh release delete vmulti-driver --yes --repo cocosoys/WebGame 2>$null
+            gh release create vmulti-driver "drivers/vmulti-mod/dist/vmulti.sys" "drivers/vmulti-mod/dist/vmulti.inf" "drivers/vmulti-mod/dist/vmulti.cat" "drivers/vmulti-mod/dist/vmulti-test.pfx" --repo cocosoys/WebGame --title "VMulti Virtual HID Driver (testsigning)" --notes "Modernized KMDF build of djpnewton/vmulti. Requires testsigning mode. Dist: sys + inf + cat + pfx"
+            Write-Host "RELEASE OK"
+          } else {
+            Write-Host "DIST MISSING - skip release"
+          }
+        continue-on-error: true
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
