@@ -43,13 +43,16 @@ jobs:
           $objDir = "drivers/vmulti-mod/sys/Release/x64"
           New-Item -ItemType Directory -Force $objDir | Out-Null
           "KIT=$kit VER=$ver VS=$vs MSVC=$msvcVer" | Out-File build.log -Encoding utf8
-          & $cl /c /I"$msvcInc" /I"drivers/vmulti-mod/sys" /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
+          $clCmd = "`"$cl`" /c /I`"$msvcInc`" /I`"drivers/vmulti-mod/sys`" /I`"$kit\Include\$ver\km`" /I`"$kit\Include\$ver\shared`" /I`"$kit\Include\$ver\ucrt`" /I`"$kit\Include\$ver\um`" /W1 /TC `"drivers/vmulti-mod/sys/vmulti.c`" /Fo`"$objDir\vmulti.obj`" 2>&1"
+          cmd /c $clCmd | Add-Content build.log
           $clExit = $LASTEXITCODE
           "CL EXIT: $clExit" | Add-Content build.log
           if ($clExit -eq 0) {
-            & $rc /fo"$objDir\vmulti.res" "drivers/vmulti-mod/sys/vmulti.rc" 2>&1 | Add-Content build.log
+            $rcCmd = "`"$rc`" /fo`"$objDir\vmulti.res`" `"drivers/vmulti-mod/sys/vmulti.rc`" 2>&1"
+            cmd /c $rcCmd | Add-Content build.log
             "RC EXIT: $LASTEXITCODE" | Add-Content build.log
-            & $link /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry "/OUT:$objDir\vmulti.sys" "$objDir\vmulti.obj" "$objDir\vmulti.res" /LIBPATH:"$kit\Lib\$ver\km\x64" kmdf.lib WdfLdr.lib ntstrsafe.lib hidclass.lib 2>&1 | Add-Content build.log
+            $linkCmd = "`"$link`" /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry `/OUT:`"$objDir\vmulti.sys`" `"$objDir\vmulti.obj`" `"$objDir\vmulti.res`" /LIBPATH:`"$kit\Lib\$ver\km\x64`" kmdf.lib WdfLdr.lib ntstrsafe.lib hidclass.lib 2>&1"
+            cmd /c $linkCmd | Add-Content build.log
             "LINK EXIT: $LASTEXITCODE" | Add-Content build.log
           }
           Get-Content build.log | Select-Object -Last 30
