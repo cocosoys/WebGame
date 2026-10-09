@@ -97,6 +97,7 @@ jobs:
       - name: Push diagnostics back to repo
         if: always()
         shell: pwsh
+        continue-on-error: true
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
           git config user.name "webgame-ci"
