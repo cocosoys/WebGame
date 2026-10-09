@@ -53,9 +53,6 @@ jobs:
           }
           Get-Content build.log | Select-Object -Last 30
         continue-on-error: true
-        continue-on-error: true
-          Get-Content build.log -ErrorAction SilentlyContinue | Select-Object -Last 20
-        continue-on-error: true
 
       - name: Upload build log
         if: always()
