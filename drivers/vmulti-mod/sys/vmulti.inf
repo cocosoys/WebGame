@@ -12,6 +12,12 @@ CatalogFile=vmulti.cat
 [DestinationDirs]
 CopyFunctionDriver=12
 
+[SourceDisksNames]
+1 = %DISK_NAME%,,,
+
+[SourceDisksFiles]
+vmulti.sys=1
+
 [Manufacturer]
 %VENDOR%=Vendor,NTamd64
 
