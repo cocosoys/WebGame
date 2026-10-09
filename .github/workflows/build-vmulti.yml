@@ -37,7 +37,8 @@ jobs:
           $cl = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\cl.exe"
           $link = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\link.exe"
           $kit = "C:\Program Files (x86)\Windows Kits\10"
-          $ver = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $ver = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" } | Sort-Object Name -Descending | Select-Object -First 1).Name
+          "WDK ver with km: $ver" | Out-File build.log -Encoding utf8
           $rc = "$kit\bin\$ver\x64\rc.exe"
           $msvcInc = Join-Path $vs "VC\Tools\MSVC\$msvcVer\include"
           $objDir = "drivers/vmulti-mod/sys/Release/x64"
