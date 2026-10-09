@@ -7,6 +7,10 @@ on:
       - 'drivers/vmulti-mod/**'
       - '.github/workflows/build-vmulti.yml'
 
+permissions:
+  contents: write
+  issues: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -46,7 +50,7 @@ jobs:
             $sys = Get-ChildItem "drivers/vmulti-mod/sys/Release/x64" -Filter "vmulti.sys" -Recurse | Select-Object -First 1
             if (-not $sys) { throw "vmulti.sys not found" }
             "SYS: $($sys.FullName)" | Out-File sign.log -Append -Encoding utf8
-            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5)
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5) -KeyExportPolicy Exportable -KeySpec Signature
             $pfx = Join-Path $env:RUNNER_TEMP "vmulti-test.pfx"
             Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "WebGame-VMulti-Test" -Force) | Out-Null
             $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
