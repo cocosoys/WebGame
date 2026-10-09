@@ -16,7 +16,11 @@ jobs:
 
       - name: Install WDK
         shell: pwsh
-        run: choco install windowsdriverkit -y --no-progress
+        run: |
+          curl.exe -L -o "$env:RUNNER_TEMP\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
+          Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","OptionId.WindowsDriverKit","/q","/norestart" -Wait
+          $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Include" -Directory -ErrorAction SilentlyContinue
+          Write-Host "WDK Include dirs: $($kit.Name -join ', ')"
 
       - name: Build KMDF driver (Release x64)
         shell: cmd
