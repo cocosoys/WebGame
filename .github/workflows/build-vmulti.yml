@@ -39,10 +39,11 @@ jobs:
           $kit = "C:\Program Files (x86)\Windows Kits\10"
           $ver = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).Name
           $rc = "$kit\bin\$ver\x64\rc.exe"
+          $msvcInc = Join-Path $vs "VC\Tools\MSVC\$msvcVer\include"
           $objDir = "drivers/vmulti-mod/sys/Release/x64"
           New-Item -ItemType Directory -Force $objDir | Out-Null
           "KIT=$kit VER=$ver VS=$vs MSVC=$msvcVer" | Out-File build.log -Encoding utf8
-          & $cl /c /I"drivers/vmulti-mod/sys" /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
+          & $cl /c /I"$msvcInc" /I"drivers/vmulti-mod/sys" /I"$kit\Include\$ver\km" /I"$kit\Include\$ver\shared" /I"$kit\Include\$ver\ucrt" /I"$kit\Include\$ver\um" /W1 /TC "drivers/vmulti-mod/sys/vmulti.c" /Fo"$objDir\vmulti.obj" 2>&1 | Add-Content build.log
           $clExit = $LASTEXITCODE
           "CL EXIT: $clExit" | Add-Content build.log
           if ($clExit -eq 0) {
