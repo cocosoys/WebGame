@@ -18,62 +18,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install WDK
+      - name: Fetch WDK (NuGet package, no system install)
         shell: pwsh
         run: |
-          $kit = "C:\Program Files (x86)\Windows Kits\10"
-          "WDK install check $(Get-Date -Format o)" | Out-File wdk-check.txt -Encoding utf8
-          $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
-          if (-not $haveWdm) {
-            curl.exe -L -o "$env:RUNNER_TEMP\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
-            "Downloaded wdksetup: $((Get-Item "$env:RUNNER_TEMP\wdksetup.exe" -ErrorAction SilentlyContinue).Length) bytes" | Add-Content wdk-check.txt
-            $p = Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait -PassThru
-            "wdksetup exit1: $($p.ExitCode)" | Add-Content wdk-check.txt
-            Start-Sleep -Seconds 15
-            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
-          }
-          if (-not $haveWdm) {
-            "RETRY WDK install (2nd attempt)" | Add-Content wdk-check.txt
-            curl.exe -L -o "$env:RUNNER_TEMP\wdksetup2.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
-            $p2 = Start-Process "$env:RUNNER_TEMP\wdksetup2.exe" -ArgumentList "/features","+","OptionId.WindowsDriverKit","/q","/norestart" -Wait -PassThru
-            "wdksetup exit2: $($p2.ExitCode)" | Add-Content wdk-check.txt
-            Start-Sleep -Seconds 15
-            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
-          }
-          if (-not $haveWdm) {
-            "RETRY via winget SDK+WDK (3rd channel)" | Add-Content wdk-check.txt
-            winget install --id Microsoft.WindowsSDK.10.0.22621.1 -e --accept-source-agreements --accept-package-agreements --silent 2>&1 | Select-Object -Last 4 | Add-Content wdk-check.txt
-            winget install --id Microsoft.WindowsWDK.10.0.22621.1 -e --accept-source-agreements --accept-package-agreements --silent 2>&1 | Select-Object -Last 4 | Add-Content wdk-check.txt
-            Start-Sleep -Seconds 15
-            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
-          }
-          if (-not $haveWdm) {
-            "RETRY via choco (4th channel)" | Add-Content wdk-check.txt
-            choco install windowsdriverkit -y --no-progress 2>&1 | Select-Object -Last 5 | Add-Content wdk-check.txt
-            Start-Sleep -Seconds 10
-            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
-          }
-          $incDirs = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ", "
-          "Include dirs: $incDirs" | Add-Content wdk-check.txt
-          "wdm.h present: $([bool]$haveWdm)" | Add-Content wdk-check.txt
-          if (-not $haveWdm) {
-            "=== WDK installer logs ===" | Add-Content wdk-check.txt
-            $logFiles = @()
-            $logFiles += Get-ChildItem "$env:TEMP" -Filter "*WDK*" -File -ErrorAction SilentlyContinue
-            $logFiles += Get-ChildItem "$env:TEMP" -Filter "*setup*" -File -ErrorAction SilentlyContinue
-            $logFiles += Get-ChildItem "C:\Windows\Temp" -Filter "*WDK*" -File -ErrorAction SilentlyContinue
-            foreach ($lf in $logFiles | Select-Object -First 6) {
-              "--- $($lf.FullName) ($($lf.Length) B)" | Add-Content wdk-check.txt
-              Get-Content $lf.FullName -Tail 25 -ErrorAction SilentlyContinue | Add-Content wdk-check.txt
-            }
-            $setupExe = Get-Process | Where-Object { $_.Name -match "wdksetup|setup" } | Select-Object -First 3
-            if ($setupExe) { "RUNNING SETUP PROCESSES: $($setupExe.Name -join ', ')" | Add-Content wdk-check.txt }
-            "FAILED: no WDK km headers after 2 attempts" | Add-Content wdk-check.txt
-            exit 1
-          }
+          "WDK fetch $(Get-Date -Format o)" | Out-File wdk-check.txt -Encoding utf8
+          $url = "https://api.nuget.org/v3-flatcontainer/microsoft.windows.wdk.x64/10.0.26100.6584/microsoft.windows.wdk.x64.10.0.26100.6584.nupkg"
+          curl.exe -L --retry 5 --retry-all-errors --retry-delay 3 -o "$env:RUNNER_TEMP\wdk.nupkg" $url
+          $n = (Get-Item "$env:RUNNER_TEMP\wdk.nupkg").Length
+          "Downloaded bytes: $n" | Add-Content wdk-check.txt
+          if ($n -lt 100000000) { "FAILED: package too small" | Add-Content wdk-check.txt; exit 1 }
+          Copy-Item "$env:RUNNER_TEMP\wdk.nupkg" "$env:RUNNER_TEMP\wdk.zip" -Force
+          Expand-Archive "$env:RUNNER_TEMP\wdk.zip" "$env:RUNNER_TEMP\wdkpkg" -Force
+          "wdm.h present: $(Test-Path "$env:RUNNER_TEMP\wdkpkg\c\Include\10.0.26100.0\km\wdm.h")" | Add-Content wdk-check.txt
+          "wdf.h present: $(Test-Path "$env:RUNNER_TEMP\wdkpkg\c\Include\wdf\kmdf\1.15\wdf.h")" | Add-Content wdk-check.txt
+          "kmdf lib present: $(Test-Path "$env:RUNNER_TEMP\wdkpkg\c\lib\wdf\kmdf\x64\1.15\wdfdriverentry.lib")" | Add-Content wdk-check.txt
+          "Inf2Cat present: $(Test-Path "$env:RUNNER_TEMP\wdkpkg\c\bin\10.0.26100.0\x86\Inf2Cat.exe")" | Add-Content wdk-check.txt
           Get-Content wdk-check.txt
+        continue-on-error: true
 
-      - name: Build KMDF driver (Release x64)
+      - name: Build KMDF driver (Release x64, WDK from NuGet)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -83,80 +46,69 @@ jobs:
           $msvcVer = (Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
           $cl = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\cl.exe"
           $link = Join-Path $vs "VC\Tools\MSVC\$msvcVer\bin\HostX64\x64\link.exe"
-          $kit = "C:\Program Files (x86)\Windows Kits\10"
-          $ver = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" } | Sort-Object Name -Descending | Select-Object -First 1).Name
-          "WDK ver with km: $ver" | Out-File build.log -Encoding utf8
-          $rc = "$kit\bin\$ver\x64\rc.exe"
+          $sdk = "C:\Program Files (x86)\Windows Kits\10"
+          $sdkVer = (Get-ChildItem "$sdk\Include" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $wdk = "$env:RUNNER_TEMP\wdkpkg\c"
+          $ver = "10.0.26100.0"
+          $kmdf = "1.15"
           $msvcInc = Join-Path $vs "VC\Tools\MSVC\$msvcVer\include"
           $objDir = "drivers/vmulti-mod/sys/Release/x64"
           New-Item -ItemType Directory -Force $objDir | Out-Null
-          "KIT=$kit VER=$ver VS=$vs MSVC=$msvcVer" | Out-File build.log -Encoding utf8
-          $clCmd = "`"$cl`" /c /I`"$msvcInc`" /I`"drivers/vmulti-mod/sys`" /I`"$kit\Include\$ver\km`" /I`"$kit\Include\$ver\shared`" /I`"$kit\Include\$ver\ucrt`" /I`"$kit\Include\$ver\um`" /W1 /TC `"drivers/vmulti-mod/sys/vmulti.c`" /Fo`"$objDir\vmulti.obj`" 2>&1"
+          "KIT=$wdk VER=$ver KMDF=$kmdf VS=$vs MSVC=$msvcVer SDKVER=$sdkVer" | Out-File build.log -Encoding utf8
+          $rc = "$sdk\bin\$sdkVer\x64\rc.exe"
+          $clCmd = "`"$cl`" /c /I`"$msvcInc`" /I`"drivers/vmulti-mod/sys`" /I`"$wdk\Include\$ver\km`" /I`"$wdk\Include\$ver\shared`" /I`"$wdk\Include\wdf\kmdf\$kmdf`" /I`"$sdk\Include\$sdkVer\ucrt`" /DWDF_BUILD_DRIVER /DWIN32 /DWINNT=1 /D_WIN64 /D_WIN32_WINNT=0x0601 /W1 /TC `"drivers/vmulti-mod/sys/vmulti.c`" /Fo`"$objDir\vmulti.obj`" 2>&1"
           cmd /c $clCmd | Add-Content build.log
-          $clExit = $LASTEXITCODE
-          "CL EXIT: $clExit" | Add-Content build.log
-          if ($clExit -eq 0) {
+          "CL EXIT: $LASTEXITCODE" | Add-Content build.log
+          if ($LASTEXITCODE -eq 0) {
             $rcCmd = "`"$rc`" /fo`"$objDir\vmulti.res`" `"drivers/vmulti-mod/sys/vmulti.rc`" 2>&1"
             cmd /c $rcCmd | Add-Content build.log
             "RC EXIT: $LASTEXITCODE" | Add-Content build.log
-            $linkCmd = "`"$link`" /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry `/OUT:`"$objDir\vmulti.sys`" `"$objDir\vmulti.obj`" `"$objDir\vmulti.res`" /LIBPATH:`"$kit\Lib\$ver\km\x64`" kmdf.lib WdfLdr.lib ntstrsafe.lib hidclass.lib 2>&1"
+            $linkCmd = "`"$link`" /DRIVER:WDM /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /OUT:`"$objDir\vmulti.sys`" `"$objDir\vmulti.obj`" `"$objDir\vmulti.res`" /LIBPATH:`"$wdk\lib\$ver\km\x64`" /LIBPATH:`"$wdk\lib\wdf\kmdf\x64\$kmdf`" wdfdriverentry.lib wdfldr.lib ntstrsafe.lib hidclass.lib 2>&1"
             cmd /c $linkCmd | Add-Content build.log
             "LINK EXIT: $LASTEXITCODE" | Add-Content build.log
           }
-          Get-Content build.log | Select-Object -Last 30
+          Get-Content build.log | Select-Object -Last 40
         continue-on-error: true
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-          retention-days: 7
-
-      - name: Prepare signing
+      - name: Prepare signing + catalog
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           "STEP START $(Get-Date -Format o)" | Out-File sign.log -Encoding utf8
           try {
-            $sys = Get-ChildItem "drivers/vmulti-mod/sys/Release/x64" -Filter "vmulti.sys" -Recurse | Select-Object -First 1
+            $sys = Get-ChildItem "drivers/vmulti-mod/sys/Release/x64" -Filter "vmulti.sys" | Select-Object -First 1
             if (-not $sys) { throw "vmulti.sys not found" }
-            "SYS: $($sys.FullName)" | Out-File sign.log -Append -Encoding utf8
+            "SYS: $($sys.FullName) size=$($sys.Length)" | Add-Content sign.log
             $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5) -KeyExportPolicy Exportable -KeySpec Signature
             $pfx = Join-Path $env:RUNNER_TEMP "vmulti-test.pfx"
             Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "WebGame-VMulti-Test" -Force) | Out-Null
-            $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            $signtool = Join-Path $kit.FullName "x64\signtool.exe"
-            "SIGNTOOL: $signtool" | Out-File sign.log -Append -Encoding utf8
-            & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName 2>&1 | Tee-Object -FilePath sign.log -Append
-            "signtool sys exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
-            $inf = "drivers/vmulti-mod/sys/vmulti.inf"
-            $inf2cat = Join-Path $kit.FullName "x64\inf2cat.exe"
-            & $inf2cat /driver:"drivers/vmulti-mod/sys" /os:10_X64 2>&1 | Tee-Object -FilePath sign.log -Append
-            "inf2cat exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
-            $cat = "drivers/vmulti-mod/sys/vmulti.cat"
-            & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $cat 2>&1 | Tee-Object -FilePath sign.log -Append
-            "signtool cat exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
+            $sdk = "C:\Program Files (x86)\Windows Kits\10"
+            $sdkVer = (Get-ChildItem "$sdk\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
+            $signtool = "$sdk\bin\$sdkVer\x64\signtool.exe"
+            "SIGNTOOL: $signtool" | Add-Content sign.log
+            & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName 2>&1 | ForEach-Object { Add-Content sign.log $_ }
+            "signtool sys exit: $LASTEXITCODE" | Add-Content sign.log
+            $inf2cat = "$env:RUNNER_TEMP\wdkpkg\c\bin\10.0.26100.0\x86\Inf2Cat.exe"
+            & $inf2cat /driver:"drivers/vmulti-mod/sys/Release/x64" /os:10_NT_X64_26100 /verbose 2>&1 | ForEach-Object { Add-Content sign.log $_ }
+            "inf2cat exit: $LASTEXITCODE" | Add-Content sign.log
+            $cat = "drivers/vmulti-mod/sys/Release/x64/vmulti.cat"
+            if (Test-Path $cat) {
+              & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $cat 2>&1 | ForEach-Object { Add-Content sign.log $_ }
+              "signtool cat exit: $LASTEXITCODE" | Add-Content sign.log
+            } else {
+              "CAT MISSING" | Add-Content sign.log
+            }
             $stage = "drivers/vmulti-mod/dist"
             New-Item -ItemType Directory -Force $stage | Out-Null
             Copy-Item $sys.FullName $stage -Force
-            Copy-Item $inf $stage -Force
-            Copy-Item $cat $stage -Force
+            Copy-Item "drivers/vmulti-mod/sys/vmulti.inf" $stage -Force
+            if (Test-Path $cat) { Copy-Item $cat $stage -Force }
             Copy-Item $pfx $stage -Force
-            "DIST OK" | Out-File sign.log -Append -Encoding utf8
+            "DIST OK" | Add-Content sign.log
           } catch {
-            "FAIL: $($_.Exception.Message)" | Out-File sign.log -Append -Encoding utf8
+            "FAIL: $($_.Exception.Message)" | Add-Content sign.log
           }
         continue-on-error: true
-
-      - name: Upload sign log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sign-log
-          path: sign.log
-          retention-days: 7
 
       - name: Publish driver release
         shell: pwsh
@@ -164,12 +116,28 @@ jobs:
           $ErrorActionPreference = 'Continue'
           if (Test-Path "drivers/vmulti-mod/dist/vmulti.sys") {
             gh release delete vmulti-driver --yes --repo cocosoys/WebGame 2>$null
-            gh release create vmulti-driver "drivers/vmulti-mod/dist/vmulti.sys" "drivers/vmulti-mod/dist/vmulti.inf" "drivers/vmulti-mod/dist/vmulti.cat" "drivers/vmulti-mod/dist/vmulti-test.pfx" --repo cocosoys/WebGame --title "VMulti Virtual HID Driver (testsigning)" --notes "Modernized KMDF build of djpnewton/vmulti. Requires testsigning mode. Dist: sys + inf + cat + pfx"
+            gh release create vmulti-driver "drivers/vmulti-mod/dist/vmulti.sys" "drivers/vmulti-mod/dist/vmulti.inf" "drivers/vmulti-mod/dist/vmulti.cat" "drivers/vmulti-mod/dist/vmulti-test.pfx" --repo cocosoys/WebGame --title "VMulti Virtual HID Driver (testsigning)" --notes "Modernized KMDF build of djpnewton/vmulti. Requires testsigning mode. Dist: sys + inf + cat + pfx" 2>&1
+            "RELEASE EXIT: $LASTEXITCODE" | Add-Content sign.log
             Write-Host "RELEASE OK"
           } else {
             Write-Host "DIST MISSING - skip release"
           }
         continue-on-error: true
+
+      - name: Post diagnostic issue
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $body = "## vmulti build diagnostic (run $env:GITHUB_RUN_ID)`n`n### build.log`n``````powershell`n"
+          if (Test-Path "build.log") { $body += (Get-Content build.log -Raw) }
+          $body += "`n````````n### sign.log`n``````powershell`n"
+          if (Test-Path "sign.log") { $body += (Get-Content sign.log -Raw) }
+          $body += "`n````````n### wdk-check.txt`n``````powershell`n"
+          if (Test-Path "wdk-check.txt") { $body += (Get-Content wdk-check.txt -Raw) }
+          $body += "`n```````"
+          $body | Out-File diag.md -Encoding utf8
+          gh issue create --repo cocosoys/WebGame --title "vmulti build diagnostic run $env:GITHUB_RUN_ID" --body-file diag.md 2>&1
 
       - name: Push dist branch
         if: always()
