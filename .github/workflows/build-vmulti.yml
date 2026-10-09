@@ -40,36 +40,46 @@ jobs:
       - name: Prepare signing
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $sys = Get-ChildItem "drivers/vmulti-mod/sys/Release/x64" -Filter "vmulti.sys" -Recurse | Select-Object -First 1
-          if (-not $sys) { throw "vmulti.sys not found" }
-          Write-Host "SYS: $($sys.FullName)"
-          # self-signed code signing cert (testsigning mode accepts it)
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5)
-          $pfx = Join-Path $env:RUNNER_TEMP "vmulti-test.pfx"
-          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "WebGame-VMulti-Test" -Force) | Out-Null
-          $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          $signtool = Join-Path $kit.FullName "x64\signtool.exe"
-          Write-Host "SIGNTOOL: $signtool"
-          # embedded sign the .sys
-          & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName
-          if ($LASTEXITCODE -ne 0) { throw "sign sys failed" }
-          # generate catalog from inf
-          $inf = "drivers/vmulti-mod/sys/vmulti.inf"
-          $inf2cat = Join-Path $kit.FullName "x64\inf2cat.exe"
-          & $inf2cat /driver:"drivers/vmulti-mod/sys" /os:10_X64
-          if ($LASTEXITCODE -ne 0) { throw "inf2cat failed" }
-          # sign the catalog
-          $cat = "drivers/vmulti-mod/sys/vmulti.cat"
-          & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $cat
-          if ($LASTEXITCODE -ne 0) { throw "sign cat failed" }
-          # collect outputs into one staging dir
-          $stage = "drivers/vmulti-mod/dist"
-          New-Item -ItemType Directory -Force $stage | Out-Null
-          Copy-Item $sys.FullName $stage -Force
-          Copy-Item $inf $stage -Force
-          Copy-Item $cat $stage -Force
-          Copy-Item $pfx $stage -Force
+          $ErrorActionPreference = 'Continue'
+          "STEP START $(Get-Date -Format o)" | Out-File sign.log -Encoding utf8
+          try {
+            $sys = Get-ChildItem "drivers/vmulti-mod/sys/Release/x64" -Filter "vmulti.sys" -Recurse | Select-Object -First 1
+            if (-not $sys) { throw "vmulti.sys not found" }
+            "SYS: $($sys.FullName)" | Out-File sign.log -Append -Encoding utf8
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5)
+            $pfx = Join-Path $env:RUNNER_TEMP "vmulti-test.pfx"
+            Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "WebGame-VMulti-Test" -Force) | Out-Null
+            $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            $signtool = Join-Path $kit.FullName "x64\signtool.exe"
+            "SIGNTOOL: $signtool" | Out-File sign.log -Append -Encoding utf8
+            & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName 2>&1 | Tee-Object -FilePath sign.log -Append
+            "signtool sys exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
+            $inf = "drivers/vmulti-mod/sys/vmulti.inf"
+            $inf2cat = Join-Path $kit.FullName "x64\inf2cat.exe"
+            & $inf2cat /driver:"drivers/vmulti-mod/sys" /os:10_X64 2>&1 | Tee-Object -FilePath sign.log -Append
+            "inf2cat exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
+            $cat = "drivers/vmulti-mod/sys/vmulti.cat"
+            & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $cat 2>&1 | Tee-Object -FilePath sign.log -Append
+            "signtool cat exit: $LASTEXITCODE" | Out-File sign.log -Append -Encoding utf8
+            $stage = "drivers/vmulti-mod/dist"
+            New-Item -ItemType Directory -Force $stage | Out-Null
+            Copy-Item $sys.FullName $stage -Force
+            Copy-Item $inf $stage -Force
+            Copy-Item $cat $stage -Force
+            Copy-Item $pfx $stage -Force
+            "DIST OK" | Out-File sign.log -Append -Encoding utf8
+          } catch {
+            "FAIL: $($_.Exception.Message)" | Out-File sign.log -Append -Encoding utf8
+          }
+        continue-on-error: true
+
+      - name: Upload sign log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sign-log
+          path: sign.log
+          retention-days: 7
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
