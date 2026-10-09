@@ -81,7 +81,10 @@ jobs:
             "SYS: $($sys.FullName) size=$($sys.Length)" | Add-Content sign.log
             $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=WebGame VMulti Test, O=WebGame Project" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(5) -KeyExportPolicy Exportable -KeySpec Signature
             $pfx = Join-Path $env:RUNNER_TEMP "vmulti-test.pfx"
-            Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString "WebGame-VMulti-Test" -Force) | Out-Null
+            $pwd = New-Object System.Security.SecureString
+            foreach ($ch in "WebGame-VMulti-Test".ToCharArray()) { $pwd.AppendChar($ch) }
+            Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
+            "PFX: $(Test-Path $pfx)" | Add-Content sign.log
             $sdk = "C:\Program Files (x86)\Windows Kits\10"
             $sdkVer = (Get-ChildItem "$sdk\bin" -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
             $signtool = "$sdk\bin\$sdkVer\x64\signtool.exe"
