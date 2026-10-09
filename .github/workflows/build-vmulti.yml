@@ -21,10 +21,30 @@ jobs:
       - name: Install WDK
         shell: pwsh
         run: |
-          curl.exe -L -o "$env:RUNNER_TEMP\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
-          Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","OptionId.WindowsDriverKit","/q","/norestart" -Wait
-          $kit = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Include" -Directory -ErrorAction SilentlyContinue
-          Write-Host "WDK Include dirs: $($kit.Name -join ', ')"
+          $kit = "C:\Program Files (x86)\Windows Kits\10"
+          "WDK install check $(Get-Date -Format o)" | Out-File wdk-check.txt -Encoding utf8
+          $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
+          if (-not $haveWdm) {
+            curl.exe -L -o "$env:RUNNER_TEMP\wdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
+            Start-Process "$env:RUNNER_TEMP\wdksetup.exe" -ArgumentList "/features","OptionId.WindowsDriverKit","/q","/norestart" -Wait
+            Start-Sleep -Seconds 10
+            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
+          }
+          if (-not $haveWdm) {
+            "RETRY WDK install (2nd attempt)" | Add-Content wdk-check.txt
+            curl.exe -L -o "$env:RUNNER_TEMP\wdksetup2.exe" "https://go.microsoft.com/fwlink/?linkid=2272234"
+            Start-Process "$env:RUNNER_TEMP\wdksetup2.exe" -ArgumentList "/features","OptionId.WindowsDriverKit","/q","/norestart" -Wait
+            Start-Sleep -Seconds 10
+            $haveWdm = Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\km\wdm.h" }
+          }
+          $incDirs = (Get-ChildItem "$kit\Include" -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ", "
+          "Include dirs: $incDirs" | Add-Content wdk-check.txt
+          "wdm.h present: $([bool]$haveWdm)" | Add-Content wdk-check.txt
+          if (-not $haveWdm) {
+            "FAILED: no WDK km headers after 2 attempts" | Add-Content wdk-check.txt
+            exit 1
+          }
+          Get-Content wdk-check.txt
 
       - name: Build KMDF driver (Release x64)
         shell: pwsh
@@ -134,6 +154,7 @@ jobs:
           New-Item -ItemType Directory -Force "drivers/vmulti-mod/dist" | Out-Null
           if (Test-Path "sign.log") { Copy-Item "sign.log" "drivers/vmulti-mod/dist/sign.log" -Force }
           if (Test-Path "build.log") { Copy-Item "build.log" "drivers/vmulti-mod/dist/build.log" -Force }
+          if (Test-Path "wdk-check.txt") { Copy-Item "wdk-check.txt" "drivers/vmulti-mod/dist/wdk-check.txt" -Force }
           git add -f drivers/vmulti-mod/dist
           git commit -m "dist snapshot $env:GITHUB_RUN_ID"
           git push -f origin HEAD:refs/heads/vmulti-dist
