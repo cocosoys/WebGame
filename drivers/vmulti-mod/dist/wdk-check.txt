@@ -1,0 +1,6 @@
+WDK fetch 2026-10-09T14:24:01.6963268+00:00
+Downloaded bytes: 110872506
+wdm.h present: True
+wdf.h present: True
+kmdf lib present: True
+Inf2Cat present: True

@@ -1,0 +1,16 @@
+KIT=D:\a\_temp\wdkpkg\c VER=10.0.26100.0 KMDF=1.15 VS=C:\Program Files\Microsoft Visual Studio\18\Enterprise MSVC=14.51.36231 SDKVER=10.0.26100.0
+Microsoft (R) C/C++ Optimizing Compiler Version 19.51.36260 for x64
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+vmulti.c
+CL EXIT: 0
+Microsoft (R) Windows (R) Resource Compiler Version 10.0.10011.16384
+
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+RC EXIT: 0
+Microsoft (R) Incremental Linker Version 14.51.36260.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+LINK EXIT: 0
