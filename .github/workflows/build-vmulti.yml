@@ -107,6 +107,7 @@ jobs:
           git config user.email "ci@ci.local"
           New-Item -ItemType Directory -Force "drivers/vmulti-mod/dist" | Out-Null
           if (Test-Path "sign.log") { Copy-Item "sign.log" "drivers/vmulti-mod/dist/sign.log" -Force }
+          if (Test-Path "build.log") { Copy-Item "build.log" "drivers/vmulti-mod/dist/build.log" -Force }
           git add -f drivers/vmulti-mod/dist
           git commit -m "dist snapshot $env:GITHUB_RUN_ID"
           git push -f origin HEAD:refs/heads/vmulti-dist
