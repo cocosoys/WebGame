@@ -94,20 +94,16 @@ jobs:
           }
         continue-on-error: true
 
-      - name: Push diagnostics back to repo
+      - name: Post diagnostic issue
         if: always()
         shell: pwsh
         continue-on-error: true
         run: |
           $ErrorActionPreference = 'SilentlyContinue'
-          git config user.name "webgame-ci"
-          git config user.email "ci@webgame.local"
-          New-Item -ItemType Directory -Force "ci-logs/dist-latest" | Out-Null
-          if (Test-Path "sign.log") { Copy-Item "sign.log" "ci-logs/sign-latest.log" -Force }
-          if (Test-Path "drivers/vmulti-mod/dist") { Copy-Item "drivers/vmulti-mod/dist/*" "ci-logs/dist-latest/" -Force -Recurse }
-          git add -f "ci-logs/sign-latest.log" "ci-logs/dist-latest" 2>$null
-          git commit -m "ci-logs: snapshot sign log + dist" 2>$null
-          git push origin HEAD:refs/heads/ci-logs 2>$null
+          $content = if (Test-Path "sign.log") { Get-Content "sign.log" -Raw } else { "NO sign.log" }
+          $files = (Get-ChildItem "drivers/vmulti-mod/sys" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '\.(sys|inf|cat|pfx)$' -or $_.DirectoryName -match 'dist' } | ForEach-Object { $_.FullName.Replace((Get-Location).Path,'') }) -join "`n"
+          $body = "RUN=$env:GITHUB_RUN_ID`n`n=== sign.log ===`n$content`n`n=== built files ===`n$files"
+          gh issue create --repo cocosoys/WebGame --title "vmulti CI diag $env:GITHUB_RUN_ID" --body $body 2>$null
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
