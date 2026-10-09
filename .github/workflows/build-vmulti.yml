@@ -48,6 +48,17 @@ jobs:
           "Include dirs: $incDirs" | Add-Content wdk-check.txt
           "wdm.h present: $([bool]$haveWdm)" | Add-Content wdk-check.txt
           if (-not $haveWdm) {
+            "=== WDK installer logs ===" | Add-Content wdk-check.txt
+            $logFiles = @()
+            $logFiles += Get-ChildItem "$env:TEMP" -Filter "*WDK*" -File -ErrorAction SilentlyContinue
+            $logFiles += Get-ChildItem "$env:TEMP" -Filter "*setup*" -File -ErrorAction SilentlyContinue
+            $logFiles += Get-ChildItem "C:\Windows\Temp" -Filter "*WDK*" -File -ErrorAction SilentlyContinue
+            foreach ($lf in $logFiles | Select-Object -First 6) {
+              "--- $($lf.FullName) ($($lf.Length) B)" | Add-Content wdk-check.txt
+              Get-Content $lf.FullName -Tail 25 -ErrorAction SilentlyContinue | Add-Content wdk-check.txt
+            }
+            $setupExe = Get-Process | Where-Object { $_.Name -match "wdksetup|setup" } | Select-Object -First 3
+            if ($setupExe) { "RUNNING SETUP PROCESSES: $($setupExe.Name -join ', ')" | Add-Content wdk-check.txt }
             "FAILED: no WDK km headers after 2 attempts" | Add-Content wdk-check.txt
             exit 1
           }
