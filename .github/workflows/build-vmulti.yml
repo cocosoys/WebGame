@@ -27,10 +27,15 @@ jobs:
           Write-Host "WDK Include dirs: $($kit.Name -join ', ')"
 
       - name: Build KMDF driver (Release x64)
-        shell: cmd
+        shell: pwsh
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=amd64
-          msbuild drivers/vmulti-mod/sys/vmulti.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:n > build.log 2>&1
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "VS not found via vswhere" }
+          Write-Host "VS: $vs"
+          $devCmd = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          cmd /c "call `"$devCmd`" -arch=amd64 && msbuild drivers/vmulti-mod/sys/vmulti.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:n > build.log 2>&1"
+          Get-Content build.log -ErrorAction SilentlyContinue | Select-Object -Last 20
         continue-on-error: true
 
       - name: Upload build log
