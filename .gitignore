@@ -18,3 +18,7 @@ __pycache__/
 # Cloud offline packages (local only, not committed)
 server-cloud/packages/java8-*
 server-cloud/packages/mc-*
+
+# Large packages not committed
+server-cloud/packages/VirtualBox-*
+server-cloud/packages/nefcon.zip
