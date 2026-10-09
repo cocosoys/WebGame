@@ -92,7 +92,7 @@ jobs:
             & $signtool sign /f $pfx /p "WebGame-VMulti-Test" /fd SHA256 $sys.FullName 2>&1 | ForEach-Object { Add-Content sign.log $_ }
             "signtool sys exit: $LASTEXITCODE" | Add-Content sign.log
             $inf2cat = "$env:RUNNER_TEMP\wdkpkg\c\bin\10.0.26100.0\x86\Inf2Cat.exe"
-            & $inf2cat /driver:"drivers/vmulti-mod/sys/Release/x64" /os:10_NT_X64_26100 /verbose 2>&1 | ForEach-Object { Add-Content sign.log $_ }
+            & $inf2cat /driver:"drivers/vmulti-mod/sys/Release/x64" /os:10_NT_X64 /verbose 2>&1 | ForEach-Object { Add-Content sign.log $_ }
             "inf2cat exit: $LASTEXITCODE" | Add-Content sign.log
             $cat = "drivers/vmulti-mod/sys/Release/x64/vmulti.cat"
             if (Test-Path $cat) {
