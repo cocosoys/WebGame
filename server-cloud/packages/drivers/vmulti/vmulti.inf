@@ -1,0 +1,54 @@
+; vmulti.inf - Virtual Multiple HID Device (modernized for WebGame S2B)
+; Function driver under HIDClass, uses inbox mshidkmdf mapper (Win7+ architecture)
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider=%VENDOR%
+DriverVer=10/01/2026,1.0.0.0
+CatalogFile=vmulti.cat
+
+[DestinationDirs]
+CopyFunctionDriver=12
+
+[SourceDisksNames]
+1 = %DISK_NAME%,,,
+
+[SourceDisksFiles]
+vmulti.sys=1
+
+[Manufacturer]
+%VENDOR%=Vendor,NTamd64
+
+[Vendor.NTamd64]
+%vmulti%=vmulti.Inst, djpnewton\vmulti
+
+[vmulti.Inst.NT]
+CopyFiles=CopyFunctionDriver
+
+[vmulti.Inst.NT.HW]
+AddReg=vmulti_Win7_Parameters.AddReg
+
+[vmulti.Inst.NT.Services]
+AddService=vmulti,0x00000002,vmulti_Service_Inst
+
+[vmulti_Win7_Parameters.AddReg]
+HKR,,"UpperFilters",0x00010000,"mshidkmdf"
+
+[vmulti_Service_Inst]
+DisplayName=%vmulti.SVCDESC%
+ServiceType=1               ; SERVICE_KERNEL_DRIVER
+StartType=3                 ; SERVICE_DEMAND_START
+ErrorControl=1              ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\vmulti.sys
+LoadOrderGroup=PNP Filter
+
+[CopyFunctionDriver]
+vmulti.sys
+
+[Strings]
+VENDOR="WebGame Project"
+vmulti="VMulti Virtual HID Device"
+vmulti.SVCDESC="VMulti Virtual HID Function Driver"
+DISK_NAME="VMulti Install Disk"
