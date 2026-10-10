@@ -1,6 +1,7 @@
 package com.github.cocosoys.mc.webgame.web.cloud;
 
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.control.InstanceHandle;
 import com.github.cocosoys.mc.webgame.web.ws.EaglerXProtocol;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -231,13 +232,22 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
         switch (type) {
             case CloudProtocol.TYPE_PONG:
                 s.touch();
+                // 回 PONG（计数器回显）：前端 startPing 以 20s 无 PONG 为超时主动断连，
+                // 不回执会导致每条 WS 连接建立 20s 后必断、无限重连。
+                s.sendPong(CloudProtocol.parsePongCounter(payload));
                 return;
             case CloudProtocol.TYPE_INPUT: {
-                // v1（路线 C）：浏览器直连执行面 KasmVNC，输入不经插件转发，仅刷新活动时间。
-                // S2（25574 反代）起：此处改为把输入事件经隧道转发到执行面实例。
+                // 浏览器输入（相对移动/绝对点击/按键/滚轮）经插件隧道转发到
+                // 执行面实例（GFN 方案落地后由执行面按虚拟 HID 注入）。payload[1..] = [u16 count][events...]。
                 List<CloudProtocol.InputEvent> events = CloudProtocol.parseInput(payload);
                 if (!events.isEmpty()) {
                     s.touch();
+                    byte[] eventsBody = new byte[payload.length - 1];
+                    System.arraycopy(payload, 1, eventsBody, 0, eventsBody.length);
+                    InstanceHandle h = s.getInstance();
+                    if (h != null) {
+                        manager.forwardInput(h.getInstanceId(), eventsBody);
+                    }
                 }
                 return;
             }
@@ -260,13 +270,15 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
             if (resumed != null) {
                 session = resumed;
                 resumed.touch();
+                resumed.sendSession(); // 确保前端 localStorage 持有真实 sid（幂等）
                 return;
             }
         }
         CloudSession s = manager.create(ctx, username, deviceIp,
                 parseResParam("w", 0), parseResParam("h", 0),
                 parseIntParam("cores", 2), parseParam("xmx", config.getClientXmx()),
-                parseIntParam("fps", config.getCloudFps()), parseParam("profile", ""));
+                parseIntParam("fps", config.getCloudFps()), parseParam("profile", ""),
+                parseParam("client", ""));
         if (s == null) {
             String err = manager.isBanned(username)
                     ? "你已被管理员封禁，无法进入服务器"
@@ -280,8 +292,9 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
         }
         session = s;
         s.touch();
-        // 实例就绪后由 CloudSessionManager.onInstanceReady 下发 KasmVNC 采集端点 URL，
-        // 浏览器收到后跳转直连（v1）；S2 起由插件 25574 反代。
+        s.sendSession(); // 立即下发真实会话 id（前端持久化，断线/刷新后凭此恢复）
+        // 实例就绪后由 CloudSessionManager.onInstanceReady 启动推流（READY → 浏览器等帧），
+        // 视频/输入帧均走本 WS 通道（路线 C）。
     }
 
     /** 解析整数查询参数（非法/越界回落 fallback，并夹取到安全范围）。 */
@@ -354,7 +367,7 @@ public final class CloudFrameHandler extends SimpleChannelInboundHandler<ByteBuf
         if (v > 2560) {
             return 0;
         }
-        return v & ~1; // 偶数，Xvfb 要求
+        return v & ~1; // 偶数，避免编码器/采集器对奇数分辨率处理不一致
     }
 
     /** 升级请求的原始 URL（由 parseAndRespondUpgrade 解析并缓存）。 */

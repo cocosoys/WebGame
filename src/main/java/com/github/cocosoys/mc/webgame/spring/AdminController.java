@@ -1,4 +1,4 @@
-package com.github.cocosoys.mc.webgame.web.admin;
+package com.github.cocosoys.mc.webgame.spring;
 
 import com.github.cocosoys.mc.soyshttpovermc.annotations.ApiName;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.ApiPublic;
@@ -8,6 +8,7 @@ import com.github.cocosoys.mc.soyshttpovermc.annotations.PostMapping;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.RequestBody;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.RequestParam;
 import com.github.cocosoys.mc.soyshttpovermc.web.ApiRequestContext;
+import com.github.cocosoys.mc.webgame.web.admin.AdminExecutor;
 import org.bukkit.entity.Player;
 
 /**
@@ -23,9 +24,9 @@ import org.bukkit.entity.Player;
  *       （getSyncPlayer 实时解析 + isOp），非 OP / 不在线 → 403。</li>
  * </ol>
  *
- * <p><b>能力</b>：终端（指令转发执行面）、文件管理（模板容器 /home/webgame/mc
- * 列表/上传/删除）、系统设置（切换 Java：写 /home/webgame/java.conf，
- * cc 生成实例 launch.sh 时读取）。</p>
+ * <p><b>能力</b>：终端（指令转发执行面）、文件管理（模板容器文件
+ * 列表/上传/删除）、系统设置（切换 Java）。执行面已从 WSL/Xvfb 移除，
+ * 当前各能力返回「执行面未就绪」，待 GFN 方案重建执行通道。</p>
  */
 public final class AdminController {
 
@@ -94,6 +95,108 @@ public final class AdminController {
                 .append("\",\"mcSize\":\"").append(esc(executor.mcSize()))
                 .append("\",\"ok\":true}");
         return sb.toString();
+    }
+
+    // ================= 容器状态 =================
+
+    /**
+     * 容器状态详情（管理员）：执行面连接 + 机器资源（内存/磁盘/负载/进程）
+     * + 实例列表（会话参数 + 实例黑盒 + 采集进程）。
+     *
+     * <p>实例采集进程匹配由执行面快照提供（管控通道 STATUS_RPT）。</p>
+     */
+    @ApiPublic
+    @GetMapping(value = "/admin/containers", path = "/admin/containers")
+    @ApiName("管理员容器状态")
+    public String containers(ApiRequestContext ctx) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        boolean cc = cloudManager != null && cloudManager.isControlConnected();
+        if (cloudManager != null) {
+            cloudManager.requestStatus();
+            try {
+                Thread.sleep(700);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        String snap = executor.containerSnapshot();
+        StringBuilder sb = new StringBuilder(2048);
+        sb.append("{\"code\":200,\"msg\":\"ok\",\"data\":{")
+                .append("\"controlConnected\":").append(cc)
+                .append(",\"snapshot\":").append(snap)
+                .append(",\"instances\":[");
+        boolean first = true;
+        if (cloudManager != null) {
+            for (com.github.cocosoys.mc.webgame.web.cloud.CloudSession s : cloudManager.allSessions()) {
+                com.github.cocosoys.mc.webgame.control.InstanceHandle h = s.getInstance();
+                if (!first) {
+                    sb.append(',');
+                }
+                first = false;
+                sb.append("{\"id\":\"").append(esc(s.getId()))
+                        .append("\",\"user\":\"").append(esc(s.getUsername()))
+                        .append("\",\"deviceIp\":\"").append(esc(s.getDeviceIp()))
+                        .append("\",\"cores\":").append(s.getCores())
+                        .append(",\"xmx\":\"").append(esc(s.getXmx()))
+                        .append("\",\"fps\":").append(s.getFps())
+                        .append(",\"profileId\":\"").append(esc(s.getProfileId()))
+                        .append("\",\"clientId\":\"").append(esc(s.getClientId()))
+                        .append("\",\"closed\":").append(s.isClosed())
+                        .append(",\"lastActive\":").append(s.getLastActivity());
+                if (h != null) {
+                    sb.append(",\"instanceId\":\"").append(esc(h.getInstanceId()))
+                            .append("\",\"state\":\"").append(esc(h.getState()))
+                            .append("\",\"display\":\"").append(esc(h.getDisplay()))
+                            .append(",\"windowTitle\":\"").append(esc(h.getWindowTitle()))
+                            .append("\",\"createdAt\":").append(h.getCreatedAt())
+                            .append(",\"readyAt\":").append(h.getReadyAt());
+                }
+                sb.append("}");
+            }
+        }
+        sb.append("]}}");
+        return sb.toString();
+    }
+
+    /**
+     * 踢出/重启实例：按用户名释放云游戏会话（KILL 实例 + 释放设备名额）。
+     * 前端"重启实例"语义 = 踢出并释放，用户重连后由执行面重建全新实例。
+     */
+    @ApiPublic
+    @PostMapping(value = "/admin/containers/kick", path = "/admin/containers/kick")
+    @ApiName("管理员踢出/重启实例")
+    public String containerKick(ApiRequestContext ctx, @RequestBody String body) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        String user = jsonField(body, "user");
+        String reason = jsonField(body, "reason");
+        if (user == null || user.trim().isEmpty()) {
+            return "{\"code\":400,\"msg\":\"缺少 user 参数\",\"data\":null}";
+        }
+        boolean kicked = cloudManager != null && cloudManager.kickUser(user.trim(), reason);
+        return kicked
+                ? "{\"code\":200,\"msg\":\"ok\",\"data\":{\"kicked\":\"" + esc(user.trim()) + "\"}}"
+                : "{\"code\":404,\"msg\":\"未找到该用户的活跃云会话\",\"data\":null}";
+    }
+
+    /**
+     * 重启执行面守护进程：杀守护 + 幂等自启（不杀实例）。
+     * 插件管控连接由 ControlClient 自动重连。
+     */
+    @ApiPublic
+    @PostMapping(value = "/admin/exec-side/restart", path = "/admin/exec-side/restart")
+    @ApiName("管理员重启执行面守护")
+    public String execSideRestart(ApiRequestContext ctx) {
+        String deny = denyIfNotOp(ctx);
+        if (deny != null) {
+            return deny;
+        }
+        return executor.restartControlClient();
     }
 
     // ================= 终端 =================

@@ -1,9 +1,10 @@
-package com.github.cocosoys.mc.webgame.web.cloud;
+package com.github.cocosoys.mc.webgame.spring;
 
 import com.github.cocosoys.mc.soyshttpovermc.annotations.ApiName;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.ApiPublic;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.GetMapping;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionManager;
 
 /**
  * 设备选择页容量接口：GET /api/plugins/WebGame/devices/capacity
@@ -23,6 +24,39 @@ public final class CloudCapacityController {
     public CloudCapacityController(WebGameConfig config, CloudSessionManager manager) {
         this.config = config;
         this.manager = manager;
+    }
+
+    @GetMapping(value = "/containers/status", path = "/containers/status")
+    @ApiName("云游戏容器可用性")
+    @ApiPublic
+    public String status() {
+        boolean cc = manager.isControlConnected();
+        int used = manager.usedInstances();
+        int max = config.computeMaxInstances();
+        StringBuilder sb = new StringBuilder(512);
+        sb.append("{\"code\":200,\"msg\":\"ok\",\"data\":{")
+                .append("\"controlConnected\":").append(cc)
+                .append(",\"used\":").append(used)
+                .append(",\"max\":").append(max)
+                .append(",\"available\":").append(cc && used < max)
+                .append(",\"instances\":[");
+        boolean first = true;
+        for (com.github.cocosoys.mc.webgame.web.cloud.CloudSession s : manager.allSessions()) {
+            if (s.isClosed()) {
+                continue;
+            }
+            com.github.cocosoys.mc.webgame.control.InstanceHandle h = s.getInstance();
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            sb.append("{\"user\":\"").append(esc(s.getUsername()))
+                    .append("\",\"state\":\"").append(esc(h == null ? "unknown" : h.getState()))
+                    .append("\",\"display\":\"").append(esc(h == null ? "" : h.getDisplay()))
+                    .append("\"}");
+        }
+        sb.append("]}}");
+        return sb.toString();
     }
 
     @GetMapping(value = "/devices/capacity", path = "/devices/capacity")

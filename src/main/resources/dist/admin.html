@@ -77,6 +77,28 @@
   #javaBtn { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 6px 14px; cursor: pointer; font-family: inherit; }
   #javaBtn:hover { background: #122712; }
   #setMsg { font-size: 12px; color: #5fa86a; margin-top: 8px; }
+  /* ===== 容器状态 ===== */
+  #ctCards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .ct-card { flex: 1 1 200px; min-width: 0; background: #0c120c; border: 1px solid #1d3a1d; padding: 10px 12px; }
+  .ct-card h3 { font-size: 12px; color: #5fa86a; margin-bottom: 6px; }
+  .ct-card .kv { font-size: 12px; color: #7dff8a; line-height: 1.8; word-break: break-all; }
+  .ct-card .kv b { color: #d6ffda; }
+  .ct-ok { color: #4ade5e; }
+  .ct-bad { color: #ff7a7a; }
+  #ctInstances { flex: 1; overflow-y: auto; background: #040604; border: 1px solid #1d3a1d; font-size: 12px; min-height: 0; }
+  #ctInstances table { width: 100%; border-collapse: collapse; }
+  #ctInstances td, #ctInstances th { padding: 5px 10px; text-align: left; border-bottom: 1px solid #0f1a0f; white-space: nowrap; }
+  #ctInstances th { color: #5fa86a; font-weight: normal; font-size: 12px; }
+  #ctInstances .st-ready { color: #4ade5e; }
+  #ctInstances .st-starting, #ctInstances .st-spawning { color: #ffd97a; }
+  #ctInstances .st-stopped, #ctInstances .st-failed { color: #ff7a7a; }
+  #ctBar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  #ctBar button { background: #0e1a0e; color: #7dff8a; border: 1px solid #1d3a1d; padding: 5px 14px; cursor: pointer; font-family: inherit; font-size: 12px; }
+  #ctBar button:hover { background: #122712; }
+  #ctBar .danger { color: #ff9a7a; border-color: #3a1d1d; }
+  #ctBar .danger:hover { background: #1a0e0e; }
+  #ctMsg { font-size: 12px; color: #5fa86a; margin-bottom: 6px; }
+  #ctRefresh { color: #7db9ff; }
   #banner { display: none; background: #1a0d0d; border: 1px solid #5a2020; color: #ff9a9a;
     padding: 8px 12px; font-size: 12px; }
 </style>
@@ -88,6 +110,7 @@
   <div class="menu">
     <button id="mTerm" class="active" onclick="showPanel('term')">终端</button>
     <button id="mFs" onclick="showPanel('fs')">文件管理</button>
+    <button id="mCt" onclick="showPanel('ct')">容器状态</button>
     <button id="mSet" onclick="showPanel('set')">系统设置</button>
   </div>
 </div>
@@ -143,6 +166,38 @@
     </div>
     <div id="setMsg"></div>
   </div>
+  <!-- 容器状态 -->
+  <div class="panel" id="panel-ct">
+    <div class="panel-head">容器状态 — 执行面/容器实例运行状态与管控</div>
+    <div id="ctBar">
+      <button id="ctRefresh" onclick="ctLoad()">刷新状态</button>
+      <button class="danger" onclick="ctRestartExec()">重启执行面守护</button>
+      <span id="ctMsg"></span>
+    </div>
+    <div id="ctCards">
+      <div class="ct-card">
+        <h3>执行面（管控连接）</h3>
+        <div class="kv" id="ctControl">加载中...</div>
+      </div>
+      <div class="ct-card">
+        <h3>机器资源</h3>
+        <div class="kv" id="ctMachine">加载中...</div>
+      </div>
+      <div class="ct-card">
+        <h3>实例进程</h3>
+        <div class="kv" id="ctProcs">加载中...</div>
+      </div>
+    </div>
+    <div id="ctInstances">
+      <table>
+        <tr>
+          <th>会话/实例</th><th>玩家</th><th>状态</th><th>Display</th>
+          <th>规格</th><th>客户端</th><th>内存</th><th>操作</th>
+        </tr>
+        <tbody id="ctRows"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- 记事本编辑弹窗 -->
@@ -175,6 +230,10 @@
 
   function jfetch(url, opts){
     opts = opts || {};
+    opts.headers = opts.headers || {};
+    var t = null;
+    try { t = localStorage.getItem('soys_token'); } catch(e){}
+    if (t) { opts.headers['Authorization'] = 'Bearer ' + t; }
     return fetch(url, opts).then(function(r){
       return r.text().then(function(t){
         var body=null; try{ body=JSON.parse(t); }catch(e){}
@@ -475,18 +534,125 @@
   };
 
   window.showPanel = function(name){
-    var map = { term: 'panel-term', fs: 'panel-fs', set: 'panel-set' };
+    var map = { term: 'panel-term', fs: 'panel-fs', ct: 'panel-ct', set: 'panel-set' };
     var panels = document.querySelectorAll('.panel');
     for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
     var p = document.getElementById(map[name]);
     if (p) p.classList.add('active');
-    var btns = { term: 'mTerm', fs: 'mFs', set: 'mSet' };
+    var btns = { term: 'mTerm', fs: 'mFs', ct: 'mCt', set: 'mSet' };
     for (var k in btns) {
       var b = document.getElementById(btns[k]);
       if (b) b.className = (k === name) ? 'active' : '';
     }
     if (name === 'fs') fsList();
+    if (name === 'ct') ctLoad();
   };
+
+  // ===== 容器状态 =====
+  var CT_REFRESH_MS = 8000, ctTimer = null;
+
+  window.ctLoad = function(){
+    ctMsg('刷新中...', '');
+    jfetch('/api/admin/containers').then(function(r){
+      if (bizCode(r) !== 200) { ctMsg('加载失败: ' + bizMsg(r), 'err'); return; }
+      var d = (r.body && r.body.data && r.body.data.data) || {};
+      renderCt(d);
+      ctMsg('更新于 ' + new Date().toLocaleTimeString(), '');
+      if (ctTimer) clearInterval(ctTimer);
+      ctTimer = setInterval(function(){ jfetch('/api/admin/containers').then(ctRenderOnly); }, CT_REFRESH_MS);
+    }).catch(function(e){ ctMsg('请求失败: ' + e, 'err'); });
+  };
+
+  function ctRenderOnly(r){
+    if (bizCode(r) === 200) renderCt((r.body && r.body.data && r.body.data.data) || {});
+  }
+
+  function renderCt(d){
+    // 执行面
+    var ctrl = d.controlConnected;
+    var ccPid = (d.snapshot && d.snapshot.ccPid) || 0;
+    document.getElementById('ctControl').innerHTML =
+      '管控连接: <b class="' + (ctrl ? 'ct-ok' : 'ct-bad') + '">' + (ctrl ? '在线' : '离线') + '</b><br>'
+      + '执行面守护 PID: <b>' + (ccPid > 0 ? ccPid : '未运行') + '</b>';
+    // 机器资源
+    var mem = d.snapshot && d.snapshot.mem;
+    var disk = d.snapshot && d.snapshot.disk;
+    var load = d.snapshot ? (d.snapshot.load || '') : '';
+    var mHtml = (mem ? ('内存: <b>' + mem.usedMb + '/' + mem.totalMb + ' MB</b><br>') : '')
+      + (disk ? ('磁盘: <b>' + disk.used + '/' + disk.size + '</b> (' + disk.usePct + ')<br>') : '')
+      + (load ? ('负载(1/5/15): <b>' + load.trim().split(/\s+/).slice(0,3).join(' / ') + '</b>') : '');
+    document.getElementById('ctMachine').innerHTML = mHtml || '无数据';
+    // 实例进程摘要（路线 C：Xvfb 虚拟屏 + FFmpeg 推流 + MC）
+    var procs = (d.snapshot && d.snapshot.procs) || [];
+    var xv = 0, ff = 0, mc = 0;
+    for (var i = 0; i < procs.length; i++) {
+      if (procs[i].role === 'Xvfb') xv++;
+      else if (procs[i].role === 'ffmpeg') ff++;
+      else if (procs[i].role === 'mc' || procs[i].role === 'proc') mc++;
+    }
+    document.getElementById('ctProcs').innerHTML =
+      'Xvfb: <b>' + xv + '</b> · FFmpeg 推流: <b>' + ff + '</b>';
+    // 实例表格
+    var rows = d.instances || [];
+    var tb = document.getElementById('ctRows');
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var it = rows[i];
+      var st = it.state || (it.closed ? 'closed' : 'unknown');
+      var stCls = st === 'ready' ? 'st-ready' : ((st === 'starting' || st === 'spawning') ? 'st-starting' : 'st-stopped');
+      // 匹配采集进程内存
+      var rss = '';
+      if (it.display && d.snapshot && d.snapshot.procs) {
+        for (var j = 0; j < d.snapshot.procs.length; j++) {
+          if (d.snapshot.procs[j].display === it.display && d.snapshot.procs[j].role === 'Xvfb') {
+            rss = d.snapshot.procs[j].rssMb + 'MB';
+            break;
+          }
+        }
+      }
+      html += '<tr>'
+        + '<td>' + ctEsc(it.id) + ' / ' + ctEsc(it.instanceId || '-') + '</td>'
+        + '<td>' + ctEsc(it.user) + '</td>'
+        + '<td class="' + stCls + '">' + ctEsc(st) + '</td>'
+        + '<td>' + ctEsc(it.display || '-') + '</td>'
+        + '<td>' + (it.cores || '-') + '核 / ' + ctEsc(it.xmx || '-') + ' / ' + (it.fps || '-') + 'fps</td>'
+        + '<td>' + ctEsc(it.clientId || '-') + '</td>'
+        + '<td>' + (rss || '-') + '</td>'
+        + '<td><span class="op" style="color:#ff9a7a;" onclick="ctKick(\'' + ctEsc(it.user) + '\')">[踢出]</span></td>'
+        + '</tr>';
+    }
+    tb.innerHTML = html || '<tr><td colspan="9" style="color:#5fa86a;">当前无活跃云会话</td></tr>';
+  }
+
+  window.ctKick = function(user){
+    if (!confirm('确认踢出玩家 ' + user + '？将释放其容器实例，玩家需重新连接进入。')) return;
+    jfetch('/api/admin/containers/kick', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ user: user, reason: '管理员从控制台踢出' }) }).then(function(r){
+      ctMsg(bizCode(r) === 200 ? ('已踢出 ' + user) : ('操作失败: ' + bizMsg(r)), bizCode(r) === 200 ? '' : 'err');
+      ctLoad();
+    });
+  };
+
+  window.ctRestartExec = function(){
+    if (!confirm('确认重启执行面守护进程（control_client.py）？\n运行中的游戏实例不受影响，管控连接将自动重连。')) return;
+    jfetch('/api/admin/exec-side/restart', { method:'POST', headers:{'Content-Type':'application/json'} }).then(function(r){
+      var d = r.body && r.body.data;
+      if (d && d.pid) {
+        ctMsg('执行面守护已重启，新 PID=' + d.pid, '');
+      } else if (d && d.error) {
+        ctMsg('重启失败: ' + d.error, 'err');
+      } else {
+        ctMsg('响应异常', 'err');
+      }
+      ctLoad();
+    }).catch(function(e){ ctMsg('请求失败: ' + e, 'err'); });
+  };
+
+  function ctMsg(t, cls){ var m = document.getElementById('ctMsg'); m.textContent = t; m.className = cls === 'err' ? 'ct-bad' : ''; }
+
+  function ctEsc(s){
+    return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 
   checkAuth();
   setInterval(function(){ if (document.getElementById('whoLine').textContent.indexOf('未认证') < 0) checkAuth(); }, 30000);

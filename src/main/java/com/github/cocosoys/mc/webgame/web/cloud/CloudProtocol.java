@@ -37,22 +37,24 @@ import java.util.List;
 public final class CloudProtocol {
 
     // ---------- 下行类型 ----------
-    public static final int TYPE_CONFIG = 0x01;   // 配置帧（SPS/PPS/宽高/帧率，v2 媒体通道用）
-    public static final int TYPE_VIDEO = 0x02;    // 视频帧（Annex-B，v2 媒体通道用）
+    public static final int TYPE_CONFIG = 0x01;   // 配置帧（SPS/PPS/宽高/帧率）
+    public static final int TYPE_VIDEO = 0x02;    // 视频帧（Annex-B）
     public static final int TYPE_PING = 0x03;     // 服务器心跳
     public static final int TYPE_ERROR = 0x05;    // 服务器错误提示
-    public static final int TYPE_KASM_URL = 0x06; // 采集端点 URL（路线 C v1：信令下发 KasmVNC 地址）
+    public static final int TYPE_READY = 0x06;    // 实例就绪信令（无载荷）：推流将开始
+    public static final int TYPE_SESSION = 0x07;  // 会话信令：[u16 len][utf8 sessionId]（前端持久化用于断线恢复）
 
     // ---------- 上行类型 ----------
     public static final int TYPE_PONG = 0x04;     // 浏览器心跳回执
     public static final int TYPE_INPUT = 0x10;    // 批量输入事件
 
     // ---------- 输入事件子类型 ----------
-    public static final int EVENT_MOUSE_MOVE = 1;
+    public static final int EVENT_MOUSE_MOVE = 1;  // 相对移动（pointer lock 中）
     public static final int EVENT_MOUSE_BUTTON = 2;
     public static final int EVENT_KEY = 3;
     public static final int EVENT_WHEEL = 4;
     public static final int EVENT_MOUSE_CLICK = 5; // 绝对坐标点击（GUI 交互，非 pointer lock）
+    public static final int EVENT_MOUSE_ABS = 6;   // 绝对移动（GUI 交互，非 pointer lock）
 
     private CloudProtocol() {
     }
@@ -91,6 +93,14 @@ public final class CloudProtocol {
         return bos.toByteArray();
     }
 
+    /** PONG 回执：计数器（浏览器收到后刷新 lastPong，防止 20s 心跳超时主动断连）。 */
+    public static byte[] buildPong(long counter) {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(5);
+        bos.write(TYPE_PONG);
+        writeU32(bos, (int) (counter & 0xFFFFFFFFL));
+        return bos.toByteArray();
+    }
+
     /** 错误提示：utf8 消息。 */
     public static byte[] buildError(String msg) {
         byte[] m = msg == null ? new byte[0] : msg.getBytes(StandardCharsets.UTF_8);
@@ -101,12 +111,18 @@ public final class CloudProtocol {
         return bos.toByteArray();
     }
 
-    /** KASM_URL 信令：采集端点地址（utf8 URL），浏览器收到后跳转。 */
-    public static byte[] buildKasmUrl(String url) {
-        byte[] m = url == null ? new byte[0] : url.getBytes(StandardCharsets.UTF_8);
-        ByteArrayOutputStream bos = new ByteArrayOutputStream(1 + m.length);
-        bos.write(TYPE_KASM_URL);
-        bos.write(m, 0, m.length);
+    /** 实例就绪信令：无载荷（推流即将开始，浏览器应准备 WebCodecs 解码器）。 */
+    public static byte[] buildReady() {
+        return new byte[]{TYPE_READY};
+    }
+
+    /** 会话信令：下发真实 sessionId（前端持久化，断线/刷新后凭此恢复同一实例）。 */
+    public static byte[] buildSession(String sessionId) {
+        byte[] s = sessionId == null ? new byte[0] : sessionId.getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(3 + s.length);
+        bos.write(TYPE_SESSION);
+        writeU16(bos, s.length);
+        bos.write(s, 0, s.length);
         return bos.toByteArray();
     }
 
@@ -196,6 +212,17 @@ public final class CloudProtocol {
                     boolean pressed = payload[pos + 9] != 0;
                     pos += 10;
                     events.add(new InputEvent(type, cx, cy, button, pressed, null, 0));
+                    break;
+                }
+                case EVENT_MOUSE_ABS: {
+                    if (pos + 8 > payload.length) {
+                        return events;
+                    }
+                    // [i32 x][i32 y]（视频像素坐标，y 向下）
+                    int ax = readI32(payload, pos);
+                    int ay = readI32(payload, pos + 4);
+                    pos += 8;
+                    events.add(new InputEvent(type, ax, ay, 0, false, null, 0));
                     break;
                 }
                 default:

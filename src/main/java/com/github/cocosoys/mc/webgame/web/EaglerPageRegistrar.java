@@ -27,6 +27,9 @@ public final class EaglerPageRegistrar {
     /** 客户端 HTML 内当前第三方服务器地址（注入的替换目标） */
     private static final String OLD_ADDR = "wss://mc.adderall.ir";
 
+    /** Eagler 客户端资源目录（HTML 与 bootstrap 脚本同目录，按版本分层；用下划线替代点号避免特殊字符路径问题） */
+    private static final String EAGLER_DIR = "mc/eagler/version/1_12_2/";
+
     private final JavaPlugin plugin;
     private final WebGameConfig config;
     private final SoysHttpOverMcApi api;
@@ -44,7 +47,7 @@ public final class EaglerPageRegistrar {
             throw new IllegalStateException("无法创建 dist 目录: " + distDir);
         }
 
-        byte[] raw = readJarResource(config.getHtmlFile());
+        byte[] raw = readJarResource(EAGLER_DIR + config.getHtmlFile());
         byte[] injected = injectAddr(raw);
         if (config.isAutoJoinEnabled()) {
             injected = injectJoinServer(injected);
@@ -64,7 +67,7 @@ public final class EaglerPageRegistrar {
         // 由 HTML 内 <script src="/web/plugins/WebGame/eagler/eagler-bootstrap.js" defer> 前端按需加载
         // （defer 保证页面解析完成后才执行，运行时机受控；JS 本体非后端注入）。
         String pagePath = config.getPagePath();
-        byte[] bootstrapJs = readJarResource("eagler-bootstrap.js");
+        byte[] bootstrapJs = readJarResource(EAGLER_DIR + "eagler-bootstrap.js");
         api.getWebPage().registerPage(plugin, pagePath + "eagler-bootstrap.js", "GET", bootstrapJs,
                 "application/javascript; charset=utf-8", true, "WebGame bootstrap 脚本", null);
         plugin.getLogger().info("Eaglercraft bootstrap 脚本已登记到 " + WebGameConfig.WEB_PLUGIN_PREFIX
@@ -73,6 +76,13 @@ public final class EaglerPageRegistrar {
         api.getWebPage().registerPage(plugin, pagePath, "GET", injected, "text/html; charset=utf-8",
                 true, "Eaglercraft 1.12.2 网页客户端", null);
         plugin.getLogger().info("Eaglercraft 页面已登记到 " + config.getPageFullUrl() + " （" + injected.length + " bytes）");
+        // 无尾斜杠别名：主插件目录索引兜底只认 .../index，无斜杠请求会 404，冗余登记同内容
+        if (pagePath.length() > 1 && pagePath.endsWith("/")) {
+            String noSlash = pagePath.substring(0, pagePath.length() - 1);
+            api.getWebPage().registerPage(plugin, noSlash, "GET", injected, "text/html; charset=utf-8",
+                    true, "Eaglercraft 1.12.2 网页客户端", null);
+            plugin.getLogger().info("Eaglercraft 页面冗余登记到 " + WebGameConfig.WEB_PLUGIN_PREFIX + noSlash);
+        }
     }
 
     private byte[] readJarResource(String name) throws Exception {
@@ -157,7 +167,7 @@ public final class EaglerPageRegistrar {
      * {@code <script src="/eagler-bootstrap.js" defer></script>}。
      *
      * <p><b>v4 变更</b>：自动进服引导 JS 从「Java 字符串内嵌 + 字节级注入 HTML」
-     * 改为独立文件 {@code dist/eagler-bootstrap.js}，随插件 jar 打包，并由 SOYS
+     * 改为独立文件 {@code dist/mc/eagler/version/1_12_2/eagler-bootstrap.js}，随插件 jar 打包，并由 SOYS
      * 以 {@code /eagler-bootstrap.js} 路由托管。页面仅注入一行 script 引用，
      * 浏览器在 HTML 解析完成后（defer）才加载执行——运行时机由浏览器按需控制，
      * 不再在页面解析到内嵌 script 时立即执行，避免玩家长时间挂机在用户名输入界面时
@@ -222,7 +232,7 @@ public final class EaglerPageRegistrar {
 
     /**
      * v4：自动进服引导 JS 已从本常量内嵌改为独立文件
-     * {@code src/main/resources/dist/eagler-bootstrap.js}（随 jar 打包，
+     * {@code src/main/resources/dist/mc/eagler/version/1_12_2/eagler-bootstrap.js}（随 jar 打包，
      * 由 {@link #injectBootstrapScriptTag(byte[])} 注入的
      * {@code <script src="/eagler-bootstrap.js" defer>} 按需加载执行）。
      */

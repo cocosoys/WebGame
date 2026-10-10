@@ -42,14 +42,15 @@ auto-join:
 # 连接后插件按需下发 SPAWN/KILL/STATUS/CONFIG，执行面回报 READY/STOPPED/STATUS。
 # 断线自动重连（指数退避，最长 30s）。
 control:
-  # 控制客户端监听地址（WSL2 mirrored 网络下 127.0.0.1 与 Windows 互通）
+  # 控制客户端监听地址（执行面所在主机；127.0.0.1 为同机回环）
   host: "127.0.0.1"
-  # 管控契约 TCP 端口（与 MC 25574、KasmVNC 8542 互不冲突）
-  port: 25576
-# 云游戏通道（路线 C：插件控制面 + 执行面 KasmVNC）。
-# 信令走同端口 25574 的 WS /cloud：浏览器连入 → 插件限流 + 下发 SPAWN →
-# 执行面起实例 → READY 上报 → 插件回 KasmVNC 采集端点 URL → 浏览器跳转直连（v1）；
-# S2 起由插件 25574 反代（/kasm），浏览器不再直连执行面。
+  # 管控契约 TCP 端口（与主服 HTTP 25574 互不冲突）
+  port: 25578
+# 云游戏通道（v0.5 定案：插件 + 镜像两件套，零额外安装）。
+# 插件为控制面 + ImageLauncher：从镜像仓库扫描镜像（image.json），进程级直接 spawn
+# 镜像内 MC 客户端（复用 GameInstance/EncoderProcess 基建），视频帧经 25574 同一
+# WS /cloud 下发浏览器，键鼠输入经 WS 上行 → javaagent 注入。
+# 已废弃路线：WSL/Xvfb/noVNC（已卸载清除）、VirtualBox+Win11 VM（已卸载清除）。
 cloud:
   enabled: true
   # 云游戏页面挂载路径（相对 /web/plugins/WebGame/ 的子路径）
@@ -59,16 +60,42 @@ cloud:
   device-path: "/devices/"
   # 信令 WebSocket 路径（WebGame 自接管，先于 SOYS 分流）
   ws-path: "/cloud"
+  # 镜像仓库（v0.5 定案：用户安装 = 装插件 + 下载镜像解压到 dir 指向目录）。
+  # 镜像目录结构见 docs/GFN-Windows-Architecture.md §11.2（image.json + runtime + client + tools）。
+  images:
+    # 镜像仓库目录（相对服务器根；默认 server-cloud/images）
+    dir: "server-cloud/images"
+    # 默认镜像 id（缺省取扫描第一项）
+    default: ""
+  # 执行后端（ADR-12：远程执行面仅预留接口，暂不实现）。
+  # local（默认）= 插件内直接 spawn（GameInstance + EncoderProcess + 输入注入 + 隔离加固）
+  # remote（预留 S5）= 执行面部署在另一台跨局域网服务器（CloudAgent），经 TLS+Token 管控通道
+  executor: "local"
+  # 远程执行面列表（S5 预留，暂不生效；CloudAgent 主动连主服 A）：
+  # remote-executors:
+  #   - host: "执行面B地址"
+  #     port: 25578
+  #     token: "预共享密钥（TLS 通道认证）"
   # 传输模式：ws（v1 同端口信令）| webrtc（v2 预留，分离端口）
   transport: "ws"
   # v2 预留：WebRTC/UDP 媒体端口段（v1 不启用，留空）
   udp-port-range: ""
+  # FFmpeg 路径（S2 采集编码）：留空自动探测 PATH/镜像 tools/ffmpeg.exe；
+  # 镜像自带时也可在 image.json 中指定，无需此处配置
+  ffmpeg-path: ""
+  # 采集源：auto（Windows 回落 gdigrab）| gdigrab（桌面/窗口）| window:<窗口标题> | none（禁用）
+  capture: "auto"
+  # 编码 GOP（关键帧间隔，帧）：越小关键帧越密、中途加入恢复越快
+  gop-frames: 60
+  # 输入注入方式（S2 定案：agent 默认——javaagent 进程内注入 LWJGL 事件队列，
+  # 光标零移动、焦点零依赖；robot 仅调试用（移动宿主真实光标）；none 禁用）
+  input-inject: "agent"
   # 心跳：服务器下发间隔秒、失活判定秒（实例启动约 90s，失活窗口须覆盖）
   ping-interval-seconds: 2
   idle-timeout-seconds: 120
   # 容量核算（静态 min：按最耗资源型号算全局上限）：
   # max = min(⌊total-cores/最大核⌋, ⌊total-memory-mb/(最大xmx+1024)⌋, max-instances)
-  # total-memory-mb 须与执行面可用内存一致（WSL 12G ≈ 11264MiB）
+  # total-memory-mb 须与执行面可用内存一致
   capacity:
     # 容量口径（用户拍板 2026-09-15）：静态按型号分别算
     #   型号上限 = min(⌊总核/型号核⌋, ⌊总内存/型号堆⌋, max-instances)
@@ -121,8 +148,9 @@ cloud:
       desc: "高分辨率画面（2核4G）"
   # 实例参数（经管控契约随 SPAWN 下发给执行面；本机不再直接 spawn 客户端进程）
   client:
-    # 执行面侧客户端根目录（含 .minecraft；libraries/assets/versions/mods 均在此）
-    base-dir: "/home/webgame/mc"
+    # 执行面侧客户端根目录（含 .minecraft；libraries/assets/versions/mods 均在此）。
+    # 执行面已从 WSL 移除，路径留空待 GFN 方案定案
+    base-dir: ""
     # 版本 id（versions 目录下）
     version: "1.12.2-Forge_14.23.5.2864"
     # 自动连服地址/端口（端口 0 = 跟随 server-port）
@@ -130,8 +158,35 @@ cloud:
     port: 0
     # JVM 内存（2核4G 配额：每实例 MC 堆 4G）
     xmx: "4G"
+  # 多客户端版本注册表（云会话按容器内路径选定客户端 + 对应 Java 启动版本）。
+  # 云页面 URL 参数 ?client=<id> 选择条目；缺省取 clients 第一项。
+  # 兼容：未配置 clients 时回退上方 cloud.client 单条（launch-style=legacy）。
+  clients:
+    - id: "1.12.2"
+      base-dir: ""
+      version: "1.12.2-Forge_14.23.5.2864"
+      # 容器内 JDK 安装根（Java 二进制 = $java-home/bin/java）；留空则回退执行面全局 JAVA_HOME
+      java-home: ""
+      # 启动形态：legacy（1.12.x launchwrapper 模板）| bootstrap（1.20+ 模块化 BootstrapLauncher 模板）
+      launch-style: "legacy"
+      server: "127.0.0.1"
+      port: 0
+      enabled: true
+    - id: "1.20.1"
+      base-dir: ""
+      version: "1.20.1-forge-47.3.0"
+      java-home: ""
+      launch-style: "bootstrap"
+      server: "127.0.0.1"
+      # 1.20.1 测试服务器端口（25565；0 = 跟随 server-port 则连 1.12.2 主服）
+      port: 25565
+      enabled: true
   # 编码参数（下发执行面）
   fps: 30
   bitrate-kbps: 4000
-  # 容器分辨率（Xvfb/MC 全屏渲染尺寸）：浏览器可用 ?res=WxH 或 ?w=&h= 覆盖（单次会话）
+  # 容器分辨率（执行面渲染尺寸）：浏览器可用 ?res=WxH 或 ?w=&h= 覆盖（单次会话）
   scale: "1280x720"
+  # 断线恢复宽限期（秒）：浏览器掉线后实例保留时长，超时未恢复则销毁释放
+  resume-grace-seconds: 60
+
+

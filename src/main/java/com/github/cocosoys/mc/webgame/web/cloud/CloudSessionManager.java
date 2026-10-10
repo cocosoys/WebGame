@@ -2,6 +2,7 @@ package com.github.cocosoys.mc.webgame.web.cloud;
 
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.control.ControlClient;
+import com.github.cocosoys.mc.webgame.control.ControlMessage;
 import com.github.cocosoys.mc.webgame.control.ControlProtocol;
 import com.github.cocosoys.mc.webgame.control.InstanceHandle;
 import com.github.cocosoys.mc.webgame.control.InstanceRegistry;
@@ -22,9 +23,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>调度：Bukkit 同步 tick 每 1 秒运行——下发心跳（间隔可配）、检查失活超时
  * （默认 15s 无上行则销毁）。实例生命周期由 {@link InstanceRegistry} 依据
- * 执行面上报驱动（READY → 下发 KasmVNC 端点；STOPPED/FAILED → 关闭会话）。</p>
+ * 执行面上报驱动（READY → 推流就绪，帧经管控通道上行后转发；STOPPED/FAILED → 关闭会话）。</p>
  */
-public final class CloudSessionManager implements InstanceRegistry.Listener {
+public final class CloudSessionManager implements InstanceRegistry.Listener, ControlClient.Listener {
 
     private final JavaPlugin plugin;
     private final WebGameConfig config;
@@ -36,6 +37,11 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
     private final Map<String, CloudSession> sessions = new ConcurrentHashMap<>();
     private final AtomicInteger sessionSeq = new AtomicInteger();
     private final AtomicLong pingCounter = new AtomicLong();
+
+    /** 执行后端（v0.5 定案：默认 local 插件内 spawn；remote 预留 S5）。 */
+    private volatile ExecutorBackend backend;
+    /** 镜像仓库（local 执行面选择镜像用）。 */
+    private volatile CloudImageManager imageManager;
 
     private int taskId = -1;
 
@@ -52,6 +58,19 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
     /** 云游戏封禁库（管理指令 /soyshttp cloudban / cloudunban 读写）。 */
     public BanStore getBanStore() {
         return banStore;
+    }
+
+    /** 装配执行后端（local=插件内 spawn；remote=管控契约，S5 预留）。 */
+    public void setBackend(ExecutorBackend backend) {
+        this.backend = backend;
+        if (backend != null) {
+            plugin.getLogger().info("WebGame 云游戏执行后端已装配：" + backend.type());
+        }
+    }
+
+    /** 装配镜像仓库（local 执行面按会话 clientId / 默认镜像选择）。 */
+    public void setImageManager(CloudImageManager imageManager) {
+        this.imageManager = imageManager;
     }
 
     JavaPlugin plugin() {
@@ -86,8 +105,20 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
             }
         }
         sessions.clear();
+        // 回收全部实例：本地执行后端统一清理（进程树 + 编码器 + 注入器），
+        // 管控契约路径逐实例下发 KILL
+        if (backend != null) {
+            try {
+                backend.closeAll();
+            } catch (Throwable ignored) {
+            }
+        }
         for (InstanceHandle h : registry.all()) {
-            sendKill(h);
+            if (backend != null) {
+                backend.kill(h.getInstanceId());
+            } else {
+                sendKill(h);
+            }
         }
     }
 
@@ -104,9 +135,11 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
      * @param xmx       设备型号 JVM 堆（空 = 服务端 config）
      * @param fps       设备型号帧率（0 = 服务端 config）
      * @param profileId 设备型号 id（预置 id / custom；仅记录）
+     * @param clientId  客户端版本条目 id（cloud.clients；空 = 服务端默认 clients[0]）
      */
     public CloudSession create(io.netty.channel.ChannelHandlerContext ctx, String username, String deviceIp,
-                               int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId) {
+                               int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId,
+                               String clientId) {
         // 封禁检查：WebGame 云游戏封禁库（指令 cloudban 维护）
         if (banStore.isBanned(username)) {
             plugin.getLogger().info("Cloud 封禁拒绝 user=" + username + " ip=" + deviceIp
@@ -124,18 +157,29 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
             plugin.getLogger().info("Cloud 同名拒绝 user=" + username + " 该玩家已在线");
             return null;
         }
+        // 同名云会话去重：同 user 已有活跃/悬挂会话则拒绝新建（防多实例同 UUID 互踢、
+        // display 争抢导致的 SPAWN 循环；同 sid 重连走 resume 不受影响）
+        for (CloudSession s : sessions.values()) {
+            if (!s.isClosed() && s.getUsername().equalsIgnoreCase(username)) {
+                gateway.releaseDeviceSlot(deviceIp);
+                plugin.getLogger().info("Cloud 同名会话拒绝 user=" + username + " 已有活跃会话 "
+                        + s.getId());
+                return null;
+            }
+        }
         String id = "c" + sessionSeq.incrementAndGet();
         CloudSession session = new CloudSession(plugin, this, id, username, deviceIp, ctx,
-                reqWidth, reqHeight, cores, xmx, fps, profileId);
+                reqWidth, reqHeight, cores, xmx, fps, profileId, clientId);
         sessions.put(id, session);
-        // 登记实例黑盒 + 下发 SPAWN（执行面异步起 Xvnc + Forge 客户端）
+        // 登记实例黑盒 + 下发 SPAWN（执行面异步起客户端 + 采集推流）
         String instanceId = "i" + id.substring(1);
         InstanceHandle handle = registry.register(instanceId, username, deviceIp);
         session.setInstance(handle);
         sendSpawn(handle);
         plugin.getLogger().info("Cloud 会话创建 id=" + id + " user=" + username + " ip=" + deviceIp
                 + " instance=" + instanceId + " cores=" + session.getCores()
-                + " xmx=" + session.getXmx() + " profile=" + session.getProfileId());
+                + " xmx=" + session.getXmx() + " profile=" + session.getProfileId()
+                + " client=" + (clientId == null || clientId.isEmpty() ? "(default)" : clientId));
         return session;
     }
 
@@ -165,8 +209,8 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
     /**
      * 尝试恢复会话（重连机制）：凭 sessionId 复用已存在（含悬挂）会话的实例，
      * 换绑新连接并**幂等重发 SPAWN**（实例活着由执行面复用回 READY；实例已死
-     * 则重新启动），READY 后经 {@link #onInstanceReady} 下发 KASM_URL——
-     * 避免"执行面实例已清理、会话仍残留"时直接下发死端点导致 Bad Gateway。
+     * 则重新启动），READY 后经 {@link #onInstanceReady} 进入推流就绪态——
+     * 避免"执行面实例已清理、会话仍残留"时给浏览器一个永远等不到帧的会话。
      *
      * <p>返回 null 表示无可恢复会话（调用方应走 create）。同名在线检查仅对
      * "新建"生效；恢复路径的目标会话就是该用户自己的旧会话。</p>
@@ -200,14 +244,18 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         return s;
     }
 
-    /** 会话关闭回调（由 CloudSession.close 触发）：释放设备名额、下发 KILL。 */
+    /** 会话关闭回调（由 CloudSession.close 触发）：释放设备名额、回收实例。 */
     void onSessionClosed(CloudSession session) {
         sessions.remove(session.getId(), session);
         gateway.releaseDeviceSlot(session.getDeviceIp());
         InstanceHandle h = session.getInstance();
         if (h != null) {
             registry.remove(h.getInstanceId());
-            sendKill(h);
+            if (backend != null) {
+                backend.kill(h.getInstanceId());
+            } else {
+                sendKill(h);
+            }
         }
         plugin.getLogger().info("Cloud 会话结束 id=" + session.getId() + " user=" + session.getUsername());
     }
@@ -242,7 +290,8 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
 
     /** 执行面控制客户端是否已连接（容器机器整体运行状态）。 */
     public boolean isControlConnected() {
-        return control.isConnected();
+        // 本地执行后端：执行面即本插件进程，恒在
+        return backend != null || control.isConnected();
     }
 
     /**
@@ -311,8 +360,25 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         if (s == null || s.isClosed()) {
             return;
         }
-        String url = buildKasmUrl(h);
-        s.sendKasmUrl(url);
+        // 路线 C：不再下发 KasmVNC 端点 URL——推流走同一 WS 信令通道，
+        // 就绪后执行面 FFmpeg 推流帧（0x87/0x88）经 onVideoConfig/onVideoFrame 直达浏览器。
+        s.sendReady();
+    }
+
+    @Override
+    public void onVideoConfig(InstanceHandle h, byte[] data) {
+        CloudSession s = findSession(h);
+        if (s != null && !s.isClosed()) {
+            s.sendConfig(data);
+        }
+    }
+
+    @Override
+    public void onVideoFrame(InstanceHandle h, byte[] data) {
+        CloudSession s = findSession(h);
+        if (s != null && !s.isClosed()) {
+            s.sendVideo(data);
+        }
     }
 
     @Override
@@ -351,39 +417,131 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         return s;
     }
 
-    /** 构建 KasmVNC 采集端点 URL（S2：插件 25574 反代，浏览器只访问同端口）。 */
-    private String buildKasmUrl(InstanceHandle h) {
-        CloudSession s = findSession(h);
-        String token = s == null ? "" : s.getId();
-        String host = config.getPublicHost();
-        int port = Bukkit.getServer().getPort();
-        int kasmPort = h.getKasmPort() > 0 ? h.getKasmPort() : 8542;
-        return "http://" + host + ":" + port + "/kasm/" + token + "/" + kasmPort
-                + "/vnc.html?host=" + host + "&port=" + port
-                + "&path=kasm/" + token + "/" + kasmPort + "/websockify"
-                + "&autoconnect=1&resize=scale&reconnect=1";
-    }
-
     /**
-     * S2 反代鉴权：token 必须是活跃云游戏会话 id，且 kasmPort 必须等于
-     * 该会话实例上报的采集端口（防 SSRF 与越权访问执行面其它端口）。
+     * S2 反代鉴权已随 KasmVNC 反代一并移除（路线 C 推流走同端口 WS，无独立采集端点）。
      */
-    public boolean authorizeKasm(String token, int kasmPort) {
-        if (token == null || token.isEmpty()) {
-            return false;
-        }
-        CloudSession s = sessions.get(token);
-        if (s == null || s.isClosed()) {
-            return false;
-        }
-        InstanceHandle h = s.getInstance();
-        return h != null && h.getKasmPort() == kasmPort;
-    }
 
     // ===== 管控指令 =====
 
     private void sendSpawn(InstanceHandle h) {
+        // 本地执行后端（v0.5 默认）：插件内 spawn（GameInstance + EncoderProcess + 注入器）
+        if (backend != null) {
+            localSpawn(h);
+            return;
+        }
         spawnAttempt(h, 1);
+    }
+
+    /**
+     * 本地执行面 spawn：按会话 clientId / 默认镜像选择镜像，把会话级参数
+     * （xmx/分辨率/fps）传给 {@link ExecutorBackend#spawn}。镜像缺失时直接
+     * 报实例失败（浏览器收到明确错误而非无限等待）。
+     */
+    private void localSpawn(InstanceHandle h) {
+        CloudSession s = findSession(h);
+        if (s == null || s.isClosed()) {
+            return;
+        }
+        CloudImage img = pickImage(s);
+        if (img == null) {
+            onInstanceFailed(h, "镜像仓库为空或未找到匹配镜像（请将镜像安装到 "
+                    + config.getCloudImagesDir() + "）");
+            return;
+        }
+        int w = s.getReqWidth() > 0 ? s.getReqWidth() : config.getCloudResolutionWidth();
+        int rh = s.getReqHeight() > 0 ? s.getReqHeight() : config.getCloudResolutionHeight();
+        backend.spawn(s, img, new ExecutorBackend.SpawnParams(
+                s.getUsername(), s.getXmx(), w, rh, s.getFps()));
+        plugin.getLogger().info("Cloud 本地执行面 spawn instance=" + h.getInstanceId()
+                + " user=" + s.getUsername() + " image=" + img.getId()
+                + " cores=" + s.getCores() + " xmx=" + s.getXmx()
+                + " res=" + w + "x" + rh + " fps=" + s.getFps());
+    }
+
+    /** 镜像选择：会话 clientId（cloud.clients 注册表 id）命中优先，否则默认镜像。 */
+    private CloudImage pickImage(CloudSession s) {
+        CloudImageManager im = imageManager;
+        if (im == null) {
+            return null;
+        }
+        String cid = s.getClientId();
+        if (cid != null && !cid.isEmpty()) {
+            CloudImage hit = im.find(cid);
+            if (hit != null) {
+                return hit;
+            }
+        }
+        return im.defaultImage();
+    }
+
+    // ===== ControlClient.Listener：建连/断连回调 =====
+
+    @Override
+    public void onConnected() {
+        // 建连/重连成功：补发所有仍处于 SPAWNING 的实例 SPAWN。
+        // WSL2 localhost 转发层对 idle 连接约 2 分钟静默掐断（半开），主服
+        // writeAndFlush 会计为"假成功"；重连后 1s 窗口内补发成功率最高。
+        int n = 0;
+        for (InstanceHandle h : registry.all()) {
+            if (ControlProtocol.ST_SPAWNING.equals(h.getState())) {
+                sendSpawn(h);
+                n++;
+            }
+        }
+        if (n > 0) {
+            plugin.getLogger().info("WebGame 管控连接已建立，补发 SPAWN x" + n);
+        }
+    }
+
+    @Override
+    public void onDisconnected(String reason) {
+        plugin.getLogger().warning("WebGame 管控连接断开: " + reason);
+    }
+
+    @Override
+    public void onMessage(ControlMessage msg) {
+        // 上行消息统一由 InstanceRegistry 路由（实例帧/机器快照），此处不重复处理
+    }
+
+    /** 请求执行面上报状态（含机器快照：procs/mem/disk/load/ccPid），供管理员面板。 */
+    public void requestStatus() {
+        if (backend != null) {
+            backend.reportStatus();
+            return;
+        }
+        try {
+            control.send(ControlProtocol.C_STATUS, new java.util.LinkedHashMap<String, String>());
+        } catch (Exception e) {
+            plugin.getLogger().warning("Cloud 请求状态失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 转发浏览器输入事件到执行面（路线 C 输入隧道）。
+     * payload 格式：[u8 idLen][instanceId utf8][Cloud 输入事件流（u16 count + events）]。
+     */
+    public void forwardInput(String instanceId, byte[] eventsBody) {
+        if (instanceId == null || instanceId.isEmpty() || eventsBody == null || eventsBody.length == 0) {
+            return;
+        }
+        // 本地执行后端：直接投递注入器（javaagent TCP 通道）
+        if (backend != null) {
+            backend.forwardInput(instanceId, eventsBody);
+            return;
+        }
+        byte[] idBytes = instanceId.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (idBytes.length > 255) {
+            return;
+        }
+        byte[] payload = new byte[1 + idBytes.length + eventsBody.length];
+        payload[0] = (byte) idBytes.length;
+        System.arraycopy(idBytes, 0, payload, 1, idBytes.length);
+        System.arraycopy(eventsBody, 0, payload, 1 + idBytes.length, eventsBody.length);
+        try {
+            control.sendBinary(ControlProtocol.C_INPUT, payload);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Cloud 输入转发失败: " + e.getMessage());
+        }
     }
 
     /**
@@ -401,6 +559,17 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         }
         Map<String, String> f = buildSpawnFields(h);
         if (control.send(ControlProtocol.C_SPAWN, f)) {
+            // 发送"成功"：8s 后检查是否被 cc ACK（SPAWNING→STARTING/FAILED）。
+            // 半开连接下 writeAndFlush 可能"假成功"（入队即 true），无 ACK 视为丢失重发。
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                CloudSession s = findSession(h);
+                if (s == null || s.isClosed()) {
+                    return;
+                }
+                if (ControlProtocol.ST_SPAWNING.equals(h.getState())) {
+                    spawnAttempt(h, attempt + 1);
+                }
+            }, 8 * 20L);
             return;
         }
         int delaySec = Math.min(attempt * 2, 30);
@@ -424,20 +593,35 @@ public final class CloudSessionManager implements InstanceRegistry.Listener {
         int cores = s != null ? s.getCores() : 2;
         String xmx = s != null ? s.getXmx() : config.getClientXmx();
         int fps = s != null ? s.getFps() : config.getCloudFps();
+        // 客户端版本条目：会话 ?client=xxx 指定；未命中/缺省用 clients[0]
+        WebGameConfig.ClientSpec spec = null;
+        if (s != null) {
+            spec = config.findClientSpec(s.getClientId());
+        }
+        if (spec == null) {
+            spec = config.defaultClientSpec();
+        }
         Map<String, String> f = new LinkedHashMap<>();
         f.put("instanceId", h.getInstanceId());
         f.put("username", h.getUsername());
-        f.put("server", config.getClientServer().isEmpty()
-                ? config.getLoopbackHost() : config.getClientServer());
-        f.put("port", String.valueOf(config.getClientPort() > 0
-                ? config.getClientPort() : Bukkit.getServer().getPort()));
+        f.put("server", (spec != null && !spec.getServer().isEmpty())
+                ? spec.getServer()
+                : (config.getClientServer().isEmpty()
+                        ? config.getLoopbackHost() : config.getClientServer()));
+        int port = (spec != null && spec.getPort() > 0)
+                ? spec.getPort() : config.getClientPort();
+        f.put("port", String.valueOf(port > 0 ? port : Bukkit.getServer().getPort()));
         f.put("display", "");
         f.put("cores", String.valueOf(cores));
         f.put("xmx", xmx);
         f.put("scale", config.getCloudScale());
         f.put("fps", String.valueOf(fps));
         f.put("bitrate", String.valueOf(config.getCloudBitrateKbps()));
-        f.put("clientDir", config.getClientBaseDir());
+        f.put("clientDir", spec != null ? spec.getBaseDir() : config.getClientBaseDir());
+        // 客户端版本信息（执行面据此选 launch 模板 + Java）
+        f.put("versionId", spec != null ? spec.getVersion() : config.getClientVersion());
+        f.put("javaHome", spec != null ? spec.getJavaHome() : config.getClientJavaPath());
+        f.put("launchStyle", spec != null ? spec.getLaunchStyle() : "legacy");
         // 容器分辨率：浏览器请求（reqWidth/reqHeight）优先，否则用服务端 cloud.scale
         int rw = 0, rh = 0;
         if (s != null) {

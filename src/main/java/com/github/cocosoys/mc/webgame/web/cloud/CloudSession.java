@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 单个云游戏会话（路线 C 黑盒模型）：持有一条浏览器 WS 信令通道 + 一个实例黑盒。
  *
  * <p>生命周期：{@link CloudSessionManager#create} 建立并下发 SPAWN → 执行面起实例 →
- * READY 上报后本会话把 KasmVNC 采集端点 URL 下发给浏览器 → 浏览器跳转直连执行面
- * （v1 媒体/输入直连；S2 由插件 25574 反代）→ {@link #close()} 销毁（断线 / 心跳超时 /
+ * READY 上报后执行面 FFmpeg 推流帧经管控通道上行，本会话转发视频帧/配置帧给浏览器
+ * （同一 WS，帧协议 0x87/0x88）→ {@link #close()} 销毁（断线 / 心跳超时 /
  * 设备退出 / 实例停止）。</p>
  *
  * <p>发送线程安全：心跳调度与实例就绪回调均可调 {@link #sendBinary}。</p>
@@ -41,9 +41,13 @@ public final class CloudSession {
     private final int fps;
     private final String profileId;
 
+    /** 客户端版本条目 id（URL ?client=xxx；空 = 服务端默认 clients[0]）。 */
+    private final String clientId;
+
     CloudSession(JavaPlugin plugin, CloudSessionManager manager, String id,
                  String username, String deviceIp, io.netty.channel.ChannelHandlerContext ctx,
-                 int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId) {
+                 int reqWidth, int reqHeight, int cores, String xmx, int fps, String profileId,
+                 String clientId) {
         this.plugin = plugin;
         this.manager = manager;
         this.id = id;
@@ -56,6 +60,7 @@ public final class CloudSession {
         this.xmx = (xmx == null || xmx.trim().isEmpty()) ? "2G" : xmx.trim().toUpperCase();
         this.fps = Math.max(10, Math.min(60, fps));
         this.profileId = profileId == null ? "" : profileId;
+        this.clientId = clientId == null ? "" : clientId;
     }
 
     // ===== getters =====
@@ -100,6 +105,11 @@ public final class CloudSession {
     /** 设备型号 id（预置 id 或 "custom"；仅记录展示）。 */
     public String getProfileId() {
         return profileId;
+    }
+
+    /** 客户端版本条目 id（URL ?client=xxx；空 = 服务端默认 clients[0]）。 */
+    public String getClientId() {
+        return clientId;
     }
 
     public Channel getChannel() {
@@ -182,14 +192,34 @@ public final class CloudSession {
         }
     }
 
-    /** 下发 KasmVNC 采集端点 URL（实例就绪后由管理器调用）。 */
-    void sendKasmUrl(String url) {
-        sendBinary(CloudProtocol.buildKasmUrl(url));
-        plugin.getLogger().info("Cloud 下发采集端点 id=" + id + " user=" + username + " url=" + url);
+    /** 下发实例就绪信令（实例就绪后由管理器调用，通知浏览器准备解码推流）。 */
+    void sendReady() {
+        sendBinary(CloudProtocol.buildReady());
+        plugin.getLogger().info("Cloud 下发就绪信令 id=" + id + " user=" + username);
+    }
+
+    /** 下发真实会话 id（create/resume 成功后立即发送，前端持久化用于断线恢复）。 */
+    void sendSession() {
+        sendBinary(CloudProtocol.buildSession(id));
+    }
+
+    /** 下发视频配置帧（SPS/PPS/宽高），由执行面 FFmpeg 首帧提取后经插件转发。 */
+    void sendConfig(byte[] config) {
+        sendBinary(config);
+    }
+
+    /** 下发视频帧（Annex-B），由执行面 FFmpeg 推流经插件转发。 */
+    void sendVideo(byte[] video) {
+        sendBinary(video);
     }
 
     void sendPing(long counter) {
         sendBinary(CloudProtocol.buildPing(counter));
+    }
+
+    /** 回 PONG（浏览器心跳回执）：刷新前端 lastPong，避免前端 20s 无 PONG 主动断连。 */
+    void sendPong(long counter) {
+        sendBinary(CloudProtocol.buildPong(counter));
     }
 
     void sendError(String msg) {

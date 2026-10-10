@@ -58,6 +58,12 @@ public final class GameInstance {
     private final String windowTitle;
     private final Listener listener;
 
+    // 镜像驱动扩展（v0.5）：launch 模板与资源索引
+    private final String launchStyle;    // legacy | bootstrap
+    private final String tweakClass;     // legacy 模板用（缺省 FMLTweaker）
+    private final String assetIndex;     // --assetIndex 参数（缺省按版本推断）
+    private final java.io.File imageInputAgent;  // 镜像内 tools/input-agent.jar（可空 → 插件资源回退）
+
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
 
@@ -81,6 +87,45 @@ public final class GameInstance {
         this.readyTimeoutSeconds = config.getClientReadyTimeoutSeconds();
         this.windowTitle = config.getClientWindowTitle();
         this.listener = listener;
+        // 旧路径（cloud.client 单条）一律 legacy 模板
+        this.launchStyle = "legacy";
+        this.tweakClass = "net.minecraftforge.fml.common.launcher.FMLTweaker";
+        this.assetIndex = "";
+        this.imageInputAgent = null;
+    }
+
+    /**
+     * 镜像驱动构造器（v0.5 定案）：从 {@link CloudImage} manifest 取
+     * baseDir/versionId/java/assets/launch 模板，实例目录落在镜像内
+     * {@code instances/} 下（镜像卸载 = 目录删除，实例目录一并回收）。
+     *
+     * @param img       镜像（image.json 已解析）
+     * @param username  离线用户名（连服身份）
+     * @param serverPort 跟随端口（镜像 server.port=0 时使用）
+     * @param xmx       堆内存（空则取镜像 defaultXmx）
+     * @param listener  生命周期回调
+     */
+    public GameInstance(CloudImage img, String username, int serverPort, String xmx, Listener listener) {
+        this.baseDir = img.getClientRoot().getAbsolutePath();
+        this.versionId = img.getVersionId().isEmpty() ? img.getId() : img.getVersionId();
+        this.shareDir = img.getMinecraftDir().getAbsolutePath();
+        this.instancesRoot = img.getInstancesRoot().getAbsolutePath();
+        this.server = img.getServerHost().isEmpty() ? "127.0.0.1" : img.getServerHost();
+        this.port = img.getServerPort() > 0 ? img.getServerPort() : serverPort;
+        this.username = username;
+        this.xmx = (xmx == null || xmx.trim().isEmpty()) ? img.getDefaultXmx() : xmx;
+        java.io.File javaExe = img.resolveJavaExecutable();
+        this.javaPath = javaExe != null ? javaExe.getAbsolutePath() : "";
+        this.readyTimeoutSeconds = 90;
+        this.windowTitle = img.getWindowTitle().isEmpty()
+                ? "Minecraft " + img.getMcVersion() : img.getWindowTitle();
+        this.listener = listener;
+        this.launchStyle = img.getLaunchStyle();
+        this.tweakClass = img.getTweakClass().isEmpty()
+                ? "net.minecraftforge.fml.common.launcher.FMLTweaker" : img.getTweakClass();
+        this.assetIndex = img.getAssetIndex().isEmpty()
+                ? CloudImage.inferAssetIndex(img.getMcVersion()) : img.getAssetIndex();
+        this.imageInputAgent = img.resolveInputAgent();
     }
 
     /** 异步启动：工作线程完成实例目录/natives/classpath/进程/就绪等待。 */
@@ -147,8 +192,9 @@ public final class GameInstance {
             extractInputAgent(instDir);
             // 2. 解压 natives（幂等，实例目录内）
             String nativesDir = prepareNatives(new File(instDir, "natives"));
-            // 3. 构建 classpath（共享 libraries 绝对路径 + 版本 jar）
-            String classpath = buildClasspath(share, versionJar);
+            // 3. 构建 classpath：写入实例目录 classpath.jar（Manifest Class-Path 相对路径，
+            //    规避 Windows CreateProcess 命令行 32K 上限 —— libraries 全量绝对路径会超限 error=206）
+            String classpath = buildClasspathJar(instDir, share, versionJar);
             // 4. 组装启动命令
             List<String> cmd = buildCommand(instDir, share, nativesDir, classpath);
             // 5. spawn 进程（stdout/stderr 重定向到实例日志，避免污染服务器 stdout）
@@ -183,14 +229,16 @@ public final class GameInstance {
         }
     }
 
-    /** 从插件 jar 资源解出 input-agent.jar 到实例目录（每次覆盖，带占用重试）。 */
+    /** 解出输入注入代理到实例目录：优先镜像 tools/input-agent.jar（自包含），否则插件 jar 资源。 */
     private void extractInputAgent(File instDir) throws IOException {
         File target = new File(instDir, "input-agent.jar");
         IOException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
-            try (java.io.InputStream in = getClass().getClassLoader().getResourceAsStream("input-agent.jar")) {
+            try (java.io.InputStream in = imageInputAgent != null && imageInputAgent.isFile()
+                    ? java.nio.file.Files.newInputStream(imageInputAgent.toPath())
+                    : getClass().getClassLoader().getResourceAsStream("input-agent.jar")) {
                 if (in == null) {
-                    throw new IOException("插件资源缺失 input-agent.jar（打包时未包含输入注入代理）");
+                    throw new IOException("input-agent.jar 缺失（镜像 tools/ 与插件资源均无）");
                 }
                 Files.copy(in, target.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 return;
@@ -307,15 +355,92 @@ public final class GameInstance {
         }
     }
 
-    /** 构建 classpath：共享 libraries 下全部 jar + 版本 jar。 */
-    private String buildClasspath(File share, File versionJar) {
-        List<String> jars = new ArrayList<>();
-        collectJars(new File(share, "libraries"), jars);
-        jars.add(versionJar.getAbsolutePath());
-        return String.join(File.pathSeparator, jars);
+    /**
+     * 构建 classpath：把共享 libraries 全部 jar + 版本 jar 的相对路径写入
+     * {@code <实例>/classpath.jar} 的 Manifest Class-Path，命令行只带这一个 jar。
+     *
+     * <p>原因：libraries 全量绝对路径拼出的 classpath 常超 Windows CreateProcess
+     * 32767 字符上限（error=206，文件名或扩展名太长）。Manifest Class-Path 是
+     * Java 官方支持的替代超长 classpath 机制（Java 9 @argfile 之前的唯一标准做法），
+     * URLClassLoader 从 classpath.jar 所在目录按相对路径惰性展开全部条目。</p>
+     */
+    private String buildClasspathJar(File instDir, File share, File versionJar) throws IOException {
+        List<File> jars = new ArrayList<>();
+        // 只收集版本 json 声明的 libraries（官方启动器行为）：
+        // 整合包 libraries 目录常为全量冗余（混入其他版本库，如 Java 16 编译的
+        // modlauncher），全量扫描会导致 1.12.2 launchwrapper 加载不兼容类崩溃。
+        collectDeclaredLibraries(new File(share, "versions" + File.separator + versionId
+                + File.separator + versionId + ".json"), new File(share, "libraries"), jars);
+        jars.add(versionJar);
+        Path base = instDir.toPath().toAbsolutePath();
+        List<String> rels = new ArrayList<>(jars.size());
+        for (File j : jars) {
+            Path rel = base.relativize(j.toPath().toAbsolutePath());
+            // Manifest Class-Path 条目为 URL 相对路径：/ 分隔、空格需 %20 转义
+            rels.add(rel.toString().replace('\\', '/').replace(" ", "%20"));
+        }
+        File cpJar = new File(instDir, "classpath.jar");
+        try (java.util.jar.JarOutputStream jos =
+                     new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(cpJar.toPath()))) {
+            jos.putNextEntry(new java.util.zip.ZipEntry("META-INF/MANIFEST.MF"));
+            java.util.jar.Manifest mf = new java.util.jar.Manifest();
+            mf.getMainAttributes().putValue("Manifest-Version", "1.0");
+            mf.getMainAttributes().putValue("Class-Path", String.join(" ", rels));
+            mf.write(jos);
+            jos.closeEntry();
+        }
+        return cpJar.getAbsolutePath();
     }
 
-    private static void collectJars(File dir, List<String> out) {
+    /**
+     * 解析版本 json 的 {@code libraries} 声明（零依赖正则抽取 {@code "name"}），
+     * 按 {@code group/artifact/version} 路径定位 jar；json 缺失/解析失败时回退
+     * 全量扫描（旧行为）。natives 分类 jar 只用于解压，不进入 classpath。
+     */
+    private static void collectDeclaredLibraries(File versionJson, File libsRoot, List<File> out) {
+        if (!versionJson.isFile()) {
+            collectJars(libsRoot, out);
+            return;
+        }
+        java.util.regex.Pattern namePattern =
+                java.util.regex.Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"");
+        try {
+            String text = new String(java.nio.file.Files.readAllBytes(versionJson.toPath()),
+                    StandardCharsets.UTF_8);
+            java.util.regex.Matcher m = namePattern.matcher(text);
+            boolean any = false;
+            while (m.find()) {
+                String name = m.group(1);
+                if (name.indexOf('n') >= 0 && name.contains("natives")) {
+                    continue; // natives 分类（只解压不进 classpath）
+                }
+                String[] parts = name.split(":");
+                if (parts.length < 3) {
+                    continue;
+                }
+                String group = parts[0].replace('.', '/');
+                String artifact = parts[1];
+                String ver = parts[2];
+                String cls = parts.length > 3 ? parts[3] : "";
+                String jarName = cls.isEmpty()
+                        ? artifact + "-" + ver + ".jar"
+                        : artifact + "-" + ver + "-" + cls + ".jar";
+                File f = new File(libsRoot, group + File.separator + artifact
+                        + File.separator + ver + File.separator + jarName);
+                if (f.isFile()) {
+                    out.add(f);
+                    any = true;
+                }
+            }
+            if (!any) {
+                collectJars(libsRoot, out); // json 无有效声明 → 回退全量
+            }
+        } catch (Throwable t) {
+            collectJars(libsRoot, out); // 读取失败 → 回退全量
+        }
+    }
+
+    private static void collectJars(File dir, List<File> out) {
         File[] files = dir.listFiles();
         if (files == null) {
             return;
@@ -324,24 +449,28 @@ public final class GameInstance {
             if (f.isDirectory()) {
                 collectJars(f, out);
             } else if (f.getName().endsWith(".jar")) {
-                out.add(f.getAbsolutePath());
+                out.add(f);
             }
         }
     }
 
-    /** 组装 java 启动命令（1.12.2 Forge 离线客户端）。 */
+    /** 组装 java 启动命令（legacy = 1.12.x launchwrapper；bootstrap = 1.20+ BootstrapLauncher）。 */
     private List<String> buildCommand(File instDir, File share, String nativesDir, String classpath) {
+        boolean bootstrap = "bootstrap".equals(launchStyle);
+        String mainClass = bootstrap
+                ? "net.minecraftforge.bootstrap.BootstrapLauncher"
+                : "net.minecraft.launchwrapper.Launch";
         List<String> cmd = new ArrayList<>();
         cmd.add(javaPath.isEmpty() ? "java" : javaPath);
         cmd.add("-Xmx" + xmx);
         cmd.add("-Djava.library.path=" + nativesDir);
-        // 路线 B：输入注入代理（javaagent）——随客户端 JVM 启动，监听本地端口写 input-agent.port
+        // 输入注入代理（javaagent）——随客户端 JVM 启动，监听本地端口写 input-agent.port
         cmd.add("-javaagent:" + new File(instDir, "input-agent.jar").getAbsolutePath());
         cmd.add("-Dwebgame.agent.portFile="
                 + new File(instDir, "input-agent.port").getAbsolutePath());
         cmd.add("-cp");
         cmd.add(classpath);
-        cmd.add("net.minecraft.launchwrapper.Launch");
+        cmd.add(mainClass);
         cmd.add("--username");
         cmd.add(username);
         cmd.add("--version");
@@ -351,17 +480,23 @@ public final class GameInstance {
         cmd.add("--assetsDir");
         cmd.add(new File(share, "assets").getAbsolutePath());
         cmd.add("--assetIndex");
-        cmd.add("1.12");
+        cmd.add(assetIndex.isEmpty() ? "1.12" : assetIndex);
         cmd.add("--uuid");
         cmd.add(uuidFor(username));
         cmd.add("--accessToken");
         cmd.add("0");
         cmd.add("--userType");
         cmd.add("legacy");
-        cmd.add("--versionType");
-        cmd.add("Forge");
-        cmd.add("--tweakClass");
-        cmd.add("net.minecraftforge.fml.common.launcher.FMLTweaker");
+        if (bootstrap) {
+            // 1.20+ 模块化启动器：无 tweakClass，versionType=forge
+            cmd.add("--versionType");
+            cmd.add("forge");
+        } else {
+            cmd.add("--versionType");
+            cmd.add("Forge");
+            cmd.add("--tweakClass");
+            cmd.add(tweakClass);
+        }
         cmd.add("--server");
         cmd.add(server);
         cmd.add("--port");

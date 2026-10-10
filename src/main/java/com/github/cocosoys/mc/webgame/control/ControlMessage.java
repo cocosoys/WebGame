@@ -4,15 +4,25 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 管控契约单条消息：类型 + 字段表。 */
+/** 管控契约单条消息：类型 + 字段表（或二进制载荷）。 */
 public final class ControlMessage {
 
     public final int type;
     private final Map<String, String> fields;
+    /** 二进制载荷（视频配置/视频帧/输入帧）；字段帧为 null。 */
+    private final byte[] binary;
 
     ControlMessage(int type, Map<String, String> fields) {
         this.type = type;
         this.fields = Collections.unmodifiableMap(new LinkedHashMap<>(fields));
+        this.binary = null;
+    }
+
+    /** 二进制消息（S_VIDEO_CONFIG / S_VIDEO_FRAME / C_INPUT）。 */
+    ControlMessage(int type, byte[] binary) {
+        this.type = type;
+        this.fields = Collections.emptyMap();
+        this.binary = binary;
     }
 
     public String get(String key) {
@@ -46,6 +56,11 @@ public final class ControlMessage {
 
     public Map<String, String> fields() {
         return fields;
+    }
+
+    /** 二进制载荷（视频/输入帧）；字段帧返回 null。 */
+    public byte[] binary() {
+        return binary;
     }
 
     @Override

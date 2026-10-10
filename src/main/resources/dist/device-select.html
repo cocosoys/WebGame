@@ -383,7 +383,8 @@
       + "&w=" + selected.width + "&h=" + selected.height
       + "&fps=" + selected.fps;
     // 云游戏页与设备选择页同目录（同一路径前缀，取上级目录）
-    var base = location.pathname.replace(/\/devices\/?$/, "/cloud/");
+    var base = location.pathname.replace(/\/devices\/?$/, "/cloud/")
+          .replace(/\/index\//, "/");
     location.href = base + q;
   }
 

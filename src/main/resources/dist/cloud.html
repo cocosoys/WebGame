@@ -3,605 +3,687 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebGame 云游戏</title>
+<title>Web 云游戏</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: #101014; color: #e8e8e8;
-    font-family: "Microsoft YaHei", "PingFang SC", Roboto, Arial, sans-serif; }
-  #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
-  #topbar { height: 44px; flex: 0 0 44px; display: flex; align-items: center; padding: 0 14px;
-    background: #1a1a22; border-bottom: 1px solid #2a2a34; gap: 10px; font-size: 13px;
-    transition: transform 0.25s ease; position: relative; z-index: 20; }
-  #topbar.auto-hide { transform: translateY(-45px); }
-  #topbar .title { font-weight: 600; }
-  #topbar button { background: #2a2a34; color: #c8c8d0; border: 1px solid #3a3a48; border-radius: 6px;
-    padding: 4px 12px; font-size: 12px; cursor: pointer; }
-  #topbar button:hover { background: #3a3a48; }
-  #status { font-size: 12px; color: #9a9aa5; flex: 1; text-align: right; }
-  #stage { position: relative; flex: 1; overflow: hidden; display: flex; align-items: center;
-    justify-content: center; background: #000; }
-  #cloudFrame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
-  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; background: rgba(16,16,20,0.95); text-align: center; padding: 20px; }
-  #overlay h1 { font-size: 20px; margin: 0 0 6px; }
-  #overlay p { font-size: 13px; color: #9a9aa5; margin: 4px 0; max-width: 460px; line-height: 1.6; }
-  #userInput { margin-top: 16px; display: flex; gap: 8px; }
-  #username { padding: 8px 12px; font-size: 14px; border-radius: 8px; border: 1px solid #3a3a48;
-    background: #1a1a22; color: #e8e8e8; width: 200px; outline: none; }
-  #username:focus { border-color: #6b8afd; }
-  #enterBtn { padding: 8px 20px; font-size: 14px; border-radius: 8px; border: none; cursor: pointer;
-    background: #6b8afd; color: #fff; }
-  #enterBtn:hover { background: #5578f0; }
-  #enterBtn:disabled { opacity: 0.5; cursor: default; }
-  .spinner { width: 34px; height: 34px; border: 3px solid #2a2a34; border-top-color: #6b8afd;
-    border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 14px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+
+  /* 视频画布：铺满视口 */
+  #stage { position: fixed; inset: 0; z-index: 1; }
+  #screen { width: 100%; height: 100%; display: block; cursor: default; background: #000; }
+
+  /* 顶部悬浮状态栏：鼠标靠近顶部滑出 */
+  #topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    background: rgba(0,0,0,0.55); color: #ddd; font-size: 12px;
+    padding: 4px 12px; display: flex; align-items: center; gap: 12px;
+    transform: translateY(-100%); transition: transform .18s ease;
+  }
+  #topbar.visible { transform: translateY(0); }
+  #topbar .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  #topbar .dot.ok { background: #4caf50; }
+  #topbar .dot.bad { background: #f44336; }
+  #topbar .spacer { flex: 1; }
+  #topbar button {
+    background: rgba(255,255,255,0.15); color: #eee; border: none;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  #topbar button:hover { background: rgba(255,255,255,0.3); }
+
+  /* 连接中 / 错误遮罩 */
+  #overlay {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.85); color: #eee; text-align: center; gap: 12px;
+  }
+  #overlay.hidden { display: none; }
+  #overlay .spinner {
+    width: 40px; height: 40px; border: 4px solid rgba(255,255,255,0.2);
+    border-top-color: #4caf50; border-radius: 50%; animation: spin 1s linear infinite;
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .hidden { display: none !important; }
-  #err { color: #ff7b7b; font-size: 13px; margin-top: 10px; white-space: pre-line; }
+  #overlay .title { font-size: 18px; font-weight: 600; }
+  #overlay .msg { font-size: 13px; color: #bbb; max-width: 480px; line-height: 1.6; }
+  #overlay .hint { font-size: 12px; color: #888; }
+  #overlay button {
+    margin-top: 6px; background: #4caf50; color: #fff; border: none;
+    padding: 8px 24px; border-radius: 6px; font-size: 14px; cursor: pointer;
+  }
+  #overlay button:hover { background: #43a047; }
+
+  /* 登录页（输入用户名） */
+  #login {
+    position: fixed; inset: 0; z-index: 30;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #1a2a1f 0%, #000 75%);
+  }
+  #login.hidden { display: none; }
+  #login .box {
+    background: rgba(20,20,20,0.92); border: 1px solid #333; border-radius: 12px;
+    padding: 32px 36px; width: 340px; text-align: center;
+  }
+  #login .logo { font-size: 26px; font-weight: 700; color: #6ee7a0; margin-bottom: 6px; }
+  #login .sub { font-size: 12px; color: #999; margin-bottom: 22px; }
+  #login input {
+    width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #444;
+    background: #111; color: #eee; font-size: 15px; outline: none; text-align: center;
+  }
+  #login input:focus { border-color: #6ee7a0; }
+  #login button {
+    width: 100%; margin-top: 14px; padding: 10px; border: none; border-radius: 6px;
+    background: #4caf50; color: #fff; font-size: 15px; cursor: pointer;
+  }
+  #login button:hover { background: #43a047; }
+  #login .cap { margin-top: 14px; font-size: 12px; color: #777; line-height: 1.7; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <div id="topbar">
-    <span class="title">WebGame 云游戏</span>
-    <button id="fitBtn" class="hidden" title="铺满 / 原始比例">铺满</button>
-    <button id="quitBtn" class="hidden" title="退出游戏并释放实例">退出</button>
-    <span id="status">路线 C · 执行面 KasmVNC</span>
-  </div>
-  <div id="stage">
-    <div id="overlay">
-      <h1 id="title">进入服务器</h1>
-      <p id="desc">输入用户名后确认，将自动启动隔离的游戏实例并进入服务器。</p>
-      <div id="userInput">
-        <input id="username" maxlength="16" placeholder="玩家名称" autocomplete="off">
-        <button id="enterBtn">进入服务器</button>
-      </div>
-      <div id="err"></div>
-      <div id="waiting" class="hidden">
-        <div class="spinner"></div>
-        <p>正在启动游戏实例（隔离容器）…<br><span id="waitMsg"></span></p>
-      </div>
-    </div>
-    <iframe id="cloudFrame" class="hidden" allow="pointer-lock; fullscreen; clipboard-read; clipboard-write; autoplay; display-capture; web-share"></iframe>
+
+<canvas id="screen"></canvas>
+
+<div id="topbar">
+  <span class="dot" id="connDot"></span>
+  <span id="connText">连接中…</span>
+  <span class="spacer"></span>
+  <span id="fpsText"></span>
+  <button id="btnQuit">退出</button>
+</div>
+
+<div id="overlay">
+  <div class="spinner" id="spin"></div>
+  <div class="title" id="ovTitle">正在连接服务器</div>
+  <div class="msg" id="ovMsg"></div>
+  <div class="hint" id="ovHint"></div>
+  <button id="btnRetry" style="display:none;">重新连接</button>
+</div>
+
+<div id="login">
+  <div class="box">
+    <div class="logo">Web 云游戏</div>
+    <div class="sub">输入用户名进入服务器</div>
+    <input id="userName" maxlength="16" placeholder="用户名" autocomplete="off">
+    <button id="btnEnter">进入服务器</button>
+    <div class="cap" id="capText"></div>
   </div>
 </div>
 
 <script>
 (function () {
-  "use strict";
-  var input = document.getElementById("username");
-  var btn = document.getElementById("enterBtn");
-  var errBox = document.getElementById("err");
-  var waiting = document.getElementById("waiting");
-  var userInput = document.getElementById("userInput");
-  var title = document.getElementById("title");
-  var desc = document.getElementById("desc");
-  var waitMsg = document.getElementById("waitMsg");
-  var statusEl = document.getElementById("status");
-  var overlay = document.getElementById("overlay");
-  var cloudFrame = document.getElementById("cloudFrame");
-  var fitBtn = document.getElementById("fitBtn");
-  var quitBtn = document.getElementById("quitBtn");
+  'use strict';
 
-  var ws = null;
-  var started = false;
-  var sessionUser = "";
-  var sessionSid = "";
-  var fitMode = true;        // true=铺满  false=原始比例
-  var reconnectAttempts = 0; // 当前连接失败重连次数
-  var reconnectTimer = null;
-  var gameEnded = false;     // 实例异常结束标志：禁止自动重连，提示用户重新连接
-
-  var STORE_KEY = "wg_cloud_session";
-
-  // ===== 会话持久化（F5 刷新 / 短时掉线恢复）=====
-
-  function saveSession() {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ user: sessionUser, sid: sessionSid }));
-    } catch (e) {}
+  // ================= 工具 =================
+  function $(id) { return document.getElementById(id); }
+  function params() {
+    var q = new URLSearchParams(location.search), o = {};
+    for (var k of ['user','client','profile','sid','res']) { var v = q.get(k); if (v) o[k] = v; }
+    for (var k of ['w','h','cores','xmx','fps']) { var v = q.get(k); if (v) o[k] = v; }
+    return o;
   }
-  function loadSession() {
-    try {
-      var raw = localStorage.getItem(STORE_KEY);
-      if (!raw) { return null; }
-      var o = JSON.parse(raw);
-      if (o && o.user && o.sid) { return o; }
-    } catch (e) {}
-    return null;
+  function setOv(title, msg, hint) {
+    $('ovTitle').textContent = title || '';
+    $('ovMsg').textContent = msg || '';
+    $('ovHint').textContent = hint || '';
+    $('overlay').classList.remove('hidden');
+    $('btnRetry').style.display = 'none';
+    $('spin').style.display = 'block';
   }
-  function clearSession() {
-    try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+  function hideOv() { $('overlay').classList.add('hidden'); }
+  function setConn(state, text) {
+    var dot = $('connDot');
+    dot.className = 'dot ' + (state === 'ok' ? 'ok' : 'bad');
+    $('connText').textContent = text || '';
   }
 
-  // ===== 视频拉伸：铺满 / 原始比例 =====
+  // ================= 状态 =================
+  var P = params();
+  var user = P.user || localStorage.getItem('wg_cloud_user') || '';
+  // 会话恢复：同一浏览器 + 同一用户名复用 sid（断线/F5 后恢复同一实例）；
+  // sid 与用户名绑定，避免不同玩家共用同一 sid。
+  function loadSid() {
+    if (P.sid) return P.sid;
+    var k = 'wg_cloud_session_' + (user || 'guest');
+    var s = localStorage.getItem(k);
+    if (!s) {
+      s = 's' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      localStorage.setItem(k, s);
+    }
+    return s;
+  }
+  var sid = loadSid();
+  // 调试统计（bu/排障用）：window.__wgStats 反映 WS 帧到达情况
+  window.__wgStats = { frames: 0, bytes: 0, config: 0, video: 0, ready: 0, error: 0, decode: 0, decodeFail: 0, ts: Date.now() };
+  window.__wgFrame = {};   // 排障：最近输出帧的 codedWidth/codedHeight/visibleRect
+  window.__wgLast = {};    // 排障：最近待解码 chunk 的元信息
+  var ws = null, decoder = null, canvas, ctx2d;
+  var locked = false, ready = false, closed = false, retryTimer = null, errorReceived = false;
+  var lastPong = Date.now(), pingTimer = null, fpsAccum = 0, fpsStart = Date.now();
+  var inputBuf = [], inputFlushTimer = null, lastAbsX = -1, lastAbsY = -1;
+  var configured = false, pendingKey = false, cfgWidth = 0, cfgHeight = 0;
 
-  function applyFit() {
-    try {
-      var d = cloudFrame.contentDocument;
-      if (!d) { return; }
-      // KasmVNC 页内有多个 canvas：noVNC_multiMonitorWidget 是隐藏占位，
-      // 真正画面 canvas 是缓冲面积最大的那个（1024x768）。必须选对，否则
-      // 拉伸落在占位 canvas 上，真实画面仍按 4:3 等比缩放留黑边。
-      var cvs = d.querySelectorAll("canvas");
-      var cv = null, bestArea = -1;
-      for (var i = 0; i < cvs.length; i++) {
-        var c = cvs[i];
-        if (c.id === "noVNC_multiMonitorWidget") { continue; }
-        var a = (c.width || 0) * (c.height || 0);
-        if (a > bestArea) { bestArea = a; cv = c; }
-      }
-      if (!cv) { return; }
-      if (fitMode) {
-        // 铺满：canvas 及其祖先容器链全部强制 100%（KasmVNC 父容器 height:auto
-        // 会塌陷为 0，canvas 100% 高度因此失效）
-        var p = cv.parentElement;
-        while (p && p !== d.documentElement) {
-          p.style.setProperty("width", "100%", "important");
-          p.style.setProperty("height", "100%", "important");
-          p.style.setProperty("flex", "none", "important");
-          p = p.parentElement;
-        }
-        d.documentElement.style.width = "100%";
-        d.documentElement.style.height = "100%";
-        d.body.style.margin = "0";
-        d.body.style.width = "100%";
-        d.body.style.height = "100%";
-        d.body.style.overflow = "hidden";
-        cv.style.setProperty("width", "100%", "important");
-        cv.style.setProperty("height", "100%", "important");
-        cv.style.setProperty("display", "block", "important");
-      } else {
-        // 原始比例：清空内联样式，交还 KasmVNC 等比缩放
-        var q = cv.parentElement;
-        while (q && q !== d.documentElement) {
-          q.style.width = "";
-          q.style.height = "";
-          q.style.flex = "";
-          q = q.parentElement;
-        }
-        d.documentElement.style.width = "";
-        d.documentElement.style.height = "";
-        d.body.style.margin = "";
-        d.body.style.width = "";
-        d.body.style.height = "";
-        d.body.style.overflow = "";
-        cv.style.width = "";
-        cv.style.height = "";
-        cv.style.display = "";
-      }
-    } catch (e) {}
-  }
-    function showGrabHint() {
-    try {
-      var h = document.getElementById("grabHint");
-      if (!h) {
-        h = document.createElement("div");
-        h.id = "grabHint";
-        h.style.cssText = "position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:9;background:rgba(0,0,0,0.72);color:#fff;padding:6px 16px;border-radius:6px;font-size:13px;pointer-events:none;transition:opacity 0.6s;white-space:nowrap;";
-        document.getElementById("stage").appendChild(h);
-      }
-      h.textContent = "点击游戏画面锁定鼠标，按 Esc 退出";
-      h.style.opacity = "1";
-      try {
-        var d = cloudFrame.contentDocument;
-        if (d) {
-          d.removeEventListener("click", hideGrabHintOnce, true);
-          d.addEventListener("click", hideGrabHintOnce, true);
-        }
-      } catch (e) {}
-    } catch (e) {}
-  }
-  function hideGrabHintOnce() {
-    var h = document.getElementById("grabHint");
-    if (h) { h.style.opacity = "0"; }
-  }
-function startFitWatch() {
-    // KasmVNC 会周期性重建 canvas，watch 保持拉伸状态
-    var apply = applyFit;
-    var iv = setInterval(function () {
-      if (cloudFrame.classList.contains("hidden")) { clearInterval(iv); return; }
-      apply();
-    }, 1000);
-    // 浏览器窗口尺寸变化时立即重算铺满（全屏/还原/缩放窗口）
-    window.addEventListener("resize", function () {
-      if (!cloudFrame.classList.contains("hidden")) { apply(); }
-    });
+  // ================= 帧协议（小端，与插件 CloudProtocol 一致） =================
+  var T_CONFIG = 0x01, T_VIDEO = 0x02, T_PING = 0x03, T_ERROR = 0x05, T_READY = 0x06, T_SESSION = 0x07;
+  var T_PONG = 0x04, T_INPUT = 0x10;
+  var E_MOVE = 1, E_BTN = 2, E_KEY = 3, E_WHEEL = 4, E_CLICK = 5, E_ABS = 6;
+
+  function u16(v) { return new Uint8Array([v & 0xFF, (v >>> 8) & 0xFF]); }
+  function u32(v) { return new Uint8Array([v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF]); }
+  function i32(v) { return u32(v | 0); }
+
+  function buildPong(counter) {
+    var b = new Uint8Array(5); b[0] = T_PONG;
+    b[1] = counter & 0xFF; b[2] = (counter >>> 8) & 0xFF;
+    b[3] = (counter >>> 16) & 0xFF; b[4] = (counter >>> 24) & 0xFF;
+    return b;
   }
 
-  // ===== 铺满时顶部标题栏自动隐藏（鼠标靠近顶部滑出，远离收回）=====
+  function flushInput() {
+    if (!ws || ws.readyState !== 1 || inputBuf.length === 0) return;
+    var body = [];
+    body.push(0x10);
+    body.push.apply(body, u16(inputBuf.length));
+    for (var i = 0; i < inputBuf.length; i++) body.push.apply(body, inputBuf[i]);
+    try { ws.send(new Uint8Array(body)); } catch (e) {}
+    inputBuf = [];
+  }
 
-  function applyTopbarHide(hide) {
-    var tb = document.getElementById("topbar");
-    if (!tb) { return; }
-    if (hide) {
-      tb.classList.add("auto-hide");
-      tb.style.transform = "translateY(-" + (tb.offsetHeight + 2) + "px)";
-    } else {
-      tb.classList.remove("auto-hide");
-      tb.style.transform = "";
+  function queueInput(eventBytes) {
+    inputBuf.push(eventBytes);
+    if (inputBuf.length >= 12) flushInput();
+    else if (!inputFlushTimer) {
+      inputFlushTimer = setTimeout(function () { inputFlushTimer = null; flushInput(); }, 16);
     }
   }
 
-  function updateTopbarAutoHide() {
-    var tb = document.getElementById("topbar");
-    if (tb) { applyTopbarHide(!!(fitMode && started && !gameEnded)); }
+  function evMove(dx, dy) {
+    var b = [E_MOVE]; b.push.apply(b, i32(dx)); b.push.apply(b, i32(dy)); queueInput(b);
+  }
+  function evAbs(x, y) {
+    var b = [E_ABS]; b.push.apply(b, i32(x)); b.push.apply(b, i32(y)); queueInput(b);
+  }
+  function evBtn(button, pressed) {
+    queueInput([E_BTN, button, pressed ? 1 : 0]);
+  }
+  function evClick(x, y, button, pressed) {
+    var b = [E_CLICK]; b.push.apply(b, i32(x)); b.push.apply(b, i32(y));
+    b.push(button, pressed ? 1 : 0); queueInput(b);
+  }
+  function evKey(code, pressed) {
+    var c = new TextEncoder().encode(code);
+    var b = [E_KEY]; b.push.apply(b, u16(c.length));
+    for (var i = 0; i < c.length; i++) b.push(c[i]);
+    b.push(pressed ? 1 : 0); queueInput(b);
+  }
+  function evWheel(delta) {
+    var b = [E_WHEEL]; b.push.apply(b, i32(delta)); queueInput(b);
   }
 
-  function initAutoHideTopbar() {
-    var tb = document.getElementById("topbar");
-    var stage = document.getElementById("stage");
-    updateTopbarAutoHide();
-    function onMove(y) {
-      if (!fitMode || !started || gameEnded) { return; }
-      applyTopbarHide(y >= 80);
-    }
-    // 父文档监听：鼠标在标题栏/stage 空白区移动
-    stage.addEventListener("mousemove", function (e) { onMove(e.clientY); }, true);
-    // iframe 内监听：鼠标进入云游戏画面时父文档收不到 mousemove，
-    // 需在 iframe 文档内判断顶部区域。锁定中事件被 pointer lock 捕获，不触发。
-    try {
-      var d = cloudFrame.contentDocument;
-      if (d) {
-        d.addEventListener("mousemove", function (e) { onMove(e.clientY); }, true);
+  // ================= H.264 Annex-B → AVCC（供 WebCodecs chunk） =================
+  // 注意：SPS/PPS 已由 configure.description 提供，chunk 内重复携带可能使部分解码器
+  // 状态异常（输出损坏帧/竖线）。此处剔除 SPS(7)/PPS(8)，只保留 VCL/SEI。
+  function annexbToAvcc(frame) {
+    // 切分 NAL（start code 00 00 01 / 00 00 00 01）→ 4 字节长度前缀
+    var out = [], i = 0, n = frame.length;
+    while (i < n) {
+      if (frame[i] !== 0) { i++; continue; }
+      var sc = 0;
+      if (i + 2 < n && frame[i+1] === 0 && frame[i+2] === 1) sc = 3;
+      else if (i + 3 < n && frame[i+1] === 0 && frame[i+2] === 0 && frame[i+3] === 1) sc = 4;
+      else { i++; continue; }
+      var start = i + sc;
+      // 找下一个 start code
+      var j = start, next = n;
+      while (j + 2 < n) {
+        if (frame[j] === 0 && frame[j+1] === 0 && frame[j+2] === 1) { next = j; break; }
+        if (j + 3 < n && frame[j] === 0 && frame[j+1] === 0 && frame[j+2] === 0 && frame[j+3] === 1) { next = j; break; }
+        j++;
       }
-    } catch (e) {}
-  }
-
-  // ===== 鼠标进入云游戏窗口自动锁定 =====
-  // 浏览器安全限制：requestPointerLock 必须由用户激活手势（click/mousedown/keydown）
-  // 触发，纯 mouseenter 无法锁定。这里用"任意鼠标按下即锁定"（比仅点击画面更灵敏），
-  // 锁定后指针被浏览器捕获，不再移出浏览器窗口；Esc 退出锁定后再次按下即可重锁。
-  function initAutoPointerLock() {
-    try {
-      var d = cloudFrame.contentDocument;
-      if (!d) { return; }
-      d.addEventListener("mousedown", function () {
-        if (gameEnded) { return; }
-        var el = d.querySelector("canvas") || d.body;
-        if (el && el.requestPointerLock) {
-          try { el.requestPointerLock(); } catch (e) {}
+      var len = next - start;
+      if (len > 0) {
+        var hdr = frame[start];
+        var nalType = hdr & 0x1F;
+        if (nalType !== 7 && nalType !== 8) {  // 剔除 SPS/PPS
+          out.push((len >>> 24) & 0xFF, (len >>> 16) & 0xFF, (len >>> 8) & 0xFF, len & 0xFF);
+          for (var k = 0; k < len; k++) out.push(frame[start + k]);
         }
-      }, true);
-      d.addEventListener("pointerlockchange", function () {
-        var locked = d.pointerLockElement != null;
-        var h = document.getElementById("grabHint");
-        if (h) { h.style.opacity = locked ? "0" : "1"; }
-        if (locked) { updateTopbarAutoHide(); }
-      });
-    } catch (e) {}
+      }
+      i = next;
+    }
+    return new Uint8Array(out);
   }
 
-  // ===== 实例异常结束：清理通道并提示重新连接 =====
-
-  function endGameWithMessage(msg) {
-    gameEnded = true;
-    clearSession();
-    started = false;
-    reconnectAttempts = 5; // 禁止自动重连
-    if (reconnectTimer) { clearTimeout(reconnectTimer); }
-    try {
-      cloudFrame.src = "about:blank";
-      cloudFrame.classList.add("hidden");
-    } catch (e) {}
-    fitBtn.classList.add("hidden");
-    quitBtn.classList.add("hidden");
-    var h = document.getElementById("grabHint");
-    if (h) { h.style.opacity = "0"; }
-    overlay.classList.remove("hidden");
-    title.textContent = "连接已断开";
-    desc.textContent = "游戏实例已退出或画面消失，请点击下方按钮重新连接。";
-    errBox.textContent = msg;
-    errBox.classList.remove("hidden");
-    userInput.classList.remove("hidden");
-    btn.disabled = false;
-    btn.textContent = "重新连接";
-    waiting.classList.add("hidden");
-    statusEl.textContent = "游戏已断开";
+  function buildDescription(sps, pps) {
+    // AVCDecoderConfigurationRecord：profile/compat/level 取自 SPS
+    var arr = [0x01, sps[1], sps[2], sps[3], 0xFF, 0xE1];
+    arr.push((sps.length >>> 8) & 0xFF, sps.length & 0xFF);
+    for (var i = 0; i < sps.length; i++) arr.push(sps[i]);
+    arr.push(0x01, (pps.length >>> 8) & 0xFF, pps.length & 0xFF);
+    for (var j = 0; j < pps.length; j++) arr.push(pps[j]);
+    return new Uint8Array(arr);
   }
 
-  // ===== iframe 启动（含首次加载竞态自愈）=====
-
-  var kasmUrl = "";
-  var reloadCount = 0;
-
-  function startCloud(url) {
-    overlay.classList.add("hidden");
-    cloudFrame.classList.remove("hidden");
-    fitBtn.classList.remove("hidden");
-    quitBtn.classList.remove("hidden");
-    kasmUrl = url;
-    statusEl.textContent = "已连接游戏实例";
-    // 关闭 KasmVNC 自身等比缩放（resize=scale 会周期性覆盖 canvas 尺寸，
-    // 与铺满 CSS 拉锯导致黑边）；改由本页 applyFit 全权控制 canvas 拉伸
-    url = url.replace(/([?&])resize=scale/, "$1resize=off");
-    showGrabHint();
-    // 预热关键资源，降低 KasmVNC 首次加载竞态（偶发 unhandledrejection 中断连接）
-    try {
-      var base = url.replace(/vnc\.html.*$/, "");
-      ["assets/ui-BOjwDkC7.js", "assets/ui-PaSsnzBa.css"].forEach(function (p) {
-        fetch(base + p, { mode: "no-cors" }).catch(function () {});
-      });
-    } catch (e) {}
-    cloudFrame.src = url;
-    applyFit();
-    startFitWatch();
-    initAutoHideTopbar();
-    initAutoPointerLock();
+  function avcCodec(sps) {
+    // 依据 SPS profile_idc/constraints/level 动态生成 avc1.PPCCLL（与流实际编码一致）
+    var h = function (v) { return ('00' + (v & 0xFF).toString(16)).slice(-2); };
+    return 'avc1.' + h(sps[1]) + h(sps[2]) + h(sps[3]);
   }
 
-  // ===== 全局独立自愈轮询（不依赖 startCloud 闭包，定时检测 iframe 是否真正连上画面）=====
-  // 判定"已稳定"：KasmVNC title 含真实桌面名（DESKTOP-xxx:NN (webgame) - KasmVNC）且 canvas 有实际画面；
-  // 只要未稳定（停在 KasmVNC 初始 title / 画面丢失），就自动重载（最多 4 次），直到连上为止。
-  window.__healCount = 0;
-  setInterval(function () {
-    if (cloudFrame.classList.contains("hidden")) { return; }
-    if (gameEnded) { return; }
-    var d;
-    try { d = cloudFrame.contentDocument; } catch (e) { return; }
-    if (!d || !d.title) { return; }
-    // noVNC 标题形如 "DESKTOP-xxx:99 - noVNC"；KasmVNC 为 "...(webgame) - KasmVNC"
-    var connected = d.title.indexOf("noVNC") > 0 || d.title.indexOf("(webgame)") > 0;
-    var cv = d.querySelector("canvas");
-    var painted = cv && cv.width > 100 && cv.height > 100;
-    if (connected && painted) {
-      window.__healCount = 0;
-      applyFit();
+  // ================= 解码器 =================
+  var cfgSps = null, cfgPps = null, lastRebuild = 0;
+  function ensureDecoder(sps, pps, w, h) {
+    if (configured) return;
+    if (!('VideoDecoder' in window)) {
+      setOv('浏览器不支持 WebCodecs', '请使用较新版本的 Chrome / Edge（Chromium 内核）', '');
       return;
     }
-    if (window.__healCount >= 4 && kasmUrl) {
-      // 连续重载仍无画面：视为游戏画面消失/实例异常 → 关闭通道并提示重连
-      try { ws.close(1000, "ended"); } catch (e) {}
-      endGameWithMessage("游戏画面已断开，请重新连接");
-      return;
+    try {
+      decoder = new VideoDecoder({
+        output: function (frame) {
+          try {
+            // 强制以 codedWidth/codedHeight 全帧绘制（避免 visibleRect 异常导致画面偏移/裁剪）
+            ctx2d.drawImage(frame, 0, 0, frame.codedWidth, frame.codedHeight, 0, 0, canvas.width, canvas.height);
+            if (window.__wgFrame) {
+              window.__wgFrame.cw = frame.codedWidth; window.__wgFrame.ch = frame.codedHeight;
+              var vr = frame.visibleRect; window.__wgFrame.vr = vr ? (vr.x + ',' + vr.y + ',' + vr.width + ',' + vr.height) : 'none';
+            }
+            // 排障：每 3s 把解码输出帧原样导出（全尺寸，不经主 canvas 缩放），确认竖线是否在解码帧内
+            var now3 = Date.now();
+            if (!window.__shotCanvas) window.__shotCanvas = document.createElement('canvas');
+            if (!window.__lastShot || now3 - window.__lastShot > 3000) {
+              window.__lastShot = now3;
+              var sc = window.__shotCanvas;
+              sc.width = frame.codedWidth; sc.height = frame.codedHeight;
+              sc.getContext('2d').drawImage(frame, 0, 0, frame.codedWidth, frame.codedHeight);
+              window.__wgFrameShot = sc.toDataURL('image/png');
+            }
+            // 背压/停顿检测：记录最近 output 时间（停顿检测用）
+            window.__wgLastOutput = Date.now();
+            frame.close();
+            fpsAccum++;
+            var now = Date.now();
+            if (now - fpsStart >= 1000) {
+              $('fpsText').textContent = fpsAccum + ' FPS';
+              fpsAccum = 0; fpsStart = now;
+            }
+          } catch (e) {}
+        },
+        error: function (e) {
+          console.error('VideoDecoder error', e, window.__wgLast || '');
+          configured = false;
+          // 偶发损坏帧导致解码错误：缓存 SPS/PPS 自动重建解码器，
+          // 等待下一个关键帧恢复画面（节流 1s，避免错误风暴）。
+          if (cfgSps && cfgPps && Date.now() - lastRebuild > 1000) {
+            lastRebuild = Date.now();
+            try { ensureDecoder(cfgSps, cfgPps, cfgWidth, cfgHeight); } catch (e2) { console.error('rebuild decoder', e2); }
+          }
+        }
+      });
+      window.decoder = decoder; // 排障：bu 读取解码器状态
+      decoder.configure({
+        codec: avcCodec(sps),
+        codedWidth: w, codedHeight: h,
+        description: buildDescription(sps, pps),
+        optimizeForLatency: true
+      });
+      configured = true;
+      cfgWidth = w; cfgHeight = h; cfgSps = sps; cfgPps = pps;
+      // 静态画面下 x264 关键帧可能为非 IDR（type=1），cc 的 is_key 仅认 type=5，
+      // configure 后 WebCodecs 强制首个 chunk 为 key：pendingKey=true 时丢弃 delta、等待首个 key 帧。
+      pendingKey = true;
+      setConn('ok', '已连接 · 就绪');
+    } catch (e) {
+      console.error('configure failed', e);
+      setOv('解码器初始化失败', String(e && e.message || e), '');
     }
-    if (kasmUrl) {
-      window.__healCount++;
-      cloudFrame.src = kasmUrl; // 自愈重载（等执行面服务完全就绪后重连）
-    }
-  }, 4000);
-
-  function applyFitToggle() {
-    fitMode = !fitMode;
-    fitBtn.textContent = fitMode ? "铺满" : "原始比例";
-    applyFit();
-    updateTopbarAutoHide();
   }
 
-  // ===== 信令连接 =====
+  function handleConfig(payload) {
+    // [0x01][u16 spsLen][sps][u16 ppsLen][pps][u32 w][u32 h][u32 fps] 小端
+    var v = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    var off = 1;
+    var spsLen = v.getUint16(off, true); off += 2;
+    var sps = new Uint8Array(payload.buffer, payload.byteOffset + off, spsLen); off += spsLen;
+    var ppsLen = v.getUint16(off, true); off += 2;
+    var pps = new Uint8Array(payload.buffer, payload.byteOffset + off, ppsLen); off += ppsLen;
+    var w = v.getUint32(off, true); off += 4;
+    var h = v.getUint32(off, true); off += 4;
+    if (window.__wgStats) window.__wgStats.config++;
+    ensureDecoder(sps, pps, w, h);
+  }
 
-  function connect(user, sid) {
-    started = true;
-    sessionUser = user;
-    sessionSid = sid || "";
-    if (sessionSid) { saveSession(); }
+  function handleVideo(payload) {
+    if (window.__wgStats) window.__wgStats.video++;
+    if (!configured || !decoder || decoder.state !== 'configured') return;
+    // [0x02][u32 ts][u8 key][Annex-B]
+    var v = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    var ts = v.getUint32(1, true);
+    var key = payload[5] === 1;
+    if (pendingKey) {
+      // configure 后 WebCodecs 强制要求首个 chunk 为关键帧：
+      // 丢弃 delta 帧，等待真正 is_key 帧（静态画面下 x264 首帧可能为 non-IDR P 帧）。
+      if (!key) return;
+      pendingKey = false;
+    }
+    var annexb = new Uint8Array(payload.buffer, payload.byteOffset + 6, payload.byteLength - 6);
+    var avcc = annexbToAvcc(annexb);
+    if (avcc.length === 0) return;
+    // 背压：解码队列过大时丢帧（WebCodecs 硬解长时间运行可能 output 停摆/队列堆积，
+    // 丢帧等待下一个关键帧恢复，避免画面冻结在旧帧）
+    if (decoder.decodeQueueSize > 6) return;
+    // 排障快照：最近一个待解码 chunk 的元信息（error 回调据此定位出错帧）
+    if (window.__wgLast) { window.__wgLast.key = key; window.__wgLast.len = annexb.length; window.__wgLast.ts = ts; window.__wgLast.n = window.__wgStats ? window.__wgStats.video : -1; }
+    try {
+      decoder.decode(new EncodedVideoChunk({
+        type: key ? 'key' : 'delta',
+        timestamp: ts * 1000,
+        data: avcc
+      }));
+      if (window.__wgStats) window.__wgStats.decode++;
+      // 兜底就绪：视频帧已实际解码（实例推流中）但 0x06 READY 信令可能因
+      // WSL 转发层丢帧未达。解码满 30 帧即视为就绪（隐藏 overlay、解锁输入发送）。
+      if (!ready && window.__wgStats && window.__wgStats.decode >= 30) {
+        ready = true;
+        hideOv();
+        if (window.__wgStats) window.__wgStats.ready = 2; // 2 = 兜底就绪（信令未达）
+      }
+    } catch (e) { if (window.__wgStats) window.__wgStats.decodeFail++; console.error('decode chunk', e); }
+  }
 
-    var proto = location.protocol === "https:" ? "wss://" : "ws://";
-    var url = proto + location.host + "/cloud?user=" + encodeURIComponent(user)
-        + (sessionSid ? "&sid=" + encodeURIComponent(sessionSid) : "")
-        + (reqW > 0 ? "&w=" + reqW : "")
-        + (reqH > 0 ? "&h=" + reqH : "")
-        + (reqCores > 0 ? "&cores=" + reqCores : "")
-        + (reqXmx ? "&xmx=" + encodeURIComponent(reqXmx) : "")
-        + (reqFps > 0 ? "&fps=" + reqFps : "")
-        + (reqProfile ? "&profile=" + encodeURIComponent(reqProfile) : "");
-    ws = new WebSocket(url);
+  // ================= WS =================
+  function wsUrl() {
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var q = 'user=' + encodeURIComponent(user);
+    if (sid) q += '&sid=' + encodeURIComponent(sid);
+    if (P.client) q += '&client=' + encodeURIComponent(P.client);
+    if (P.profile) q += '&profile=' + encodeURIComponent(P.profile);
+    if (P.w) q += '&w=' + encodeURIComponent(P.w);
+    if (P.h) q += '&h=' + encodeURIComponent(P.h);
+    if (P.res) q += '&res=' + encodeURIComponent(P.res);
+    if (P.cores) q += '&cores=' + encodeURIComponent(P.cores);
+    if (P.xmx) q += '&xmx=' + encodeURIComponent(P.xmx);
+    if (P.fps) q += '&fps=' + encodeURIComponent(P.fps);
+    return proto + location.host + '/cloud?' + q;
+  }
 
-    var t0 = Date.now();
-    var timer = setInterval(function () {
-      var s = Math.round((Date.now() - t0) / 1000);
-      waitMsg.textContent = "已等待 " + s + " 秒（实例启动最长约 90 秒）";
-    }, 1000);
-
+  function connect() {
+    if (closed) return;
+    clearTimeout(retryTimer); retryTimer = null;
+    setConn('bad', '连接中…');
+    try { ws = new WebSocket(wsUrl()); } catch (e) {
+      onWsClose('连接失败：' + (e && e.message || e));
+      return;
+    }
+    ws.binaryType = 'arraybuffer';
     ws.onopen = function () {
-      reconnectAttempts = 0;
-      waitMsg.textContent = sessionSid ? "正在恢复会话，请稍候…" : "信令已连接，等待游戏实例就绪…";
+      errorReceived = false;
+      setConn('bad', '会话建立中…');
+      lastPong = Date.now();
+      startPing();
     };
     ws.onmessage = function (ev) {
-      if (!(ev.data instanceof Blob)) { return; }
-      var fr = new FileReader();
-      fr.onload = function () {
-        var arr = new Uint8Array(fr.result);
-        if (arr.length < 1) { return; }
-        var type = arr[0];
-        if (type === 0x03) {
-          // 服务器心跳 PING：回应用层 PONG（0x04 + 4 字节 ts），保持会话活跃
-          var ts = new Uint8Array(4);
-          var v = (Date.now() / 1000) | 0;
-          ts[0] = (v >>> 24) & 0xFF; ts[1] = (v >>> 16) & 0xFF;
-          ts[2] = (v >>> 8) & 0xFF; ts[3] = v & 0xFF;
-          var out = new Uint8Array(5);
-          out[0] = 0x04;
-          out.set(ts, 1);
-          ws.send(out.buffer);
-          return;
-        }
-        if (type === 0x06) {
-          // KASM_URL：0x06 后直接是 UTF-8 URL（服务器帧无长度头，实测确认）
-          var url = "";
-          for (var i = 1; i < arr.length; i++) { url += String.fromCharCode(arr[i]); }
-          clearInterval(timer);
-          // 从 KASM_URL 提取会话 token（/kasm/{sid}/{port}/...）持久化，供刷新/断线恢复
-          var m = url.match(/\/kasm\/([^/]+)\//);
-          if (m && m[1] && m[1] !== sessionSid) {
-            sessionSid = m[1];
-            saveSession();
-          }
-          startCloud(url);
-        } else if (type === 0x05) {
-          // ERROR：0x05 + u16 小端长度 + UTF-8 消息（必须按 UTF-8 解码，逐字节
-          // String.fromCharCode 会把中文 3 字节拆成 3 个 Latin-1 乱码字符）
-          var eLen = (arr[1] & 0xFF) | ((arr[2] & 0xFF) << 8);
-          var msg = "";
+      var buf = new Uint8Array(ev.data);
+      if (!buf.length) return;
+      var st = window.__wgStats; if (st) { st.frames++; st.bytes += buf.length; }
+      var type = buf[0];
+      switch (type) {
+        case T_CONFIG: handleConfig(buf); break;
+        case T_VIDEO: handleVideo(buf); break;
+        case T_PING:
+          // 回 PONG（计数器小端）
+          if (ws && ws.readyState === 1) ws.send(buildPong(buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24)));
+          break;
+        case T_PONG: lastPong = Date.now(); break;
+        case T_ERROR:
+          // [0x05][u16 len][utf8]
+          var len = buf[1] | (buf[2] << 8);
+          var msg = '';
+          try { msg = new TextDecoder().decode(buf.subarray(3, 3 + len)); } catch (e) {}
+          onServerError(msg);
+          break;
+        case T_READY:
+          ready = true;
+          if (window.__wgStats) window.__wgStats.ready++;
+          hideOv();
+          setConn('ok', '已连接 · 等待画面');
+          break;
+        case T_SESSION:
+          // 服务器下发真实 sessionId：持久化后断线/刷新可恢复同一实例
           try {
-            msg = new TextDecoder("utf-8").decode(arr.subarray(3, 3 + eLen));
-          } catch (e2) {
-            for (var j = 3; j < 3 + eLen && j < arr.length; j++) { msg += String.fromCharCode(arr[j]); }
-          }
-          clearInterval(timer);
-          if (started && !cloudFrame.classList.contains("hidden")) {
-            // 游戏进行中收到 ERROR（实例已退出）：关闭通道并提示重新连接
-            gameEnded = true;
-            try { ws.close(1000, "ended"); } catch (e) {}
-            endGameWithMessage(msg || "游戏实例已退出，请重新连接");
-          } else {
-            fail("无法进入服务器：" + msg);
-          }
-        }
-      };
-      fr.readAsArrayBuffer(ev.data);
-    };
-    ws.onclose = function (ev) {
-      clearInterval(timer);
-      if (!started) { return; }
-      if (gameEnded) { return; } // 实例异常结束：endGameWithMessage 已提示，不自动重连
-      // 短时掉线自动重连：指数退避 3/6/12/24/48s，最多 5 次；重连带 sid 恢复同一实例
-      if (reconnectAttempts < 5 && sessionSid) {
-        reconnectAttempts++;
-        var delay = 3000 * Math.pow(2, reconnectAttempts - 1);
-        statusEl.textContent = "连接断开，" + Math.round(delay / 1000) + " 秒后自动重连…（" + reconnectAttempts + "/5）";
-        reconnectTimer = setTimeout(function () {
-          if (started) { connect(sessionUser, sessionSid); }
-        }, delay);
-        return;
+            var slen = buf[1] | (buf[2] << 8);
+            var realSid = new TextDecoder().decode(buf.subarray(3, 3 + slen));
+            if (realSid) {
+              sid = realSid;
+              localStorage.setItem('wg_cloud_session_' + (user || 'guest'), realSid);
+            }
+          } catch (e) {}
+          break;
+        default: break;
       }
-      started = false;
-      fail("信令连接已断开，请重试");
     };
-    ws.onerror = function () {
-      clearInterval(timer);
-      if (!started) { return; }
-      statusEl.textContent = "信令连接异常，等待自动重连…";
-      // 不立即 fail：等 onclose 触发重连逻辑
-    };
+    ws.onclose = function () { onWsClose('连接已断开'); };
+    ws.onerror = function () { /* onclose 处理 */ };
   }
 
-  // ===== UI 流程 =====
+  function startPing() {
+    stopPing();
+    pingTimer = setInterval(function () {
+      if (!ws || ws.readyState !== 1) return;
+      if (Date.now() - lastPong > 20000) {
+        // 心跳超时：主动重连
+        try { ws.close(); } catch (e) {}
+        onWsClose('心跳超时，正在重连…');
+        return;
+      }
+      // 客户端心跳 PONG（模拟浏览器活动，保持服务端失活判定）
+      try { ws.send(buildPong(Math.floor(Math.random() * 0xFFFFFFFF))); } catch (e) {}
+      // 解码输出停顿检测：configured 但 >2.5s 无 output → 重建解码器（硬解长时间运行偶发输出停摆）
+      if (window.__wgLastOutput && configured && decoder) {
+        if (Date.now() - window.__wgLastOutput > 2500 && Date.now() - (window.__wgLastRebuild || 0) > 3000) {
+          window.__wgLastRebuild = Date.now();
+          try {
+            configured = false;
+            if (cfgSps && cfgPps) ensureDecoder(cfgSps, cfgPps, cfgWidth, cfgHeight);
+          } catch (e) { console.error('stall rebuild', e); }
+        }
+      }
+    }, 3000);
+  }
+  function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
 
-  function fail(msg) {
-    clearSession();
-    gameEnded = true;
-    started = false;
-    reconnectAttempts = 5;
-    errBox.textContent = msg;
-    errBox.classList.remove("hidden");
-    waiting.classList.add("hidden");
-    userInput.classList.remove("hidden");
-    btn.disabled = false;
-    btn.textContent = "重新连接";
-    fitBtn.classList.add("hidden");
-    quitBtn.classList.add("hidden");
-    overlay.classList.remove("hidden");
-    try { cloudFrame.classList.add("hidden"); } catch (e) {}
-    statusEl.textContent = "路线 C · 执行面 KasmVNC";
+  var lastServerError = '';
+  function onServerError(msg) {
+    errorReceived = true;
+    lastServerError = msg || '';
+    setOv('无法进入服务器', lastServerError, '');
+    $('btnRetry').style.display = 'inline-block';
+    $('spin').style.display = 'none';
+    setConn('bad', '错误');
+    // 不主动关闭 WS：保留连接展示具体错误；服务端随后断开时 onWsClose 会
+    // 在 errorReceived 分支显示 lastServerError（而非笼统的"连接已断开"）。
+  }
+
+  function onWsClose(reason) {
+    setConn('bad', '已断开');
+    stopPing();
+    ready = false;
+    if (closed) return;
+    if (errorReceived) {
+      // 实例已结束（如游戏窗口关闭/崩溃）或服务端主动报错：不自动重连，等待用户手动重试
+      setOv('游戏实例已结束', lastServerError || reason || '请点击重新连接以再次进入服务器', '');
+      $('btnRetry').style.display = 'inline-block';
+      $('spin').style.display = 'none';
+      return;
+    }
+    // 普通断线：短时自动重连（保留 sessionId 恢复同一实例）
+    setOv('连接已断开', reason || '', '5 秒后自动重连，也可手动重试');
+    $('btnRetry').style.display = 'inline-block';
+    $('spin').style.display = 'none';
+    retryTimer = setTimeout(function () {
+      setOv('正在重新连接…', '', '');
+      $('spin').style.display = 'block';
+      connect();
+    }, 5000);
+  }
+
+  // ================= 输入捕获 =================
+  function onCanvasClick() {
+    if (!ready) return;
+    if (document.pointerLockElement !== canvas) {
+      try { canvas.requestPointerLock(); } catch (e) {}
+    }
+  }
+
+  document.addEventListener('pointerlockchange', function () {
+    locked = document.pointerLockElement === canvas;
+    if (!locked) {
+      lastAbsX = -1; lastAbsY = -1;
+      // 解锁后同步一次绝对位置（MC GUI 交互用）
+      var r = canvas.getBoundingClientRect();
+      var x = Math.round((lastMouseX - r.left) * cfgWidth / r.width);
+      var y = Math.round((lastMouseY - r.top) * cfgHeight / r.height);
+      if (x >= 0 && y >= 0) evAbs(x, y);
+    }
+  });
+
+  var lastMouseX = 0, lastMouseY = 0;
+
+  // 输入监听注册（canvas 初始化后调用）
+  function bindInput() {
+  canvas.addEventListener('mousemove', function (e) {
+    lastMouseX = e.clientX; lastMouseY = e.clientY;
+    if (locked) {
+      // 相对移动（pointer lock）
+      if (e.movementX || e.movementY) evMove(e.movementX, e.movementY);
+    } else {
+      // 绝对移动（GUI 模式）
+      var r = canvas.getBoundingClientRect();
+      var x = Math.round((e.clientX - r.left) * cfgWidth / r.width);
+      var y = Math.round((e.clientY - r.top) * cfgHeight / r.height);
+      if (x !== lastAbsX || y !== lastAbsY) {
+        lastAbsX = x; lastAbsY = y;
+        if (x >= 0 && y >= 0) evAbs(x, y);
+      }
+    }
+  });
+
+  canvas.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    if (!ready) return;
+    if (locked) {
+      evBtn(e.button, true);
+    } else {
+      var r = canvas.getBoundingClientRect();
+      var x = Math.round((e.clientX - r.left) * cfgWidth / r.width);
+      var y = Math.round((e.clientY - r.top) * cfgHeight / r.height);
+      evClick(x, y, e.button, true);
+    }
+  });
+  window.addEventListener('mouseup', function (e) {
+    if (!ready) return;
+    if (locked) evBtn(e.button, false);
+    else {
+      var r = canvas.getBoundingClientRect();
+      var x = Math.round((e.clientX - r.left) * cfgWidth / r.width);
+      var y = Math.round((e.clientY - r.top) * cfgHeight / r.height);
+      evClick(x, y, e.button, false);
+    }
+  });
+
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    if (!ready) return;
+    evWheel(Math.round(e.deltaY) || (e.deltaY > 0 ? 1 : -1));
+  }, { passive: false });
+
+  // 键盘：捕获 + 阻止浏览器快捷键（可锁定键）
+  var BLOCK_KEYS = ['F5','F11','F12','Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '];
+  window.addEventListener('keydown', function (e) {
+    if (!ready) return;
+    if (BLOCK_KEYS.indexOf(e.code) >= 0 || e.ctrlKey || e.metaKey || e.altKey && e.code.indexOf('Alt') < 0) {
+      // 仅阻止会触发浏览器行为的组合
+      if (e.ctrlKey || e.metaKey || e.key === 'F5' || e.key === 'F11') e.preventDefault();
+    }
+    if (document.pointerLockElement === canvas || ready) {
+      evKey(e.code, true);
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    if (!ready) return;
+    evKey(e.code, false);
+  });
+
+  // 顶部状态栏：鼠标近顶部滑出
+  document.addEventListener('mousemove', function (e) {
+    var bar = $('topbar');
+    if (e.clientY <= 6) bar.classList.add('visible');
+    else if (e.clientY > 48) bar.classList.remove('visible');
+  });
+
+  // 退出
+  $('btnQuit').addEventListener('click', function () {
+    closed = true;
+    stopPing();
+    try { if (ws) ws.close(1000, 'quit'); } catch (e) {}
+    localStorage.removeItem('wg_cloud_session');
+    location.href = './index';
+  });
+  $('btnRetry').addEventListener('click', function () {
+    clearTimeout(retryTimer); retryTimer = null;
+    setOv('正在重新连接…', '', '');
+    $('spin').style.display = 'block';
+    connect();
+  });
+  } // end bindInput
+
+  // ================= 登录流程 =================
+  function start() {
+    canvas = $('screen');
+    ctx2d = canvas.getContext('2d');
+    // 铺满：canvas 尺寸随视口（CSS 100%），像素比取高分屏
+    function resize() {
+      canvas.width = window.innerWidth * devicePixelRatio;
+      canvas.height = window.innerHeight * devicePixelRatio;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    bindInput();
+
+    if (user) {
+      $('login').classList.add('hidden');
+      $('userName').value = user;
+      boot();
+    } else {
+      $('login').classList.remove('hidden');
+      $('userName').focus();
+      $('btnEnter').addEventListener('click', enter);
+      $('userName').addEventListener('keydown', function (e) { if (e.key === 'Enter') enter(); });
+      // 容器可用性
+      fetch('./containers/status').then(function (r) { return r.json(); }).then(function (j) {
+        try {
+          var inner = JSON.parse(j.data);
+          $('capText').textContent = '容器状态：' + (inner.controlConnected ? '可用' : '不可用')
+            + '（已用 ' + inner.used + ' / 上限 ' + inner.max + '）';
+        } catch (e) {}
+      }).catch(function () {});
+    }
   }
 
   function enter() {
-    if (started) { return; }
-    btn.textContent = "进入服务器";
-    gameEnded = false;
-    var user = input.value.trim();
-    if (!/^[A-Za-z0-9_]{1,16}$/.test(user)) {
-      errBox.textContent = "用户名须为 1-16 位字母/数字/下划线";
-      errBox.classList.remove("hidden");
-      return;
-    }
-    errBox.classList.add("hidden");
-    btn.disabled = true;
-    userInput.classList.add("hidden");
-    waiting.classList.remove("hidden");
-    title.textContent = "正在进入服务器";
-    desc.textContent = "正在为你分配隔离的游戏实例…";
-    waitMsg.textContent = "";
-    connect(user, "");
+    var name = $('userName').value.trim().replace(/[\s"']/g, '');
+    if (!name) { $('userName').focus(); return; }
+    user = name;
+    localStorage.setItem('wg_cloud_user', name);
+    sid = loadSid(); // sid 绑定用户名
+    $('login').classList.add('hidden');
+    boot();
   }
 
-  function quit() {
-    if (ws) {
-      try { ws.close(1000, "quit"); } catch (e) {}
-    }
-    clearSession();
-    started = false;
-    reconnectAttempts = 5; // 阻止自动重连
-    if (reconnectTimer) { clearTimeout(reconnectTimer); }
-    location.reload();
+  function boot() {
+    setOv('正在建立会话', '实例启动可能需要 1-2 分钟，请耐心等待', '');
+    connect();
   }
 
-  // URL ?user=xxx 预填（URL 显式指定的用户优先于本地会话恢复）
-  var urlUser = "";
-  // 设备型号参数（设备选择页跳转携带；缺省由服务端 config 兜底）
-  var reqCores = 0, reqXmx = "", reqFps = 0, reqProfile = "";
-  // 容器分辨率：?res=1600x900 或 ?w=1600&h=900，透传给执行面 Xvfb/MC 全屏；
-  // 未指定/非法时 0 = 使用服务端 config cloud.scale（默认 1280x720）。
-  var reqW = 0, reqH = 0;
-  (function () {
-    var q = location.search;
-    if (q.indexOf("user=") >= 0) {
-      q.replace(/[?&]user=([^&]*)/, function (m, v) { urlUser = v; return m; });
-      if (urlUser) { input.value = decodeURIComponent(urlUser); }
-    }
-    function clamp(v) { v = parseInt(v, 10); return (v >= 640 && v <= 2560) ? (v & ~1) : 0; }
-    var m = q.match(/[?&]res=([^&]*)/);
-    if (m && m[1].indexOf("x") > 0) {
-      var sp = m[1].split("x");
-      reqW = clamp(sp[0]); reqH = clamp(sp[1]);
-    } else {
-      var mw = q.match(/[?&]w=([^&]*)/);
-      var mh = q.match(/[?&]h=([^&]*)/);
-      if (mw) { reqW = clamp(mw[1]); }
-      if (mh) { reqH = clamp(mh[1]); }
-    }
-    // 设备型号：cores 1-4 / xmx 1G-4G / fps 10-60 / profile 记录用（服务端 clamp 兜底）
-    var mc = q.match(/[?&]cores=([^&]*)/);
-    if (mc) { var cv = parseInt(mc[1], 10); reqCores = (cv >= 1 && cv <= 4) ? cv : 0; }
-    var mx = q.match(/[?&]xmx=([^&]*)/);
-    if (mx && /^[1-4]G$/i.test(mx[1])) { reqXmx = mx[1].toUpperCase(); }
-    var mf = q.match(/[?&]fps=([^&]*)/);
-    if (mf) { var fv = parseInt(mf[1], 10); reqFps = (fv >= 10 && fv <= 60) ? fv : 0; }
-    var mp = q.match(/[?&]profile=([^&]*)/);
-    if (mp) { reqProfile = mp[1]; }
-  })();
-
-  btn.addEventListener("click", enter);
-  input.addEventListener("keydown", function (e) { if (e.key === "Enter") { enter(); } });
-  fitBtn.addEventListener("click", applyFitToggle);
-  quitBtn.addEventListener("click", quit);
-
-  // 页面加载：URL 未指定用户且存在有效会话 → 自动恢复（跳过登录，直接回到同一实例）；
-  // URL 指定了不同用户 → 清掉旧会话，走新用户登录
-  var stored = loadSession();
-  if (stored && /^[A-Za-z0-9_]{1,16}$/.test(stored.user) && /^c\d+$/.test(stored.sid)) {
-    if (urlUser && stored.user !== urlUser) {
-      clearSession();
-      stored = null;
-    }
-  } else {
-    clearSession();
-    stored = null;
-  }
-  if (stored) {
-    input.value = stored.user;
-    btn.disabled = true;
-    userInput.classList.add("hidden");
-    waiting.classList.remove("hidden");
-    title.textContent = "正在恢复会话";
-    desc.textContent = "检测到上次会话未结束，正在恢复到你的游戏实例…";
-    waitMsg.textContent = "";
-    errBox.classList.add("hidden");
-    connect(stored.user, stored.sid);
-  } else if (urlUser && /^[A-Za-z0-9_]{1,16}$/.test(urlUser)) {
-    // URL 显式指定用户名（设备选择页跳转 / 标准接口直达）：自动进入，无需再点按钮
-    input.value = urlUser;
-    btn.disabled = true;
-    userInput.classList.add("hidden");
-    waiting.classList.remove("hidden");
-    title.textContent = "正在进入服务器";
-    desc.textContent = "正在为你分配隔离的游戏实例…";
-    waitMsg.textContent = "";
-    errBox.classList.add("hidden");
-    connect(urlUser, "");
-  } else {
-    input.focus();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
 })();
 </script>
 </body>

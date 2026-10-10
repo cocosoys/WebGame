@@ -7,15 +7,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 编码进程：spawn FFmpeg 抓屏（Windows gdigrab / Linux x11grab）→ libx264 低延迟
+ * 编码进程：spawn FFmpeg 抓屏（Windows gdigrab）→ libx264 低延迟
  * 编码 → stdout 读取 Annex-B H.264 → 按 NAL 切帧（参照 Carrot 帧协议）。
  *
  * <p>职责边界：仅负责「抓屏 → 编码 → 分帧回调」，传输由 {@link CloudSession}
  * 负责（WS 帧封装）；帧协议与传输解耦，未来 v2 分离端口直接复用本回调字节。</p>
  *
  * <p>FFmpeg 不可用 / 启动失败时回调 {@link Listener#onUnavailable(String)}，
- * 由会话下发 ERROR 提示浏览器「等待游戏实例」——游戏实例（Forge farm）落地后
- * 采集源改为容器内虚拟显示，本类逻辑不变（仅换输入参数）。</p>
+ * 由会话下发 ERROR 提示浏览器「等待游戏实例」——GFN 方案（Windows 执行面）
+ * 落地后采集源改为虚拟显示器窗口，本类逻辑不变（仅换输入参数）。</p>
  */
 public final class EncoderProcess {
 
@@ -135,7 +135,8 @@ public final class EncoderProcess {
         cmd.add("error");
         String mode = captureMode;
         if ("auto".equalsIgnoreCase(mode)) {
-            mode = System.getProperty("os.name", "").toLowerCase().contains("win") ? "gdigrab" : "x11grab";
+            // 执行面已从 Linux/Xvfb 移除：auto 仅回落 Windows gdigrab
+            mode = "gdigrab";
         }
         // 窗口采集：capture 显式 "window:<标题>" 优先，其次 windowTitle 参数（容器客户端）
         String win = null;
@@ -144,6 +145,10 @@ public final class EncoderProcess {
             mode = "gdigrab";
         } else if (windowTitle != null && !windowTitle.isEmpty() && "gdigrab".equalsIgnoreCase(mode)) {
             win = windowTitle;
+        }
+        // 仅支持 Windows gdigrab（Linux x11grab 已随执行面移除）；未知模式回落 gdigrab
+        if (!"gdigrab".equalsIgnoreCase(mode)) {
+            mode = "gdigrab";
         }
         if ("gdigrab".equalsIgnoreCase(mode)) {
             cmd.add("-f");
@@ -162,15 +167,6 @@ public final class EncoderProcess {
                 cmd.add("-i");
                 cmd.add("desktop");
             }
-        } else {
-            cmd.add("-f");
-            cmd.add("x11grab");
-            cmd.add("-framerate");
-            cmd.add(String.valueOf(fps));
-            cmd.add("-video_size");
-            cmd.add(scale);
-            cmd.add("-i");
-            cmd.add(":0");
         }
         cmd.add("-c:v");
         cmd.add("libx264");

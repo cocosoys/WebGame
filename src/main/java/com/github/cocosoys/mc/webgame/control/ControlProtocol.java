@@ -27,14 +27,15 @@ import java.util.Map;
  * <p><b>消息类型</b>：</p>
  * <pre>
  * 下行（插件 → 执行面）：
- *   1  SPAWN        instanceId, username, server, port[, display, xmx, scale, fps, bitrate, clientDir]
+ *   1  SPAWN        instanceId, username, server, port[, display, xmx, scale, fps, bitrate, clientDir,
+ *                  versionId, javaHome, launchStyle]   // 多客户端版本：执行面按 launchStyle 选模板
  *   2  KILL         instanceId
  *   3  STATUS       [instanceId]（空 = 全量）
  *   4  CONFIG       key, value（配置下发，可多条）
  *   5  PING         ts
  * 上行（执行面 → 插件）：
  *   0x81 SPAWN_ACK  instanceId, ok, [reason]
- *   0x82 READY      instanceId, display, kasmPort, [host], [windowTitle], readyAt
+ *   0x82 READY      instanceId, display, [host], [windowTitle], readyAt
  *   0x83 STOPPED    instanceId, reason
  *   0x84 STATUS_RPT instances（如 "id:state" 逗号分隔）, capacity, [runs]
  *   0x85 PONG       ts
@@ -42,7 +43,7 @@ import java.util.Map;
  * </pre>
  *
  * <p>实例（Instance）是插件唯一认知的"黑盒"：插件只持有 instanceId + 状态 +
- * 采集端点（display / kasmPort），不关心 Xvnc / Forge 客户端如何组织。</p>
+ * 采集端点（display），不关心执行面如何组织客户端。</p>
  */
 public final class ControlProtocol {
 
@@ -52,6 +53,8 @@ public final class ControlProtocol {
     public static final int C_STATUS = 3;
     public static final int C_CONFIG = 4;
     public static final int C_PING = 5;
+    /** 输入事件下行（浏览器输入经插件转发到执行面）：二进制 payload = Cloud 协议输入事件流。 */
+    public static final int C_INPUT = 0x0A;
 
     // ---- 上行类型 ----
     public static final int S_SPAWN_ACK = 0x81;
@@ -60,6 +63,10 @@ public final class ControlProtocol {
     public static final int S_STATUS_RPT = 0x84;
     public static final int S_PONG = 0x85;
     public static final int S_ERROR = 0x86;
+    /** 视频配置帧上行（执行面 FFmpeg 推流）：二进制 payload = Cloud 协议 CONFIG 帧（不含首字节）。 */
+    public static final int S_VIDEO_CONFIG = 0x87;
+    /** 视频帧上行（执行面 FFmpeg 推流）：二进制 payload = Cloud 协议 VIDEO 帧（不含首字节）。 */
+    public static final int S_VIDEO_FRAME = 0x88;
 
     // ---- 实例状态（执行面上报，插件侧镜像） ----
     public static final String ST_SPAWNING = "spawning";
@@ -112,16 +119,39 @@ public final class ControlProtocol {
         return encode(type, m);
     }
 
+    // ================= 二进制帧 =================
+
+    /** 组装一帧（二进制 payload：原样承载，不做 URL 编码）。 */
+    public static byte[] encodeBinary(int type, byte[] payload) {
+        byte[] p = payload == null ? new byte[0] : payload;
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(5 + p.length);
+        bos.write((p.length >>> 24) & 0xFF);
+        bos.write((p.length >>> 16) & 0xFF);
+        bos.write((p.length >>> 8) & 0xFF);
+        bos.write(p.length & 0xFF);
+        bos.write(type & 0xFF);
+        bos.write(p, 0, p.length);
+        return bos.toByteArray();
+    }
+
     // ================= 解码 =================
 
-    /** 从完整帧字节中解析类型与字段（长度字段由调用方先校验/剥离）。 */
+    /**
+     * 从完整帧字节中解析类型与字段（长度字段由调用方先校验/剥离）。
+     * 二进制帧类型（S_VIDEO_CONFIG / S_VIDEO_FRAME / C_INPUT）保留原始字节。
+     */
     public static ControlMessage parse(byte[] frameBodyWithType) {
         if (frameBodyWithType == null || frameBodyWithType.length < 1) {
             return null;
         }
         int type = frameBodyWithType[0] & 0xFF;
+        byte[] raw = new byte[frameBodyWithType.length - 1];
+        System.arraycopy(frameBodyWithType, 1, raw, 0, raw.length);
+        if (type == S_VIDEO_CONFIG || type == S_VIDEO_FRAME || type == C_INPUT) {
+            return new ControlMessage(type, raw);
+        }
         Map<String, String> fields = new LinkedHashMap<>();
-        String body = new String(frameBodyWithType, 1, frameBodyWithType.length - 1, StandardCharsets.UTF_8);
+        String body = new String(raw, StandardCharsets.UTF_8);
         if (!body.isEmpty()) {
             for (String line : body.split("\n")) {
                 int eq = line.indexOf('=');
