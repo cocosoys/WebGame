@@ -1,6 +1,7 @@
 .idea/
 docs/
 /tools/
+/tools/input-agent/out/
 /eaglersrc/
 target/
 *.iml
@@ -11,6 +12,12 @@ NUL
 dependency-reduced-pom.xml
 client/instances/
 client/testmod/
+
+# #7 关键产物入仓（agent 源码+构建+注入脚本）
+!/tools/input-agent/
+!/tools/input-agent/**
+!/tools/agent_key_probe.py
+!/tools/gui_cmd.py
 
 __pycache__/
 *.pyc

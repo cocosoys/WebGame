@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+Premain-Class: com.github.cocosoys.mc.webgame.agent.WebGameInputAgent
+Agent-Class: com.github.cocosoys.mc.webgame.agent.WebGameInputAgent
+Can-Redefine-Classes: true
+Can-Retransform-Classes: true
+
