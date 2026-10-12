@@ -116,6 +116,8 @@ jobs:
 
       - name: Publish driver release
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Continue'
           if (Test-Path "drivers/vmulti-mod/dist/vmulti.sys") {
