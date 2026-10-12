@@ -1,0 +1,52 @@
+name: fetch-interception-release
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fetch-interception.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download latest Interception release
+        shell: pwsh
+        run: |
+          "FETCH START $(Get-Date -Format o)" | Out-File fetch.log
+          $rel = Invoke-RestMethod -Headers @{ 'User-Agent' = 'webgame-ci' } -Uri 'https://api.github.com/repos/oblitum/Interception/releases/latest'
+          "release: $($rel.tag_name)" | Add-Content fetch.log
+          $asset = $rel.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+          if (-not $asset) { "FAIL: no zip asset" | Add-Content fetch.log; exit 1 }
+          "asset: $($asset.name)" | Add-Content fetch.log
+          curl.exe -L -o interception.zip $asset.browser_download_url
+          $sz = (Get-Item interception.zip).Length
+          "size: $sz" | Add-Content fetch.log
+          if ($sz -lt 100000) { "FAIL: too small" | Add-Content fetch.log; exit 1 }
+          Expand-Archive interception.zip dist -Force
+          Get-ChildItem dist -Recurse -File | ForEach-Object { "file: $($_.FullName.Replace((Get-Location).Path,'')) $($_.Length)" } | Add-Content fetch.log
+          Get-Content fetch.log
+
+      - name: Push dist branch
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          git config user.name "ci"
+          git config user.email "ci@ci.local"
+          Copy-Item fetch.log dist/fetch.log -Force
+          git add -f dist
+          git commit -m "interception dist snapshot $env:GITHUB_RUN_ID"
+          git push -f origin HEAD:refs/heads/interception-dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: interception-dist
+          path: dist/
+          retention-days: 30
