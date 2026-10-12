@@ -1,0 +1,21 @@
+FETCH START 2026-10-12T01:05:56.8400394+00:00
+release: v1.0.1
+asset: Interception.zip
+size: 389119
+file: \dist\Interception\command line installer\install-interception.exe 470528
+file: \dist\Interception\library\interception.h 7601
+file: \dist\Interception\library\x64\interception.dll 11264
+file: \dist\Interception\library\x64\interception.lib 5174
+file: \dist\Interception\library\x86\interception.dll 10752
+file: \dist\Interception\library\x86\interception.lib 5232
+file: \dist\Interception\licenses\commercial-usage\Interception API.pdf 22419
+file: \dist\Interception\licenses\commercial-usage\Interception.pdf 78798
+file: \dist\Interception\licenses\non-commercial-usage\LGPL 3.0.txt 7651
+file: \dist\Interception\samples\x86\axes.exe 8704
+file: \dist\Interception\samples\x86\cadstop.exe 29184
+file: \dist\Interception\samples\x86\caps2esc.exe 15872
+file: \dist\Interception\samples\x86\hardwareid.exe 30720
+file: \dist\Interception\samples\x86\identify.exe 40960
+file: \dist\Interception\samples\x86\interception.dll 10752
+file: \dist\Interception\samples\x86\mathpointer.exe 44544
+file: \dist\Interception\samples\x86\x2y.exe 8192
