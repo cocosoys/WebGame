@@ -14,9 +14,8 @@ import java.nio.charset.StandardCharsets;
  * <ul>
  *   <li>{@code GET ... Upgrade: websocket} 且路径为 WS 路径 → 接管：
  *       移除自身、插入 {@link WsFrameHandler}、重放缓冲；</li>
- *   <li>路径 {@code /cloud} → 接管云游戏通道（信令 + 推流 + 输入，路线 C 同端口 WS）；</li>
  *   <li>其他普通 HTTP 请求 → 放行但<b>保留自身</b>（keep-alive 连接上的后续
- *       /cloud 请求仍能被接管）；</li>
+ *       升级请求仍能被接管）；</li>
  *   <li>非 HTTP 首字节（TLS / MC 流量）→ 一次性放行并移除自身。</li>
  * </ul>
  */
@@ -103,17 +102,12 @@ public final class WsSnifferHandler extends ChannelInboundHandlerAdapter {
                 upgradeWs = true;
             }
         }
-        // 路线 C 已移除 KasmVNC 反代：/kasm/ 路径不接管，直接走普通 HTTP 路由（404）。
         if (!isGet || !upgradeWs || path == null) {
             passKeep(ctx);
             return;
         }
         if (path.equals(gateway.getWsPath())) {
             takeOverEagler(ctx);
-            return;
-        }
-        if (gateway.matchesCloudPath(path)) {
-            takeOverCloud(ctx);
             return;
         }
         passKeep(ctx);
@@ -127,15 +121,6 @@ public final class WsSnifferHandler extends ChannelInboundHandlerAdapter {
         replay(ctx);
     }
 
-    /** 接管 Cloud 云游戏通道：插入 cloud 帧处理器、移除自身、重放缓冲。 */
-    private void takeOverCloud(ChannelHandlerContext ctx) {
-        decided = true;
-        ctx.pipeline().addAfter(ctx.name(), "webgame-cloud-frame",
-                new com.github.cocosoys.mc.webgame.web.cloud.CloudFrameHandler(
-                        gateway.getCloudManager(), gateway.getCloudConfig()));
-        replay(ctx);
-    }
-
     private void replay(ChannelHandlerContext ctx) {
         ctx.pipeline().remove(this);
         ByteBuf replay = buffer;
@@ -144,7 +129,7 @@ public final class WsSnifferHandler extends ChannelInboundHandlerAdapter {
     }
 
     /**
-     * 放行 HTTP 请求但保留自身：keep-alive 连接上的后续 /cloud 请求仍可被接管。
+     * 放行 HTTP 请求但保留自身：keep-alive 连接上的后续升级请求仍可被接管。
      * fire 全部缓冲（含请求体）后重新分配缓冲，继续裁决下一请求。
      */
     private void passKeep(ChannelHandlerContext ctx) {
