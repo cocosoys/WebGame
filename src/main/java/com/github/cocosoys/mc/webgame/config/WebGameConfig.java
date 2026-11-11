@@ -63,6 +63,16 @@ public final class WebGameConfig {
     private final String clientJavaPath;
     private final int clientReadyTimeoutSeconds;
 
+    // ---- 多客户端版本注册表（cloud.clients）----
+    private final java.util.List<ClientSpec> clientSpecs;
+
+    // ---- 镜像仓库（cloud.images）----
+    private final String cloudImagesDir;
+    private final String cloudDefaultImage;
+
+    // ---- 执行后端（cloud.executor，ADR-12 预留）----
+    private final String cloudExecutor;
+
     // ---- 管控契约（插件 ↔ 执行面控制客户端）----
     private final String controlHost;
     private final int controlPort;
@@ -125,6 +135,10 @@ public final class WebGameConfig {
 
         this.controlHost = c.getString("control.host", "127.0.0.1").trim();
         this.controlPort = Math.max(1, Math.min(65535, c.getInt("control.port", 25576)));
+        this.clientSpecs = parseClientSpecs(c);
+        this.cloudImagesDir = c.getString("cloud.images.dir", "server-cloud/images").trim();
+        this.cloudDefaultImage = c.getString("cloud.images.default", "").trim();
+        this.cloudExecutor = c.getString("cloud.executor", "local").trim().toLowerCase();
     }
 
     public String getPublicHost() {
@@ -263,7 +277,7 @@ public final class WebGameConfig {
         return cloudFfmpegPath;
     }
 
-    /** 采集模式：auto | gdigrab | x11grab | none。 */
+    /** 采集模式：auto | gdigrab | none（Windows 执行面）。 */
     public String getCloudCapture() {
         return cloudCapture;
     }
@@ -281,12 +295,12 @@ public final class WebGameConfig {
         return cloudScale;
     }
 
-    /** 容器（Xvfb/MC 全屏）宽度：解析 cloud.scale 的 "WxH"（非法回落 1280）。 */
+    /** 容器（执行面渲染）宽度：解析 cloud.scale 的 "WxH"（非法回落 1280）。 */
     public int getCloudResolutionWidth() {
         return parseScale(cloudScale, 0, 1280);
     }
 
-    /** 容器（Xvfb/MC 全屏）高度：解析 cloud.scale 的 "WxH"（非法回落 720）。 */
+    /** 容器（执行面渲染）高度：解析 cloud.scale 的 "WxH"（非法回落 720）。 */
     public int getCloudResolutionHeight() {
         return parseScale(cloudScale, 1, 720);
     }
@@ -395,6 +409,23 @@ public final class WebGameConfig {
         return controlPort;
     }
 
+    // ===== 镜像仓库（cloud.images）=====
+
+    /** 镜像仓库目录（相对服务器根解析；默认 server-cloud/images）。 */
+    public String getCloudImagesDir() {
+        return cloudImagesDir.isEmpty() ? "server-cloud/images" : cloudImagesDir;
+    }
+
+    /** 默认镜像 id（未配置为空，由 CloudImageManager 取扫描第一项）。 */
+    public String getCloudDefaultImage() {
+        return cloudDefaultImage;
+    }
+
+    /** 执行后端模式：local（默认）| remote（S5 预留，暂不实现）。 */
+    public String getCloudExecutor() {
+        return "remote".equals(cloudExecutor) ? "remote" : "local";
+    }
+
     /** 规范化 WS 路径：确保以 / 开头、无结尾斜杠。 */
     private static String normalizeWsPath(String p) {
         String s = (p == null || p.trim().isEmpty()) ? "/cloud" : p.trim();
@@ -446,6 +477,126 @@ public final class WebGameConfig {
 
     private static String str(Object v) {
         return v == null ? "" : String.valueOf(v).trim();
+    }
+
+    // ===== 多客户端版本注册表（cloud.clients）=====
+
+    /** 云客户端版本条目（容器内路径 → 版本 + Java + 启动形态）。 */
+    public static final class ClientSpec {
+        private final String id;
+        private final String baseDir;
+        private final String version;
+        private final String javaHome;
+        private final String launchStyle;
+        private final String server;
+        private final int port;
+        private final boolean enabled;
+
+        ClientSpec(String id, String baseDir, String version, String javaHome,
+                   String launchStyle, String server, int port, boolean enabled) {
+            this.id = id;
+            this.baseDir = baseDir;
+            this.version = version;
+            this.javaHome = javaHome;
+            this.launchStyle = launchStyle;
+            this.server = server;
+            this.port = port;
+            this.enabled = enabled;
+        }
+
+        public String getId() { return id; }
+        public String getBaseDir() { return baseDir; }
+        public String getVersion() { return version; }
+        public String getJavaHome() { return javaHome; }
+        public String getLaunchStyle() { return launchStyle; }
+        public String getServer() { return server; }
+        public int getPort() { return port; }
+        public boolean isEnabled() { return enabled; }
+    }
+
+    /**
+     * 解析 cloud.clients 列表；为空时回退 cloud.client 单条构造默认条目（legacy 模板）。
+     * 解析规则：base-dir 必填；version 缺省 1.12.2；java-home/launch-style/server/port 缺省用
+     * 旧 cloud.client 段；非法/未启用条目跳过（保留合法项）。
+     */
+    private static java.util.List<ClientSpec> parseClientSpecs(FileConfiguration c) {
+        java.util.List<ClientSpec> out = new java.util.ArrayList<>();
+        java.util.List<?> raw = c.getList("cloud.clients");
+        if (raw != null) {
+            for (Object o : raw) {
+                if (!(o instanceof java.util.Map)) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> m = (java.util.Map<String, Object>) o;
+                String baseDir = str(m.get("base-dir"));
+                if (baseDir.isEmpty()) {
+                    continue;
+                }
+                String id = str(m.get("id"));
+                if (id.isEmpty()) {
+                    id = baseDir;
+                }
+                boolean enabled = !m.containsKey("enabled")
+                        || Boolean.parseBoolean(String.valueOf(m.get("enabled")));
+                if (!enabled) {
+                    continue;
+                }
+                String launchStyle = str(m.get("launch-style")).toLowerCase();
+                if (!"bootstrap".equals(launchStyle)) {
+                    launchStyle = "legacy";
+                }
+                out.add(new ClientSpec(
+                        id, baseDir,
+                        str(m.get("version")).isEmpty() ? "1.12.2" : str(m.get("version")),
+                        str(m.get("java-home")),
+                        launchStyle,
+                        str(m.get("server")),
+                        Math.max(0, intOf(m.get("port"), 0)),
+                        true));
+            }
+        }
+        if (out.isEmpty()) {
+            // 回退旧 cloud.client 单条（向后兼容）
+            String baseDir = c.getString("cloud.client.base-dir", "").trim();
+            // 执行面已从 WSL 移除：不再回退 Linux 路径，留空待 GFN 方案定案
+            if (baseDir.isEmpty()) {
+                baseDir = "";
+            }
+            out.add(new ClientSpec(
+                    c.getString("cloud.client.version", "1.12.2-Forge_14.23.5.2864").trim(),
+                    baseDir,
+                    c.getString("cloud.client.version", "1.12.2-Forge_14.23.5.2864").trim(),
+                    c.getString("cloud.client.java-path", "").trim(),
+                    "legacy",
+                    c.getString("cloud.client.server", "").trim(),
+                    Math.max(0, c.getInt("cloud.client.port", 0)),
+                    true));
+        }
+        return java.util.Collections.unmodifiableList(out);
+    }
+
+    /** 全部启用中的客户端条目（按配置顺序）。 */
+    public java.util.List<ClientSpec> getClientSpecs() {
+        return clientSpecs;
+    }
+
+    /** 按 id 查客户端条目；未命中返回 null。 */
+    public ClientSpec findClientSpec(String id) {
+        if (id == null || id.isEmpty()) {
+            return null;
+        }
+        for (ClientSpec s : clientSpecs) {
+            if (id.equals(s.getId()) || id.equals(s.getBaseDir())) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** 默认客户端条目（clients 第一项；列表为空时理论不可能，parse 已保证至少一项）。 */
+    public ClientSpec defaultClientSpec() {
+        return clientSpecs.isEmpty() ? null : clientSpecs.get(0);
     }
 
     private static int intOf(Object v, int fallback) {

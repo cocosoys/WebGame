@@ -58,7 +58,7 @@ public final class CloudAdminSubCommands {
                     + "  输出 WebGame 云游戏容器运行状态：\n"
                     + "  · 执行面控制客户端连接状态\n"
                     + "  · 会话数 / 全局容量上限\n"
-                    + "  · 每个实例：实例 id、用户、状态、KasmVNC 采集端点、设备型号、运行时长\n"
+                    + "  · 每个实例：实例 id、用户、状态、虚拟屏(display)、设备型号、运行时长\n"
                     + "  · 封禁列表（用户名/原因/时间）";
         }
 
@@ -303,8 +303,7 @@ public final class CloudAdminSubCommands {
             sb.append("  |  实例 ").append(h.getInstanceId())
                     .append(" state=").append(stateColor(h.getState())).append(h.getState()).append(ChatColor.RESET);
             if (h.isReady()) {
-                sb.append(" kasm=:").append(h.getKasmPort())
-                        .append(" display=").append(h.getDisplay())
+                sb.append(" display=").append(h.getDisplay())
                         .append(" ").append(fmtDur(System.currentTimeMillis() - h.getReadyAt()));
             }
         }

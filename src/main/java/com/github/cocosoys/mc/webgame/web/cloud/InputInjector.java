@@ -9,8 +9,8 @@ import java.util.List;
  * <ul>
  *   <li><b>路线 B（当前）</b>：{@code agent} —— javaagent 进程内注入，
  *   直接写 LWJGL 事件队列（光标零移动、焦点零依赖、浏览器始终前台）；</li>
- *   <li><b>路线 C（预留）</b>：客户端运行于 VM/容器（KVM+Xvfb / IDD 虚拟显示器），
- *   注入后端换为容器内 uinput/XTest（Linux）或虚拟 HID 驱动（Windows）；
+ *   <li><b>GFN 方案</b>：客户端运行于 Windows 隔离桌面（CreateDesktop），
+ *   注入后端换为虚拟 HID 驱动（Windows Virtual HID Framework）；
  *   通过 config {@code cloud.input-inject} 切换，接口与
  *   {@link #onGameReady(String)} 生命周期点已为该演进预留。</li>
  * </ul>
@@ -28,7 +28,7 @@ public interface InputInjector {
     /**
      * 游戏实例就绪回调：容器客户端进入服务器、窗口可采集后由会话调用，
      * 注入器可在此建立到客户端进程的输入通道（如 agent 的 TCP 连接；
-     * 未来路线 C 的 VM/Xvfb 注入亦在此建立通道）。
+     * GFN 方案的虚拟 HID 注入亦在此建立通道）。
      *
      * @param instanceDir 容器客户端实例目录（含输入通道所需状态文件）
      */

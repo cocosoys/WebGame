@@ -5,8 +5,8 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 实例黑盒（插件侧镜像）：插件唯一认知的"游戏实例"。
  *
- * <p>插件只持有 instanceId + 状态 + 采集端点（display / kasmPort），
- * 实例内部（Xvnc / Forge 客户端 / KasmVNC）完全由执行面（控制客户端）负责。</p>
+ * <p>插件只持有 instanceId + 状态 + 采集端点（display），
+ * 实例内部（客户端 / 采集推流）完全由执行面（控制客户端）负责。</p>
  *
  * <p>状态迁移（由 {@link InstanceRegistry} 依据执行面上报驱动）：</p>
  * <pre>
@@ -32,8 +32,6 @@ public final class InstanceHandle {
     private final AtomicReference<String> state = new AtomicReference<>(ControlProtocol.ST_SPAWNING);
 
     private volatile String display = "";
-    private volatile String kasmHost = "";
-    private volatile int kasmPort = -1;
     private volatile String windowTitle = "";
     private volatile long readyAt;
 
@@ -75,15 +73,6 @@ public final class InstanceHandle {
         return display;
     }
 
-    public String getKasmHost() {
-        return kasmHost;
-    }
-
-    /** 采集端点：KasmVNC HTTP/WS 端口（如 8542）。 */
-    public int getKasmPort() {
-        return kasmPort;
-    }
-
     public String getWindowTitle() {
         return windowTitle;
     }
@@ -110,10 +99,8 @@ public final class InstanceHandle {
         }
     }
 
-    void onReady(String display, String kasmHost, int kasmPort, String windowTitle) {
+    void onReady(String display, String windowTitle) {
         this.display = display == null ? "" : display;
-        this.kasmHost = kasmHost == null ? "" : kasmHost;
-        this.kasmPort = kasmPort;
         this.windowTitle = windowTitle == null ? "" : windowTitle;
         this.readyAt = System.currentTimeMillis();
         state.set(ControlProtocol.ST_READY);
@@ -132,7 +119,6 @@ public final class InstanceHandle {
     @Override
     public String toString() {
         return "Instance{id=" + instanceId + ", user=" + username
-                + ", state=" + state.get() + ", kasm=" + kasmHost + ":" + kasmPort
-                + ", display=" + display + "}";
+                + ", state=" + state.get() + ", display=" + display + "}";
     }
 }

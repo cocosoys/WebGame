@@ -22,3 +22,4 @@ server-cloud/packages/mc-*
 # Large packages not committed
 server-cloud/packages/VirtualBox-*
 server-cloud/packages/nefcon.zip
+drivers/*
