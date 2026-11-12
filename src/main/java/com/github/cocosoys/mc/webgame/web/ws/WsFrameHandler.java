@@ -41,6 +41,10 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
     private java.util.UUID offlineUuid;
     /** 来源 IP（设备维度，用于 max-connections-per-device 限制）。 */
     private volatile String deviceIp = "unknown";
+    /** 连接建立时刻（epoch millis），供 ERP 会话列表计算在线时长。 */
+    private volatile long connectedAtMillis;
+    /** 会话短 ID（Netty channel id），供 ERP 会话列表标识。 */
+    private volatile String sessionId = "";
 
     /** PLAY 阶段：true 后二进制帧直接透传回环。 */
     private volatile boolean playing = false;
@@ -54,6 +58,11 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) {
+        connectedAtMillis = System.currentTimeMillis();
+        try {
+            sessionId = ctx.channel().id().asShortText();
+        } catch (Throwable ignored) {
+        }
         try {
             if (ctx.channel().remoteAddress() instanceof java.net.InetSocketAddress) {
                 deviceIp = ((java.net.InetSocketAddress) ctx.channel().remoteAddress())
@@ -93,6 +102,8 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
                 httpParsed = true;
                 upgraded = true;
                 removeMcReadTimeout(ctx);
+                // 升级成功即登记会话（握手阶段也可见，便于 ERP 排查连不上/卡握手问题）
+                gateway.addSession(ctx.channel(), this);
                 continue;
             }
             EaglerXProtocol.WsFrame frame = EaglerXProtocol.decodeFrame(frameBuffer);
@@ -382,6 +393,37 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
         } catch (Exception e) {
             ctx.writeAndFlush(EaglerXProtocol.encodeFrame(EaglerXProtocol.WS_CLOSE, new byte[0]));
         }
+    }
+
+    // ===== ERP 会话快照（只读 getter） =====
+
+    public String getSessionId() {
+        return sessionId == null ? "" : sessionId;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public java.util.UUID getOfflineUuid() {
+        return offlineUuid;
+    }
+
+    public String getDeviceIp() {
+        return deviceIp;
+    }
+
+    /** 握手前返回 0，避免把默认值误报为已协商版本。 */
+    public int getClientProtocolVersion() {
+        return handshakeStarted ? clientProtocolVersion : 0;
+    }
+
+    public boolean isPlaying() {
+        return playing;
+    }
+
+    public long getConnectedAtMillis() {
+        return connectedAtMillis;
     }
 
     private void cleanup(ChannelHandlerContext ctx) {

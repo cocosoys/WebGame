@@ -11,8 +11,6 @@ public final class WebGameConfig {
     private final String publicHost;
     private final int publicPort;
     private final String wsPath;
-    private final String htmlFile;
-    private final String indexPath;
     private final String pagePath;
     private final boolean autoJoinEnabled;
     private final String defaultUsername;
@@ -30,10 +28,8 @@ public final class WebGameConfig {
         FileConfiguration c = plugin.getConfig();
         this.publicHost = c.getString("page.public-host", "127.0.0.1").trim();
         this.publicPort = Math.max(0, c.getInt("page.public-port", 0));
-        this.wsPath = c.getString("tunnel.ws-path", "/eagler");
-        this.htmlFile = c.getString("page.html-file", "Eaglercraft_IR_1.12.2.html");
-        this.indexPath = normalizePath(c.getString("page.index-path", "/"));
         this.pagePath = normalizePath(c.getString("page.path", "/eagler/"));
+        this.wsPath = c.getString("tunnel.ws-path", "/eagler");
         this.autoJoinEnabled = c.getBoolean("auto-join.enabled", true);
         this.defaultUsername = c.getString("auto-join.default-username", "WebPlayer").trim();
         this.loopbackHost = c.getString("tunnel.loopback-host", "127.0.0.1").trim();
@@ -60,13 +56,8 @@ public final class WebGameConfig {
         return wsPath.startsWith("/") ? wsPath : "/" + wsPath;
     }
 
-    public String getHtmlFile() {
-        return htmlFile;
-    }
-
     /**
-     * SOYS WebRegistry 对附属插件页面自动补充的前缀（registerPage 时无需手写，
-     * 此处用于生成完整访问 URL / 注入前端绝对路径引用）。
+     * SOYS WebRegistry 对附属插件页面自动补充的前缀（页面由 WebGameExpansion 托管）。
      */
     public static final String WEB_PLUGIN_PREFIX = "/web/plugins/WebGame";
 
@@ -78,16 +69,6 @@ public final class WebGameConfig {
     /** 完整访问 URL（如 /web/plugins/WebGame/eagler/）。 */
     public String getPageFullUrl() {
         return WEB_PLUGIN_PREFIX + pagePath;
-    }
-
-    /** Entry page (index.html) mount path (relative). */
-    public String getIndexPath() {
-        return indexPath;
-    }
-
-    /** 完整入口 URL（如 /web/plugins/WebGame/）。 */
-    public String getIndexFullUrl() {
-        return WEB_PLUGIN_PREFIX + indexPath;
     }
 
     /** 规范化页面路径：确保以 / 开头并以 / 结尾（根路径 "/" 原样返回）。 */

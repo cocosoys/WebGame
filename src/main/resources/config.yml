@@ -1,22 +1,17 @@
-﻿# WebGame 配置（页面按 SOYS 标准命名空间挂载：/web/plugins/WebGame/<path>）
+# WebGame 配置（前端统一托管在 /web/plugins/WebGame/）
 page:
-  # 入口页（index.html）挂载路径：相对 /web/plugins/WebGame/ 的子路径（"/" = 根）
-  # 完整访问地址：http://127.0.0.1:25574/web/plugins/WebGame/
-  index-path: "/"
-  # 游戏页面挂载路径（相对 /web/plugins/WebGame/ 的子路径）。
-  # 打开 http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom 直接进入服务器；
-  # 不再占用根路径 "/"（SOYS 默认首页恢复）。
+  # 游戏页所在目录（相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾）。
+  # 页面文件：dist/eagler/index.html（构建期静态资源，运行时不做地址注入）。
+  # 打开 http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom 直接进入服务器。
   path: "/eagler/"
-  # 插件 jar 内 dist 目录下的 Eaglercraft HTML 文件名
-  html-file: "Eaglercraft_IR_1.12.2.html"
   # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
   public-host: "127.0.0.1"
   # 0 = 跟随 server.properties 的 server-port
   public-port: 0
 tunnel:
-  # WebSocket 隧道入口路径（须与注入的 servers.addr 一致）
+  # WebSocket 隧道入口路径（必须与游戏页内 eagler 地址的 /eagler 一致）
   ws-path: "/eagler"
-  # MC 回环连接目标（同机回环登录，见设计 §4.1）
+  # MC 回环连接目标（同机回环登录）
   loopback-host: "127.0.0.1"
   # 0 = 跟随 server-port（回环 MC 客户端连本服自身端口）
   loopback-port: 0
@@ -35,6 +30,5 @@ tunnel:
 auto-join:
   # 打开页面后自动进入服务器（设置用户名 + 自动连接，无需手动点击）
   enabled: true
-  # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/?user=Tom
+  # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom
   default-username: "WebPlayer"
-

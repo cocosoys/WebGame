@@ -135,6 +135,18 @@ public final class WsGateway {
         sessions.values().remove(handler);
     }
 
+    /** WS 升级成功后登记会话（供 ERP 会话列表只读快照）。 */
+    void addSession(Channel channel, WsFrameHandler handler) {
+        if (channel != null && handler != null) {
+            sessions.put(channel, handler);
+        }
+    }
+
+    /** 当前全部 WS 会话（拷贝，调用方可安全遍历）。 */
+    public List<WsFrameHandler> snapshotSessions() {
+        return new ArrayList<>(sessions.values());
+    }
+
     /** 同一设备（来源 IP）最多同时进入游戏的浏览器会话数。 */
     public int getMaxConnectionsPerDevice() {
         return maxConnectionsPerDevice;

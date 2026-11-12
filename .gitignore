@@ -1,4 +1,5 @@
 .idea/
+.trae/
 docs/
 /eaglersrc/
 target/
@@ -9,3 +10,7 @@ dependency-reduced-pom.xml
 
 __pycache__/
 *.pyc
+
+# 前端源码工程（产物由 Maven 打进插件 dist/）
+web/node_modules/
+web/dist/
