@@ -30,6 +30,8 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
     private final WsGateway gateway;
     private final String wsPath;
     private final NioEventLoopGroup loopbackGroup;
+    /** 归属的客户端版本 id（WS 子路径 /eagler/&lt;id&gt; 或 Referer 兜底）。 */
+    private final String clientId;
 
     private final ByteBuf frameBuffer = Unpooled.buffer(4096);
     private boolean httpParsed = false;
@@ -50,10 +52,11 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
     private volatile boolean playing = false;
     private volatile McLoopbackClient loopback;
 
-    public WsFrameHandler(WsGateway gateway, String wsPath, NioEventLoopGroup loopbackGroup) {
+    public WsFrameHandler(WsGateway gateway, String wsPath, NioEventLoopGroup loopbackGroup, String clientId) {
         this.gateway = gateway;
         this.wsPath = wsPath;
         this.loopbackGroup = loopbackGroup;
+        this.clientId = clientId == null || clientId.isEmpty() ? gateway.getBuiltinClientId() : clientId;
     }
 
     @Override
@@ -411,6 +414,11 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
     public String getDeviceIp() {
         return deviceIp;
+    }
+
+    /** 归属的客户端版本 id（/eagler/&lt;id&gt; 或 Referer 兜底，无法判定时为内置版本）。 */
+    public String getClientId() {
+        return clientId;
     }
 
     /** 握手前返回 0，避免把默认值误报为已协商版本。 */

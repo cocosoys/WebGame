@@ -23,6 +23,12 @@
         </template>
       </el-table-column>
       <el-table-column label="IP" align="center" prop="ip" width="140" />
+      <el-table-column label="客户端" align="center" width="120">
+        <template slot-scope="scope">
+          <el-tag v-if="scope.row.clientId" size="mini" type="warning">{{ scope.row.clientId }}</el-tag>
+          <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="协议" align="center" width="80">
         <template slot-scope="scope">
           <el-tag v-if="scope.row.protocolVersion" size="mini">V{{ scope.row.protocolVersion }}</el-tag>
@@ -45,12 +51,19 @@
         <template slot-scope="scope">{{ formatDuration(scope.row.durationSeconds) }}</template>
       </el-table-column>
       <el-table-column label="会话 ID" align="center" prop="sessionId" show-overflow-tooltip />
+      <el-table-column label="操作" align="center" width="110" fixed="right">
+        <template slot-scope="scope">
+          <el-button type="text" size="mini" style="color: #f56c6c" @click="handleKick(scope.row)">
+            强制踢出
+          </el-button>
+        </template>
+      </el-table-column>
     </el-table>
   </div>
 </template>
 
 <script>
-import { listSessions } from '@/api/erp'
+import { listSessions, kickSession } from '@/api/erp'
 
 export default {
   name: 'WebGameSession',
@@ -89,6 +102,19 @@ export default {
       if (m < 60) return m + ' 分 ' + (s % 60) + ' 秒'
       const h = Math.floor(m / 60)
       return h + ' 小时 ' + (m % 60) + ' 分'
+    },
+    handleKick(row) {
+      const who = row.username || row.sessionId
+      this.$confirm(
+        `确认将 ${who} 强制踢出？该操作会立即断开其游戏连接。`,
+        '强制踢出',
+        { type: 'warning', confirmButtonText: '踢出', cancelButtonText: '取消' }
+      ).then(() => {
+        kickSession(row.sessionId).then(res => {
+          this.$modal.msgSuccess(res.msg || '已踢出')
+          this.getList()
+        })
+      }).catch(() => {})
     }
   }
 }

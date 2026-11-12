@@ -2,6 +2,9 @@ package com.github.cocosoys.mc.webgame;
 
 import com.github.cocosoys.mc.soyshttpovermc.api.event.SoysReadyEvent;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.spring.impl.WebGameClientServiceImpl;
+import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
+import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
@@ -35,6 +38,12 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     /** MCERP 管理面扩展（ERP 菜单 + /erp/* 端点；未装 MCERP 时为 null）。 */
     private WebGameErpExpansion erpExpansion;
+
+    /** 客户端版本服务（clients.yml + 上传）；WS 准入与会话归属都依赖它。 */
+    private WebGameClientService clientService;
+
+    /** 客户端版本页面热登记器（/eagler/ 选择页 + /eagler/&lt;id&gt;/）。 */
+    private WebGameClientPages clientPages;
 
     /** 插件启用时刻（毫秒），用于 status 端点的 uptimeSeconds。 */
     private long enabledAt;
@@ -70,6 +79,19 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
+        // 客户端版本：释放内置客户端、读取 clients.yml，并把准入判定挂到 WS 网关
+        try {
+            clientService = new WebGameClientServiceImpl(this);
+            clientPages = new WebGameClientPages(this, clientService);
+            if (wsGateway != null) {
+                wsGateway.setBuiltinClientId(clientService.builtinId());
+                wsGateway.setClientGate(clientService::isServable);
+            }
+        } catch (Throwable t) {
+            getLogger().severe("WebGame 客户端版本初始化失败：");
+            t.printStackTrace();
+        }
+
         // 主类自身作为监听器：承接 SoysReadyEvent / 软依赖晚启用，补挂扩展
         Bukkit.getPluginManager().registerEvents(this, this);
         syncSoysModules();
@@ -89,6 +111,9 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
+        if (clientPages != null) {
+            clientPages.unpublish();
+        }
         if (erpExpansion != null) {
             erpExpansion.unregister();
             erpExpansion = null;
@@ -133,6 +158,13 @@ public final class WebGame extends JavaPlugin implements Listener {
         WebGameExpansion expansion = new WebGameExpansion(this);
         if (expansion.register()) {
             pageExpansion = expansion;
+            // 页面扩展就绪后才能拿到 WebPageApi：登记版本目录与选择页
+            if (clientPages != null) {
+                clientPages.attach(expansion.getApi());
+                if (clientService != null) {
+                    clientService.publishPages();
+                }
+            }
             getLogger().info("前端页面托管已挂载：" + WebGameConfig.WEB_PLUGIN_PREFIX + "/");
         } else {
             getLogger().warning("页面托管注册失败（网关未就绪或 identifier 冲突），将由 SoysReadyEvent 重试。");
@@ -186,6 +218,14 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     public WsGateway getWsGateway() {
         return wsGateway;
+    }
+
+    public WebGameClientService getClientService() {
+        return clientService;
+    }
+
+    public WebGameClientPages getClientPages() {
+        return clientPages;
     }
 
     /** 已运行秒数。 */

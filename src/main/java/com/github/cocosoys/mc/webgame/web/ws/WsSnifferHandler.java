@@ -77,6 +77,7 @@ public final class WsSnifferHandler extends ChannelInboundHandlerAdapter {
         boolean isGet = lines.length > 0 && lines[0].startsWith("GET ");
         boolean upgradeWs = false;
         String path = null;
+        String referer = null;
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             if (i == 0) {
@@ -100,24 +101,72 @@ public final class WsSnifferHandler extends ChannelInboundHandlerAdapter {
             String value = line.substring(c + 1).trim();
             if ("upgrade".equals(name) && value.toLowerCase().contains("websocket")) {
                 upgradeWs = true;
+            } else if ("referer".equals(name)) {
+                referer = value;
             }
         }
         if (!isGet || !upgradeWs || path == null) {
             passKeep(ctx);
             return;
         }
-        if (path.equals(gateway.getWsPath())) {
-            takeOverEagler(ctx);
+        String wsPath = gateway.getWsPath();
+        boolean pathMatch = path.equals(wsPath) || path.startsWith(wsPath + "/");
+        if (!pathMatch) {
+            passKeep(ctx);
             return;
         }
-        passKeep(ctx);
+        String clientId = resolveClientId(path, wsPath, referer);
+        if (!gateway.isClientAllowed(clientId)) {
+            // 版本不存在或已被管理员关闭：不接管，交给下游按普通 HTTP 处理
+            passKeep(ctx);
+            return;
+        }
+        takeOverEagler(ctx, clientId);
+    }
+
+    /**
+     * 归属客户端版本：WS 子路径（{@code /eagler/<id>}）优先，其次 Referer 中的
+     * {@code /eagler/<id>/}，都无法判定时归内置版本（兼容内置客户端的 {@code /eagler}）。
+     */
+    private String resolveClientId(String path, String wsPath, String referer) {
+        if (path.length() > wsPath.length()) {
+            String sub = path.substring(wsPath.length() + 1);
+            if (!sub.isEmpty() && sub.indexOf('/') < 0) {
+                return sub;
+            }
+        }
+        String fromReferer = parseRefererClient(referer);
+        if (fromReferer != null) {
+            return fromReferer;
+        }
+        return gateway.getBuiltinClientId();
+    }
+
+    /** 从 Referer（…/eagler/&lt;id&gt;/…）中提取版本 id。 */
+    private static String parseRefererClient(String referer) {
+        if (referer == null || referer.isEmpty()) {
+            return null;
+        }
+        int i = referer.indexOf("/eagler/");
+        if (i < 0) {
+            return null;
+        }
+        String rest = referer.substring(i + "/eagler/".length());
+        int slash = rest.indexOf('/');
+        if (slash >= 0) {
+            rest = rest.substring(0, slash);
+        }
+        if (rest.isEmpty() || "index.html".equals(rest)) {
+            return null;
+        }
+        return rest;
     }
 
     /** 接管 EaglerX 通道：插入 WS 帧处理器、移除自身、重放缓冲。 */
-    private void takeOverEagler(ChannelHandlerContext ctx) {
+    private void takeOverEagler(ChannelHandlerContext ctx, String clientId) {
         decided = true;
         ctx.pipeline().addAfter(ctx.name(), "webgame-ws-frame",
-                new WsFrameHandler(gateway, gateway.getWsPath(), gateway.getLoopbackGroup()));
+                new WsFrameHandler(gateway, gateway.getWsPath(), gateway.getLoopbackGroup(), clientId));
         replay(ctx);
     }
 

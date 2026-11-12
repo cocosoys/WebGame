@@ -35,6 +35,7 @@ public class WebGameSessionServiceImpl implements WebGameSessionService {
                     vo.setUsername(h.getUsername() == null ? "" : h.getUsername());
                     vo.setUuid(h.getOfflineUuid() == null ? "" : h.getOfflineUuid().toString());
                     vo.setIp(h.getDeviceIp());
+                    vo.setClientId(h.getClientId());
                     vo.setProtocolVersion(h.getClientProtocolVersion());
                     vo.setPlaying(h.isPlaying());
                     vo.setConnectedAt(h.getConnectedAtMillis());
@@ -47,6 +48,22 @@ public class WebGameSessionServiceImpl implements WebGameSessionService {
             return TableDataInfo.success(rows, rows.size());
         } catch (Throwable t) {
             return TableDataInfo.error("会话查询失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult kick(String sessionId) {
+        try {
+            WsGateway gateway = plugin.getWsGateway();
+            if (gateway == null) {
+                return AjaxResult.error("WS 隧道未初始化");
+            }
+            if (gateway.closeSession(sessionId)) {
+                return AjaxResult.success("已强制踢出该会话", null);
+            }
+            return AjaxResult.error("会话不存在或已结束");
+        } catch (Throwable t) {
+            return AjaxResult.error("踢出失败：" + t.getMessage());
         }
     }
 }

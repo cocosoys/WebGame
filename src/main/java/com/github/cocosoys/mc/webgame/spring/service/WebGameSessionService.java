@@ -9,4 +9,7 @@ public interface WebGameSessionService {
 
     /** 当前全部 WS 会话。 */
     AjaxResult list();
+
+    /** 按会话 id 强制踢出（直接断开其 WebSocket 连接）。 */
+    AjaxResult kick(String sessionId);
 }

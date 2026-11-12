@@ -17,6 +17,10 @@ export function listSessions() {
   return request({ url: '/erp/session/list', method: 'get' })
 }
 
+export function kickSession(sessionId) {
+  return request({ url: '/erp/session/kick', method: 'post', params: { sessionId } })
+}
+
 /* ================= 插件配置文件（数据驱动） ================= */
 export function listConfigFiles() {
   return request({ url: '/erp/config/files', method: 'get' })
@@ -28,4 +32,45 @@ export function loadConfigFile(file) {
 
 export function saveConfigFile(file, data) {
   return request({ url: '/erp/config/save', method: 'post', params: { file }, data })
+}
+
+/* ================= 客户端版本（Eaglercraft 多版本热加装） ================= */
+export function listClients() {
+  return request({ url: '/erp/clients/list', method: 'get' })
+}
+
+export function clientImpact(id) {
+  return request({ url: '/erp/clients/impact', method: 'get', params: { id } })
+}
+
+export function setClientEnabled(id, enabled, kick) {
+  return request({ url: '/erp/clients/enabled', method: 'post', params: { id, enabled, kick } })
+}
+
+export function setDefaultClient(id) {
+  return request({ url: '/erp/clients/default', method: 'post', params: { id } })
+}
+
+export function deleteClient(id) {
+  return request({ url: '/erp/clients/delete', method: 'post', params: { id } })
+}
+
+export function rescanClients() {
+  return request({ url: '/erp/clients/rescan', method: 'post' })
+}
+
+export function initClientUpload(payload) {
+  return request({ url: '/erp/clients/upload/init', method: 'post', data: payload })
+}
+
+export function uploadClientChunk(uploadId, index, data) {
+  return request({ url: '/erp/clients/upload/chunk', method: 'post', params: { uploadId }, data: { index, data } })
+}
+
+export function finishClientUpload(uploadId) {
+  return request({ url: '/erp/clients/upload/finish', method: 'post', params: { uploadId } })
+}
+
+export function abortClientUpload(uploadId) {
+  return request({ url: '/erp/clients/upload/abort', method: 'post', params: { uploadId } })
 }

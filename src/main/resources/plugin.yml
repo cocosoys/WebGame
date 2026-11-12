@@ -16,6 +16,9 @@ permissions:
   webgame.erp.session.list:
     description: ERP-查看 WS 会话列表
     default: op
+  webgame.erp.session.kick:
+    description: ERP-强制踢出 WS 会话
+    default: op
   webgame.erp.config.list:
     description: ERP-查看插件配置清单
     default: op
@@ -24,4 +27,16 @@ permissions:
     default: op
   webgame.erp.config.edit:
     description: ERP-编辑插件配置
+    default: op
+  webgame.erp.clients.list:
+    description: ERP-查看客户端版本列表
+    default: op
+  webgame.erp.clients.upload:
+    description: ERP-上传客户端版本
+    default: op
+  webgame.erp.clients.edit:
+    description: ERP-启用/关闭/设默认/重扫客户端版本
+    default: op
+  webgame.erp.clients.delete:
+    description: ERP-删除客户端版本
     default: op

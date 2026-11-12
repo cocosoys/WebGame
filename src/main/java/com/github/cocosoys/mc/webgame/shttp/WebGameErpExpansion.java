@@ -4,6 +4,7 @@ import com.github.cocosoys.mc.mcerp.ErpMenus;
 import com.github.cocosoys.mc.mcerp.McerpExpansion;
 import com.github.cocosoys.mc.soyshttpovermc.api.SoysHttpOverMcApi;
 import com.github.cocosoys.mc.webgame.WebGame;
+import com.github.cocosoys.mc.webgame.spring.controller.WebGameClientController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameConfigController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameSessionController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameStatusController;
@@ -119,7 +120,9 @@ public final class WebGameErpExpansion extends McerpExpansion {
                 .orderNum(2)
                 .dir("config", "插件配置", "edit", d -> d
                         .menu("config", "核心配置", "input", WebGameConfigController.class)
-                        .orderNum(1))
+                        .orderNum(1)
+                        .menu("clients", "客户端版本", "component", WebGameClientController.class)
+                        .orderNum(2))
                 .orderNum(10);
     }
 
@@ -135,6 +138,9 @@ public final class WebGameErpExpansion extends McerpExpansion {
             controllers.add(new WebGameStatusController(statusService));
             controllers.add(new WebGameSessionController(sessionService));
             controllers.add(new WebGameConfigController(configService));
+            if (plugin.getClientService() != null) {
+                controllers.add(new WebGameClientController(plugin.getClientService()));
+            }
         }
         return controllers;
     }

@@ -46,6 +46,16 @@ public final class WsGateway {
     /** 设备（来源 IP）当前活跃游戏会话计数，用于 max-connections-per-device 限制。 */
     private final Map<String, java.util.concurrent.atomic.AtomicInteger> deviceSlots = new ConcurrentHashMap<>();
 
+    /** 内置客户端版本 id：{@code /eagler}（无子路径）固定归属它。 */
+    private volatile String builtinClientId = "1.12.2";
+    /** 客户端版本准入判定（由客户端版本服务注入；为 null 时放行）。 */
+    private volatile ClientGate clientGate;
+
+    /** 客户端版本准入回调。 */
+    public interface ClientGate {
+        boolean isAllowed(String clientId);
+    }
+
     private static final AtomicInteger GROUP_SEQ = new AtomicInteger();
 
     public WsGateway(JavaPlugin plugin, String wsPath, String loopbackHost, int loopbackPort,
@@ -145,6 +155,74 @@ public final class WsGateway {
     /** 当前全部 WS 会话（拷贝，调用方可安全遍历）。 */
     public List<WsFrameHandler> snapshotSessions() {
         return new ArrayList<>(sessions.values());
+    }
+
+    public String getBuiltinClientId() {
+        return builtinClientId;
+    }
+
+    public void setBuiltinClientId(String builtinClientId) {
+        if (builtinClientId != null && !builtinClientId.trim().isEmpty()) {
+            this.builtinClientId = builtinClientId.trim();
+        }
+    }
+
+    public void setClientGate(ClientGate clientGate) {
+        this.clientGate = clientGate;
+    }
+
+    /** 新 WS 升级是否允许（版本不存在或已关闭时拒绝）。 */
+    public boolean isClientAllowed(String clientId) {
+        ClientGate gate = clientGate;
+        return gate == null || gate.isAllowed(clientId);
+    }
+
+    /**
+     * 强制断开使用指定客户端版本的全部 WS 会话（关闭 channel，触发上层 cleanup）。
+     *
+     * @return 被关闭的连接数
+     */
+    public int closeSessionsOfClient(String clientId) {
+        if (clientId == null || clientId.isEmpty()) {
+            return 0;
+        }
+        int closed = 0;
+        for (Map.Entry<Channel, WsFrameHandler> e : sessions.entrySet()) {
+            WsFrameHandler handler = e.getValue();
+            if (handler == null || !clientId.equals(handler.getClientId())) {
+                continue;
+            }
+            try {
+                e.getKey().close();
+                closed++;
+            } catch (Throwable ignored) {
+            }
+        }
+        return closed;
+    }
+
+    /**
+     * 强制踢出指定会话（按会话 id 精确关闭 channel）。
+     *
+     * @return 是否找到并关闭了该会话
+     */
+    public boolean closeSession(String sessionId) {
+        if (sessionId == null || sessionId.isEmpty()) {
+            return false;
+        }
+        for (Map.Entry<Channel, WsFrameHandler> e : sessions.entrySet()) {
+            WsFrameHandler handler = e.getValue();
+            if (handler == null || !sessionId.equals(handler.getSessionId())) {
+                continue;
+            }
+            try {
+                e.getKey().close();
+                return true;
+            } catch (Throwable ignored) {
+                return false;
+            }
+        }
+        return false;
     }
 
     /** 同一设备（来源 IP）最多同时进入游戏的浏览器会话数。 */

@@ -13,6 +13,8 @@ public class WebGameSessionVo {
     private String uuid;
     /** 来源 IP。 */
     private String ip;
+    /** 归属的客户端版本 id（/eagler/&lt;id&gt; 或 Referer 兜底）。 */
+    private String clientId;
     /** EaglerX 协商后的客户端协议版本（3/4，未协商为 0）。 */
     private int protocolVersion;
     /** 是否已进入游戏（PLAY 阶段）。 */
@@ -52,6 +54,14 @@ public class WebGameSessionVo {
 
     public void setIp(String ip) {
         this.ip = ip;
+    }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
     }
 
     public int getProtocolVersion() {

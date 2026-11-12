@@ -96,7 +96,8 @@ const routeBindings = {
   [moduleRoot + '/overview']: { component: () => import('@/views/webgameerp/overview/index'), name: 'WebGameOverview' },
   [moduleRoot + '/session']: { component: () => import('@/views/webgameerp/session/index'), name: 'WebGameSession' },
   [moduleRoot + '/config']: { component: NestedRouterView, name: 'WebGameConfigDir' },
-  [moduleRoot + '/config/config']: { component: () => import('@/views/webgameerp/config/config'), name: 'WebGameConfig' }
+  [moduleRoot + '/config/config']: { component: () => import('@/views/webgameerp/config/config'), name: 'WebGameConfig' },
+  [moduleRoot + '/config/clients']: { component: () => import('@/views/webgameerp/config/clients'), name: 'WebGameClients' }
 }
 
 /** 决策②：对外暴露的纯 path → component 表（供 router/menuAdapter.js 查表）。 */
