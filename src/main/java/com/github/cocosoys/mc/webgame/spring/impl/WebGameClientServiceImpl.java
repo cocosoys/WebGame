@@ -12,7 +12,6 @@ import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
 import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.web.ws.WsFrameHandler;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
-import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -35,8 +34,9 @@ import java.util.logging.Logger;
 /**
  * 客户端版本管理实现。
  *
- * <p>磁盘：{@code clients/<id>/index.html}；元数据：{@code clients.yml}（与 config.yml 同目录）；
- * 上传临时文件：{@code clients/.upload/<uploadId>.part}。条目也可指向外部 URL 或任意本地文件。</p>
+ * <p>磁盘：{@code eagler-clients/<id>/index.html}；元数据：{@code eagler-clients.yml}
+ * （与 config.yml 同目录）；上传临时文件：{@code eagler-clients/.upload/<uploadId>.part}。
+ * 条目也可指向外部 URL 或任意本地文件。</p>
  */
 public class WebGameClientServiceImpl implements WebGameClientService {
 
@@ -45,7 +45,8 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     /** 分块大小：512KB（base64 后约 683KB，规避网关请求体上限）。 */
     public static final int CHUNK_SIZE = 512 * 1024;
     private static final String INDEX_FILE = "index.html";
-    private static final String META_FILE = "clients.yml";
+    private static final String META_FILE = "eagler-clients.yml";
+    private static final String CLIENTS_DIR = "eagler-clients";
     private static final String UPLOAD_DIR = ".upload";
 
     private final WebGame plugin;
@@ -54,16 +55,16 @@ public class WebGameClientServiceImpl implements WebGameClientService {
 
     /** id → 版本（按 id 排序、并发安全）：WS 嗅探器会并发读取准入状态。 */
     private volatile Map<String, ClientVersion> versions = new ConcurrentSkipListMap<>();
-    private volatile String defaultId = ClientVersion.BUILTIN_ID;
+    private volatile String defaultId = "";
     /** 是否允许玩家自行选择版本；关闭时只允许进入默认版本。 */
     private volatile boolean allowPlayerSelect = true;
 
     public WebGameClientServiceImpl(WebGame plugin) {
         this.plugin = plugin;
-        this.clientsDir = new File(plugin.getDataFolder(), "clients");
+        this.clientsDir = new File(plugin.getDataFolder(), CLIENTS_DIR);
         ensureDir(clientsDir);
         ensureBuiltin();
-        migrateMeta();
+        ensureDefaultMeta();
         load();
     }
 
@@ -177,21 +178,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             return AjaxResult.success("已删除 " + id, null);
         } catch (Throwable t) {
             return AjaxResult.error("删除失败：" + t.getMessage());
-        }
-    }
-
-    @Override
-    public AjaxResult rescan() {
-        try {
-            load();
-            publishPages();
-            Map<String, Object> data = new HashMap<>();
-            data.put("defaultId", defaultId);
-            data.put("allowPlayerSelect", allowPlayerSelect);
-            data.put("rows", toVos());
-            return AjaxResult.success("已重新扫描客户端目录", data);
-        } catch (Throwable t) {
-            return AjaxResult.error("重扫失败：" + t.getMessage());
         }
     }
 
@@ -398,7 +384,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             if (isZip(session.fileName)) {
                 int count = extractZip(session.part, dir);
                 deleteQuietly(session.part);
-                String prefix = "clients/" + session.id + "/";
+                String prefix = CLIENTS_DIR + "/" + session.id + "/";
                 data.put("path", prefix);
                 data.put("archive", true);
                 data.put("files", count);
@@ -407,7 +393,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             }
             File target = new File(dir, session.fileName);
             Files.move(session.part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            String path = "clients/" + session.id + "/" + session.fileName;
+            String path = CLIENTS_DIR + "/" + session.id + "/" + session.fileName;
             data.put("path", path);
             data.put("archive", false);
             data.put("size", target.length());
@@ -482,10 +468,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
 
     // ===== 元数据 / 目录 =====
 
-    /** 从 clients.yml + 目录扫描重建内存视图，并回写规范化后的元数据。 */
+    /** 从 eagler-clients.yml 重建内存视图，并回写规范化后的元数据。 */
     private synchronized void load() {
         Map<String, ClientVersion> loaded = new TreeMap<>();
-        String def = ClientVersion.BUILTIN_ID;
+        String def = "";
         File meta = metaFile();
         if (meta.isFile()) {
             try {
@@ -495,102 +481,39 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                     def = d.trim();
                 }
                 allowPlayerSelect = yaml.getBoolean("allow-player-select", true);
-                ConfigurationSection section = yaml.getConfigurationSection("clients");
-                if (section != null) {
-                    for (String key : section.getKeys(false)) {
-                        if (!isValidId(key)) {
-                            continue;
-                        }
-                        ConfigurationSection c = section.getConfigurationSection(key);
-                        if (c == null) {
-                            continue;
-                        }
-                        ClientVersion v = new ClientVersion();
-                        v.setId(key);
-                        v.setName(c.getString("name", key));
-                        v.setPath(c.getString("path", ""));
-                        v.setMcVersions(readMcVersions(c));
-                        v.setEaglerProtocol(c.getInt("eagler-protocol", 0));
-                        v.setEnabled(c.getBoolean("enabled", true));
-                        v.setOrder(c.getInt("order", -1));
-                        v.setSource(c.getString("source", ClientVersion.SOURCE_UPLOADED));
-                        v.setSha256(c.getString("sha256", ""));
-                        v.setSize(c.getLong("size", 0L));
-                        v.setUploadedAt(c.getLong("uploaded-at", 0L));
-                        loaded.put(key, v);
+                // clients 使用列表而非以 id 为键的映射：Bukkit 会把含 "." 的键（如 1.12.2）拆成多级路径
+                for (Map<?, ?> c : yaml.getMapList("clients")) {
+                    if (c == null) {
+                        continue;
                     }
-                }
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "读取 clients.yml 失败: " + t);
-            }
-        }
-
-        // 内置条目：始终存在、始终启用
-        ClientVersion builtin = loaded.get(ClientVersion.BUILTIN_ID);
-        if (builtin == null) {
-            builtin = new ClientVersion();
-            builtin.setId(ClientVersion.BUILTIN_ID);
-            loaded.put(ClientVersion.BUILTIN_ID, builtin);
-        }
-        builtin.setSource(ClientVersion.SOURCE_BUILTIN);
-        if (builtin.getPath().isEmpty()) {
-            builtin.setPath("clients/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE);
-        }
-        if (builtin.getName().isEmpty() || builtin.getName().equals(builtin.getId())) {
-            builtin.setName("1.12.2 内置客户端");
-        }
-        if (builtin.getMcVersions().isEmpty()) {
-            McVersionOption opt = McVersionOption.find(ClientVersion.BUILTIN_ID);
-            if (opt != null) {
-                builtin.getMcVersions().add(opt);
-            }
-        }
-        if (builtin.getEaglerProtocol() <= 0) {
-            builtin.setEaglerProtocol(4);
-        }
-
-        // 目录扫描：手工放进去的版本也能被发现
-        File[] dirs = clientsDir.listFiles(File::isDirectory);
-        if (dirs != null) {
-            for (File dir : dirs) {
-                String id = dir.getName();
-                if (!isValidId(id) || UPLOAD_DIR.equals(id)) {
-                    continue;
-                }
-                File index = new File(dir, INDEX_FILE);
-                if (!index.isFile()) {
-                    continue;
-                }
-                ClientVersion v = loaded.get(id);
-                if (v == null) {
-                    v = new ClientVersion();
+                    String id = str(c.get("id")).trim();
+                    if (!isValidId(id)) {
+                        continue;
+                    }
+                    ClientVersion v = new ClientVersion();
                     v.setId(id);
-                    v.setName(id);
-                    v.setPath("clients/" + id + "/" + INDEX_FILE);
-                    v.setSource(ClientVersion.SOURCE_UPLOADED);
-                    v.setEnabled(true);
-                    v.setSize(index.length());
-                    v.setUploadedAt(index.lastModified());
+                    v.setName(str(c.get("name")));
+                    v.setPath(str(c.get("path")));
+                    v.setMcVersions(parseMcVersions(c.get("mc-versions")));
+                    v.setEaglerProtocol(toInt(c.get("eagler-protocol"), 0));
+                    Boolean enabled = toBool(c.get("enabled"));
+                    v.setEnabled(enabled == null || enabled);
+                    v.setOrder(toInt(c.get("order"), 0));
+                    String source = str(c.get("source")).trim();
+                    v.setSource(source.isEmpty() ? deriveSource(v) : source);
+                    v.setSha256(str(c.get("sha256")));
+                    v.setSize(toLong(c.get("size"), 0L));
+                    v.setUploadedAt(toLong(c.get("uploaded-at"), 0L));
                     loaded.put(id, v);
                 }
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "读取 " + META_FILE + " 失败: " + t);
             }
         }
 
+        // 条目只来自 eagler-clients.yml；不再扫描目录，也不在代码里补建内置条目
         for (ClientVersion v : loaded.values()) {
             v.setMissing(!entryExists(v));
-        }
-
-        // 排序迁移：未指定顺序的条目按 id 顺序追加到已有序号之后
-        int nextOrder = 0;
-        for (ClientVersion v : loaded.values()) {
-            if (v.getOrder() >= 0 && v.getOrder() >= nextOrder) {
-                nextOrder = v.getOrder() + 1;
-            }
-        }
-        for (ClientVersion v : loaded.values()) {
-            if (v.getOrder() < 0) {
-                v.setOrder(nextOrder++);
-            }
         }
 
         if (!loaded.containsKey(def)) {
@@ -606,9 +529,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             Map<String, Object> root = new LinkedHashMap<>();
             root.put("default-id", defaultId);
             root.put("allow-player-select", allowPlayerSelect);
-            Map<String, Object> clients = new LinkedHashMap<>();
+            List<Map<String, Object>> clients = new ArrayList<>();
             for (ClientVersion v : versions.values()) {
                 Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", v.getId());
                 m.put("name", v.getName());
                 m.put("path", v.getPath());
                 List<Map<String, Object>> mcVersions = new ArrayList<>();
@@ -626,13 +550,26 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 m.put("sha256", v.getSha256());
                 m.put("size", v.getSize());
                 m.put("uploaded-at", v.getUploadedAt());
-                clients.put(v.getId(), m);
+                clients.add(m);
             }
             root.put("clients", clients);
             ensureDir(clientsDir);
             PlatformYaml.save(ConfigUtil.toYaml(root), metaFile());
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "写入 clients.yml 失败: " + t);
+            LOG.log(Level.WARNING, "写入 " + META_FILE + " 失败: " + t);
+        }
+    }
+
+    /** 首次启用时从 jar 释放默认元数据（已存在则不覆盖）。 */
+    private void ensureDefaultMeta() {
+        if (metaFile().isFile()) {
+            return;
+        }
+        try {
+            plugin.saveResource(META_FILE, false);
+            LOG.info("已释放默认 " + META_FILE);
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "释放默认 " + META_FILE + " 失败: " + t);
         }
     }
 
@@ -645,10 +582,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         }
         ensureDir(dir);
         try {
-            plugin.saveResource("clients/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE, false);
+            plugin.saveResource(CLIENTS_DIR + "/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE, false);
             LOG.info("已释放内置客户端到 " + index.getPath());
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "释放内置客户端失败（jar 内缺少 clients/"
+            LOG.log(Level.WARNING, "释放内置客户端失败（jar 内缺少 " + CLIENTS_DIR + "/"
                     + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE + "）: " + t);
         }
     }
@@ -749,21 +686,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         }
     }
 
-    /** 读取 mc-versions 列表；为空时兼容旧的 mc-version / mc-protocol 单值。 */
-    private static List<McVersionOption> readMcVersions(ConfigurationSection c) {
-        List<McVersionOption> list = new ArrayList<>();
-        for (Map<?, ?> item : c.getMapList("mc-versions")) {
-            if (item == null) {
-                continue;
-            }
-            addMcVersion(list, resolveMcVersion(str(item.get("version")), toInt(item.get("protocol"), 0)));
-        }
-        if (list.isEmpty()) {
-            addMcVersion(list, resolveMcVersion(c.getString("mc-version", ""), c.getInt("mc-protocol", 0)));
-        }
-        return list;
-    }
-
     /** 解析前端提交的 mcVersions（版本名数组或 {version,protocol} 数组），协议号以枚举为准。 */
     private static List<McVersionOption> parseMcVersions(Object raw) {
         List<McVersionOption> list = new ArrayList<>();
@@ -817,7 +739,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         if (ClientVersion.isUrl(v.getPath())) {
             return ClientVersion.SOURCE_URL;
         }
-        String managed = "clients/" + v.getId() + "/" + INDEX_FILE;
+        String managed = CLIENTS_DIR + "/" + v.getId() + "/" + INDEX_FILE;
         return managed.equals(v.getPath().replace('\\', '/'))
                 ? ClientVersion.SOURCE_UPLOADED : ClientVersion.SOURCE_LOCAL;
     }
@@ -862,29 +784,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 return v.getId();
             }
         }
-        return ClientVersion.BUILTIN_ID;
+        return "";
     }
 
     private File metaFile() {
         return new File(plugin.getDataFolder(), META_FILE);
-    }
-
-    /** 旧版元数据位于 clients/clients.yml，首次启动时移动到插件根目录。 */
-    private void migrateMeta() {
-        File target = metaFile();
-        if (target.isFile()) {
-            return;
-        }
-        File legacy = new File(clientsDir, META_FILE);
-        if (!legacy.isFile()) {
-            return;
-        }
-        try {
-            Files.move(legacy.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            LOG.info("已将客户端元数据迁移到 " + target.getPath());
-        } catch (Throwable t) {
-            LOG.log(Level.WARNING, "迁移 clients.yml 失败: " + t);
-        }
     }
 
     private File uploadDir() {
@@ -909,6 +813,19 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         if (o != null) {
             try {
                 return Integer.parseInt(String.valueOf(o).trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return fallback;
+    }
+
+    private static long toLong(Object o, long fallback) {
+        if (o instanceof Number) {
+            return ((Number) o).longValue();
+        }
+        if (o != null) {
+            try {
+                return Long.parseLong(String.valueOf(o).trim());
             } catch (NumberFormatException ignored) {
             }
         }

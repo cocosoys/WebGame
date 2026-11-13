@@ -5,6 +5,7 @@ import com.github.cocosoys.mc.mcerp.McerpExpansion;
 import com.github.cocosoys.mc.soyshttpovermc.api.SoysHttpOverMcApi;
 import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameClientController;
+import com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudClientController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameConfigController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameSessionController;
 import com.github.cocosoys.mc.webgame.spring.controller.WebGameStatusController;
@@ -105,11 +106,11 @@ public final class WebGameErpExpansion extends McerpExpansion {
     }
 
     /**
-     * 菜单树：运行概览、会话监控、eagler 客户端、插件配置（目录 → 核心配置）。
+     * 菜单树：运行概览、会话监控、eagler 客户端、云游戏客户端、插件配置（目录 → 核心配置）。
      *
      * <p>component 由框架自动拼 {@code pageDirRoot + "/" + menuId}，即
      * {@code /web/plugins/WebGame/webgameerp/overview}、{@code …/session}、
-     * {@code …/clients}、{@code …/config/config}，与前端路由同源。</p>
+     * {@code …/clients}、{@code …/cloud}、{@code …/config/config}，与前端路由同源。</p>
      */
     @Override
     protected ErpMenus menus() {
@@ -120,6 +121,8 @@ public final class WebGameErpExpansion extends McerpExpansion {
                 .orderNum(2)
                 .menu("clients", "eagler客户端", "component", WebGameClientController.class)
                 .orderNum(3)
+                .menu("cloud", "云游戏客户端", "link", WebGameCloudClientController.class)
+                .orderNum(4)
                 .dir("config", "插件配置", "edit", d -> d
                         .menu("config", "核心配置", "input", WebGameConfigController.class)
                         .orderNum(1))
@@ -140,6 +143,9 @@ public final class WebGameErpExpansion extends McerpExpansion {
             controllers.add(new WebGameConfigController(configService));
             if (plugin.getClientService() != null) {
                 controllers.add(new WebGameClientController(plugin.getClientService()));
+            }
+            if (plugin.getCloudClientService() != null) {
+                controllers.add(new WebGameCloudClientController(plugin.getCloudClientService()));
             }
         }
         return controllers;

@@ -3,16 +3,19 @@ package com.github.cocosoys.mc.webgame;
 import com.github.cocosoys.mc.soyshttpovermc.api.event.SoysReadyEvent;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.spring.impl.WebGameClientServiceImpl;
+import com.github.cocosoys.mc.webgame.spring.impl.CloudClientServiceImpl;
 import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
+import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
 import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
+import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionRegistry;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.server.PluginEnableEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
@@ -33,17 +36,26 @@ public final class WebGame extends JavaPlugin implements Listener {
     private WebGameConfig webGameConfig;
     private WsGateway wsGateway;
 
+    /** 云游戏会话心跳注册表（cloud-stream 页面通过 /erp/session/heartbeat 上报）。 */
+    private final CloudSessionRegistry cloudSessionRegistry = new CloudSessionRegistry();
+
     /** 页面托管扩展（/web/plugins/WebGame；网关未就绪时为 null）。 */
     private WebGameExpansion pageExpansion;
 
     /** MCERP 管理面扩展（ERP 菜单 + /erp/* 端点；未装 MCERP 时为 null）。 */
     private WebGameErpExpansion erpExpansion;
 
-    /** 客户端版本服务（clients.yml + 上传）；WS 准入与会话归属都依赖它。 */
+    /** 客户端版本服务（eagler-clients.yml + 上传）；WS 准入与会话归属都依赖它。 */
     private WebGameClientService clientService;
 
     /** 客户端版本页面热登记器（/eagler/ 选择页 + /eagler/&lt;id&gt;/）。 */
     private WebGameClientPages clientPages;
+
+    /** 云游戏客户端服务（cloud-clients.yml；不涉及上传与 WS 协议）。 */
+    private CloudClientService cloudClientService;
+
+    /** 云游戏客户端页面热登记器（/cloud/ 选择页 + /cloud/&lt;id&gt;/）。 */
+    private CloudClientPages cloudClientPages;
 
     /** 插件启用时刻（毫秒），用于 status 端点的 uptimeSeconds。 */
     private long enabledAt;
@@ -79,7 +91,7 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
-        // 客户端版本：释放内置客户端、读取 clients.yml，并把准入判定挂到 WS 网关
+        // 客户端版本：释放内置客户端、读取 eagler-clients.yml，并把准入判定挂到 WS 网关
         try {
             clientService = new WebGameClientServiceImpl(this);
             clientPages = new WebGameClientPages(this, clientService);
@@ -92,7 +104,16 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
-        // 主类自身作为监听器：承接 SoysReadyEvent / 软依赖晚启用，补挂扩展
+        // 云游戏客户端：独立元数据，仅页面托管，不接入 WS 网关
+        try {
+            cloudClientService = new CloudClientServiceImpl(this);
+            cloudClientPages = new CloudClientPages(this, cloudClientService);
+        } catch (Throwable t) {
+            getLogger().severe("WebGame 云游戏客户端初始化失败：");
+            t.printStackTrace();
+        }
+
+        // 主类自身作为监听器：承接 SoysReadyEvent，网关稍后就绪时补挂扩展
         Bukkit.getPluginManager().registerEvents(this, this);
         syncSoysModules();
 
@@ -114,6 +135,9 @@ public final class WebGame extends JavaPlugin implements Listener {
         if (clientPages != null) {
             clientPages.unpublish();
         }
+        if (cloudClientPages != null) {
+            cloudClientPages.unpublish();
+        }
         if (erpExpansion != null) {
             erpExpansion.unregister();
             erpExpansion = null;
@@ -134,7 +158,7 @@ public final class WebGame extends JavaPlugin implements Listener {
     // ===== SOYS / MCERP 模块装配 =====
 
     /**
-     * 同步 SOYS 侧模块注册状态（幂等，可重复调用；由启用、软依赖晚到、SoysReady 共用）。
+     * 同步 SOYS 侧模块注册状态（幂等，可重复调用；由启用与 SoysReady 共用）。
      *
      * <ul>
      *   <li>{@link WebGameExpansion}：托管前端 {@code dist}（{@code /web/plugins/WebGame}）；</li>
@@ -165,6 +189,12 @@ public final class WebGame extends JavaPlugin implements Listener {
                     clientService.publishPages();
                 }
             }
+            if (cloudClientPages != null) {
+                cloudClientPages.attach(expansion.getApi());
+                if (cloudClientService != null) {
+                    cloudClientService.publishPages();
+                }
+            }
             getLogger().info("前端页面托管已挂载：" + WebGameConfig.WEB_PLUGIN_PREFIX + "/");
         } else {
             getLogger().warning("页面托管注册失败（网关未就绪或 identifier 冲突），将由 SoysReadyEvent 重试。");
@@ -172,17 +202,10 @@ public final class WebGame extends JavaPlugin implements Listener {
     }
 
     /**
-     * 注册 MCERP 管理面扩展（未装 MCERP 时静默跳过；已注册则跳过）。
-     *
-     * <p>{@code isPluginEnabled("MCERP")} 前置守卫必须先于对本类父级
-     * {@code McerpExpansion} 的任何引用，避免未安装 MCERP 时出现 NoClassDefFoundError。</p>
+     * 注册 MCERP 管理面扩展（已注册则跳过）。
      */
     private void registerErpExpansion() {
         if (erpExpansion != null) {
-            return;
-        }
-        if (!Bukkit.getPluginManager().isPluginEnabled("MCERP")) {
-            getLogger().info("未检测到 MCERP，ERP 管理面未注册（安装 MCERP 后执行 /soyshttp reload 即可）。");
             return;
         }
         WebGameErpExpansion expansion = new WebGameErpExpansion(this);
@@ -201,15 +224,6 @@ public final class WebGame extends JavaPlugin implements Listener {
         syncSoysModules();
     }
 
-    /** 软依赖晚于本插件启用时补挂（SOYSHTTPOverMC / MCERP）。 */
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onPluginEnable(PluginEnableEvent event) {
-        String name = event.getPlugin().getName();
-        if ("SOYSHTTPOverMC".equals(name) || "MCERP".equals(name)) {
-            syncSoysModules();
-        }
-    }
-
     // ===== getters =====
 
     public WebGameConfig getWebGameConfig() {
@@ -220,12 +234,24 @@ public final class WebGame extends JavaPlugin implements Listener {
         return wsGateway;
     }
 
+    public CloudSessionRegistry getCloudSessionRegistry() {
+        return cloudSessionRegistry;
+    }
+
     public WebGameClientService getClientService() {
         return clientService;
     }
 
     public WebGameClientPages getClientPages() {
         return clientPages;
+    }
+
+    public CloudClientService getCloudClientService() {
+        return cloudClientService;
+    }
+
+    public CloudClientPages getCloudClientPages() {
+        return cloudClientPages;
     }
 
     /** 已运行秒数。 */

@@ -4,15 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 一个已安装的 Eaglercraft 客户端（clients.yml 里的条目 + 运行时状态）。
+ * 一个已安装的 Eaglercraft 客户端（eagler-clients.yml 里的条目 + 运行时状态）。
  *
- * <p>磁盘布局：{@code plugins/WebGame/clients/<id>/index.html}；
- * 元数据集中在 {@code plugins/WebGame/clients.yml}（不放进版本目录，
+ * <p>磁盘布局：{@code plugins/WebGame/eagler-clients/<id>/index.html}；
+ * 元数据集中在 {@code plugins/WebGame/eagler-clients.yml}（不放进版本目录，
  * 避免被页面托管直接暴露）。</p>
  */
 public class ClientVersion {
 
-    /** 内置版本 id（与 jar 内 clients/1.12.2/index.html 对应）。 */
+    /** 内置版本 id（与 jar 内 eagler-clients/1.12.2/index.html 对应）。 */
     public static final String BUILTIN_ID = "1.12.2";
     public static final String SOURCE_BUILTIN = "builtin";
     public static final String SOURCE_UPLOADED = "uploaded";
@@ -54,8 +54,8 @@ public class ClientVersion {
     }
     /** 是否启用。 */
     private boolean enabled = true;
-    /** 玩家选择页的展示顺序（升序；-1 表示未指定，加载时补号）。 */
-    private int order = -1;
+    /** 玩家选择页的展示顺序（升序）。 */
+    private int order;
     /** 数据来源：builtin / uploaded。 */
     private String source = SOURCE_UPLOADED;
     /** 文件 SHA-256（内置版本为空）。 */

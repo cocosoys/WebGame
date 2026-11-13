@@ -40,3 +40,12 @@ permissions:
   webgame.erp.clients.delete:
     description: ERP-删除 eagler 客户端
     default: op
+  webgame.erp.cloudclients.list:
+    description: ERP-查看云游戏客户端列表
+    default: op
+  webgame.erp.cloudclients.edit:
+    description: ERP-新增/编辑/启用/关闭/设默认/排序云游戏客户端
+    default: op
+  webgame.erp.cloudclients.delete:
+    description: ERP-删除云游戏客户端
+    default: op

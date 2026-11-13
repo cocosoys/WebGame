@@ -4,12 +4,19 @@
       <el-col :span="1.5">
         <el-button type="primary" icon="el-icon-refresh" size="mini" :loading="loading" @click="getList">刷新</el-button>
       </el-col>
+      <el-col :span="6">
+        <el-radio-group v-model="clientType" size="mini">
+          <el-radio-button label="">全部</el-radio-button>
+          <el-radio-button label="eagler">eagler</el-radio-button>
+          <el-radio-button label="cloud">云游戏</el-radio-button>
+        </el-radio-group>
+      </el-col>
       <el-col :span="4">
-        <span style="font-size: 12px; color: #909399; line-height: 28px">共 {{ total }} 个会话，每 5 秒自动刷新</span>
+        <span style="font-size: 12px; color: #909399; line-height: 28px">共 {{ filteredSessions.length }} 个会话，每 5 秒自动刷新</span>
       </el-col>
     </el-row>
 
-    <el-table v-loading="loading" :data="sessionList" size="small">
+    <el-table v-loading="loading" :data="filteredSessions" size="small">
       <el-table-column label="用户名" align="center" width="140">
         <template slot-scope="scope">
           <span v-if="scope.row.username">{{ scope.row.username }}</span>
@@ -23,9 +30,14 @@
         </template>
       </el-table-column>
       <el-table-column label="IP" align="center" prop="ip" width="140" />
-      <el-table-column label="客户端" align="center" width="120">
+      <el-table-column label="客户端" align="center" width="160">
         <template slot-scope="scope">
-          <el-tag v-if="scope.row.clientId" size="mini" type="warning">{{ scope.row.clientId }}</el-tag>
+          <el-tag
+            v-if="scope.row.clientId"
+            size="mini"
+            :type="scope.row.clientType === 'cloud' ? 'success' : 'warning'"
+            :title="scope.row.clientId"
+          >{{ scope.row.clientName || scope.row.clientId }}</el-tag>
           <span v-else style="color: #909399">—</span>
         </template>
       </el-table-column>
@@ -71,8 +83,16 @@ export default {
     return {
       loading: false,
       timer: null,
-      sessionList: [],
-      total: 0
+      clientType: '',
+      sessionList: []
+    }
+  },
+  computed: {
+    filteredSessions() {
+      if (!this.clientType) {
+        return this.sessionList
+      }
+      return this.sessionList.filter(r => r.clientType === this.clientType)
     }
   },
   created() {
@@ -90,7 +110,6 @@ export default {
       this.loading = true
       listSessions().then(res => {
         this.sessionList = res.rows || []
-        this.total = res.total || 0
       }).finally(() => {
         this.loading = false
       })
@@ -105,8 +124,11 @@ export default {
     },
     handleKick(row) {
       const who = row.username || row.sessionId
+      const tip = row.clientType === 'cloud'
+        ? '该操作会移除其云游戏会话记录。'
+        : '该操作会立即断开其游戏连接。'
       this.$confirm(
-        `确认将 ${who} 强制踢出？该操作会立即断开其游戏连接。`,
+        `确认将 ${who} 强制踢出？${tip}`,
         '强制踢出',
         { type: 'warning', confirmButtonText: '踢出', cancelButtonText: '取消' }
       ).then(() => {

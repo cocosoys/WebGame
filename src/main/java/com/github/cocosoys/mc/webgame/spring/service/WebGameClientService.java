@@ -7,10 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Eaglercraft 客户端版本管理：列表、开关、默认版本、删除、重扫、分块上传。
+ * Eaglercraft 客户端版本管理：列表、开关、默认版本、删除、排序、分块上传。
  *
- * <p>版本文件落在 {@code plugins/WebGame/clients/<id>/index.html}，元数据集中在
- * {@code clients/clients.yml}；页面登记由 {@code WebGameClientPages} 消费本服务的版本列表。</p>
+ * <p>版本文件落在 {@code plugins/WebGame/eagler-clients/<id>/index.html}，元数据集中在
+ * {@code plugins/WebGame/eagler-clients.yml}；页面登记由 {@code WebGameClientPages} 消费本服务的版本列表。</p>
  */
 public interface WebGameClientService {
 
@@ -28,9 +28,6 @@ public interface WebGameClientService {
 
     /** 删除某个上传的版本（内置版本不可删除）。 */
     AjaxResult delete(String id);
-
-    /** 重新扫描客户端目录并发布页面。 */
-    AjaxResult rescan();
 
     /** 按给定 id 顺序保存玩家选择页的展示顺序（默认版本在页面上仍置顶）。 */
     AjaxResult reorder(List<String> ids);

@@ -35,7 +35,6 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
     private final ByteBuf frameBuffer = Unpooled.buffer(4096);
     private boolean httpParsed = false;
-    private boolean upgraded = false;
     private boolean handshakeStarted = false;
 
     private int clientProtocolVersion = 3;
@@ -51,6 +50,8 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
     /** PLAY 阶段：true 后二进制帧直接透传回环。 */
     private volatile boolean playing = false;
     private volatile McLoopbackClient loopback;
+    /** cleanup 幂等标记：exceptionCaught 与 channelInactive 可能先后触发。 */
+    private boolean cleaned;
 
     public WsFrameHandler(WsGateway gateway, String wsPath, NioEventLoopGroup loopbackGroup, String clientId) {
         this.gateway = gateway;
@@ -83,14 +84,12 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        System.out.println("[WS] channelInactive playing=" + playing + " upgraded=" + upgraded);
         cleanup(ctx);
         ctx.fireChannelInactive();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        System.out.println("[WS] exceptionCaught " + cause);
         LOG.log(Level.FINE, "ws frame handler error: " + cause);
         cleanup(ctx);
         ctx.close();
@@ -103,7 +102,6 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
                     return; // 等更多数据或已处理
                 }
                 httpParsed = true;
-                upgraded = true;
                 removeMcReadTimeout(ctx);
                 // 升级成功即登记会话（握手阶段也可见，便于 ERP 排查连不上/卡握手问题）
                 gateway.addSession(ctx.channel(), this);
@@ -171,7 +169,6 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
             io.netty.channel.ChannelHandler h = cp.get("timeout");
             if (h != null) {
                 cp.remove(h);
-                System.out.println("[WS] removed craftbukkit ReadTimeoutHandler (timeout)");
             }
         } catch (Throwable t) {
             LOG.log(Level.FINE, "remove timeout handler failed: " + t);
@@ -434,7 +431,11 @@ public final class WsFrameHandler extends SimpleChannelInboundHandler<ByteBuf> {
         return connectedAtMillis;
     }
 
-    private void cleanup(ChannelHandlerContext ctx) {
+    private synchronized void cleanup(ChannelHandlerContext ctx) {
+        if (cleaned) {
+            return;
+        }
+        cleaned = true;
         McLoopbackClient mc = loopback;
         if (mc != null) {
             mc.close();

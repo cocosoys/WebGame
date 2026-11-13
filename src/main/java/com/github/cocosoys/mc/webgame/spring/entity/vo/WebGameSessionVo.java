@@ -15,6 +15,10 @@ public class WebGameSessionVo {
     private String ip;
     /** 归属的客户端版本 id（/eagler/&lt;id&gt; 或 Referer 兜底）。 */
     private String clientId;
+    /** 客户端类型：eagler / cloud。 */
+    private String clientType;
+    /** 客户端展示名称（eagler 版本名或云游戏客户端名称）。 */
+    private String clientName;
     /** EaglerX 协商后的客户端协议版本（3/4，未协商为 0）。 */
     private int protocolVersion;
     /** 是否已进入游戏（PLAY 阶段）。 */
@@ -62,6 +66,22 @@ public class WebGameSessionVo {
 
     public void setClientId(String clientId) {
         this.clientId = clientId;
+    }
+
+    public String getClientType() {
+        return clientType;
+    }
+
+    public void setClientType(String clientType) {
+        this.clientType = clientType;
+    }
+
+    public String getClientName() {
+        return clientName;
+    }
+
+    public void setClientName(String clientName) {
+        this.clientName = clientName;
     }
 
     public int getProtocolVersion() {

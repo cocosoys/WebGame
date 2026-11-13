@@ -75,13 +75,6 @@ public class WebGameClientController {
         return clientService.delete(id);
     }
 
-    @ApiName("重新扫描客户端目录")
-    @ApiPermission("webgame.erp.clients.edit")
-    @PostMapping("/rescan")
-    public AjaxResult rescan() {
-        return clientService.rescan();
-    }
-
     @ApiName("保存客户端版本排序")
     @ApiPermission("webgame.erp.clients.edit")
     @PostMapping("/order")

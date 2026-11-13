@@ -88,7 +88,6 @@ public final class McLoopbackClient {
 
                             @Override
                             public void channelInactive(ChannelHandlerContext ctx) {
-                                System.out.println("[MCL] loopback INACTIVE loginDone=" + loginDone);
                                 if (!loginDone) {
                                     listener.onDisconnect(null);
                                 }
@@ -96,7 +95,6 @@ public final class McLoopbackClient {
 
                             @Override
                             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-                                System.out.println("[MCL] loopback EXC loginDone=" + loginDone + " " + cause);
                                 if (!loginDone) {
                                     listener.onDisconnect(cause.getMessage());
                                 }
@@ -200,16 +198,8 @@ public final class McLoopbackClient {
             handleLoginPacket(ctx, packet);
             return;
         }
-        if (playPacketLog++ < 40) {
-            int pid = packet.length > 0 ? packet[0] & 0xFF : -1;
-            System.out.println("[MCL] S> pktId=" + pid + " len=" + packet.length + " (raw first="
-                    + (packet.length > 0 ? (packet[0] & 0xFF) : -1) + ")");
-        }
         listener.onPacket(packet);
     }
-
-    private int playPacketLog;
-    private int playPacketLogC;
 
     private void handleLoginPacket(ChannelHandlerContext ctx, byte[] packet) {
         if (packet.length < 1) {
@@ -217,7 +207,6 @@ public final class McLoopbackClient {
         }
         ByteBuf p = Unpooled.wrappedBuffer(packet);
         int pktId = readVarInt(p);
-        System.out.println("[MCL] LOGIN pkt=0x" + Integer.toHexString(pktId) + " len=" + packet.length);
         switch (pktId) {
             case 0x00: { // Disconnect
                 String reason = p.isReadable() ? readString(p) : "Disconnected";
@@ -260,10 +249,6 @@ public final class McLoopbackClient {
         Channel ch = channel;
         if (ch == null || !ch.isActive()) {
             return;
-        }
-        if (loginDone && playPacketLogC++ < 40) {
-            int pid = packet.length > 0 ? packet[0] & 0xFF : -1;
-            System.out.println("[MCL] C> pktId=" + pid + " len=" + packet.length);
         }
         ByteBuf content = Unpooled.wrappedBuffer(packet);
         ByteBuf framed = ch.alloc().buffer();

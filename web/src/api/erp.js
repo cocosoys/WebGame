@@ -60,10 +60,6 @@ export function deleteClient(id) {
   return request({ url: '/erp/clients/delete', method: 'post', params: { id } })
 }
 
-export function rescanClients() {
-  return request({ url: '/erp/clients/rescan', method: 'post' })
-}
-
 export function reorderClients(ids) {
   return request({ url: '/erp/clients/order', method: 'post', data: { ids } })
 }
@@ -94,4 +90,38 @@ export function finishClientUpload(uploadId) {
 
 export function abortClientUpload(uploadId) {
   return request({ url: '/erp/clients/upload/abort', method: 'post', params: { uploadId } })
+}
+
+// ===== 云游戏客户端 =====
+
+export function listCloudClients() {
+  return request({ url: '/erp/cloud-clients/list', method: 'get' })
+}
+
+export function setCloudClientEnabled(id, enabled) {
+  return request({ url: '/erp/cloud-clients/enabled', method: 'post', params: { id, enabled } })
+}
+
+export function setDefaultCloudClient(id) {
+  return request({ url: '/erp/cloud-clients/default', method: 'post', params: { id } })
+}
+
+export function deleteCloudClient(id) {
+  return request({ url: '/erp/cloud-clients/delete', method: 'post', params: { id } })
+}
+
+export function reorderCloudClients(ids) {
+  return request({ url: '/erp/cloud-clients/order', method: 'post', data: { ids } })
+}
+
+export function setCloudClientAllowSelect(allow) {
+  return request({ url: '/erp/cloud-clients/allow-player-select', method: 'post', params: { allow } })
+}
+
+export function createCloudClient(payload) {
+  return request({ url: '/erp/cloud-clients/create', method: 'post', data: payload })
+}
+
+export function updateCloudClient(id, payload) {
+  return request({ url: '/erp/cloud-clients/update', method: 'post', params: { id }, data: payload })
 }

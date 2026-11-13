@@ -109,7 +109,7 @@
           <el-input
             v-model="editForm.path"
             :disabled="editEditing && editForm.source === 'builtin'"
-            placeholder="https://example.com/client.html 或 clients/1.8.9/index.html"
+            placeholder="https://example.com/client.html 或 eagler-clients/1.8.9/index.html"
           />
           <div class="form-hint">
             支持 URL、本地文件（相对插件数据目录 <code>plugins/WebGame</code> / 服务器根目录）与绝对路径；
@@ -134,7 +134,7 @@
             <div class="el-upload__text">将文件拖到此处，或<em>点击选择</em></div>
           </el-upload>
           <div class="form-hint">
-            只可上传一个文件，保存时写入 <code>clients/&lt;id&gt;/</code>（先清空该目录）并回填客户端路径；
+            只可上传一个文件，保存时写入 <code>eagler-clients/&lt;id&gt;/</code>（先清空该目录）并回填客户端路径；
             上传 .zip 会自动解压，且只回填目录前缀，需再补充具体入口文件
           </div>
         </el-form-item>
