@@ -105,11 +105,11 @@ public final class WebGameErpExpansion extends McerpExpansion {
     }
 
     /**
-     * 菜单树：运行概览、会话监控、插件配置（目录 → 核心配置）。
+     * 菜单树：运行概览、会话监控、eagler 客户端、插件配置（目录 → 核心配置）。
      *
      * <p>component 由框架自动拼 {@code pageDirRoot + "/" + menuId}，即
      * {@code /web/plugins/WebGame/webgameerp/overview}、{@code …/session}、
-     * {@code …/config/config}，与前端路由同源。</p>
+     * {@code …/clients}、{@code …/config/config}，与前端路由同源。</p>
      */
     @Override
     protected ErpMenus menus() {
@@ -118,11 +118,11 @@ public final class WebGameErpExpansion extends McerpExpansion {
                 .orderNum(1)
                 .menu("session", "会话监控", "online", WebGameSessionController.class)
                 .orderNum(2)
+                .menu("clients", "eagler客户端", "component", WebGameClientController.class)
+                .orderNum(3)
                 .dir("config", "插件配置", "edit", d -> d
                         .menu("config", "核心配置", "input", WebGameConfigController.class)
-                        .orderNum(1)
-                        .menu("clients", "客户端版本", "component", WebGameClientController.class)
-                        .orderNum(2))
+                        .orderNum(1))
                 .orderNum(10);
     }
 

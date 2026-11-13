@@ -32,7 +32,19 @@ public interface WebGameClientService {
     /** 重新扫描客户端目录并发布页面。 */
     AjaxResult rescan();
 
-    /** 开启一次上传（body: id/name/mcVersion/mcProtocol/eaglerProtocol）。 */
+    /** 按给定 id 顺序保存玩家选择页的展示顺序（默认版本在页面上仍置顶）。 */
+    AjaxResult reorder(List<String> ids);
+
+    /** 允许/禁止玩家自行选择版本；禁止时只能进入默认版本。 */
+    AjaxResult setAllowPlayerSelect(boolean allow);
+
+    /** 新增一个 eagler 客户端条目（body: id/name/path/mcVersions/eaglerProtocol/enabled）。 */
+    AjaxResult create(Map<String, Object> body);
+
+    /** 修改一个 eagler 客户端条目（id 不可变；内置客户端不可改路径）。 */
+    AjaxResult update(String id, Map<String, Object> body);
+
+    /** 开启一次上传（body: id/fileName）。 */
     AjaxResult uploadInit(Map<String, Object> body);
 
     /** 写入一个分块（body: index/data(base64)）。 */
@@ -46,11 +58,17 @@ public interface WebGameClientService {
 
     // ===== 供页面登记 / WS 嗅探器使用 =====
 
-    /** 当前全部版本快照（按 id 排序）。 */
+    /** 当前全部版本快照（按展示顺序排序）。 */
     List<ClientVersion> versions();
 
-    /** 该版本是否存在且已启用（WS 升级准入）。 */
+    /** 该版本是否存在、已启用且当前允许新连接（WS 升级准入）。 */
     boolean isServable(String id);
+
+    /** 是否允许玩家自行选择版本。 */
+    boolean allowPlayerSelect();
+
+    /** 解析本地客户端文件路径（URL 条目返回 null；不存在也返回 null）。 */
+    java.io.File resolveClientFile(ClientVersion version);
 
     /** 内置版本 id。 */
     String builtinId();

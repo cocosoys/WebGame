@@ -39,6 +39,11 @@ export function listClients() {
   return request({ url: '/erp/clients/list', method: 'get' })
 }
 
+/** Minecraft 版本枚举（版本名 + 协议号）。 */
+export function listMcVersions() {
+  return request({ url: '/erp/clients/mc-versions', method: 'get' })
+}
+
 export function clientImpact(id) {
   return request({ url: '/erp/clients/impact', method: 'get', params: { id } })
 }
@@ -57,6 +62,22 @@ export function deleteClient(id) {
 
 export function rescanClients() {
   return request({ url: '/erp/clients/rescan', method: 'post' })
+}
+
+export function reorderClients(ids) {
+  return request({ url: '/erp/clients/order', method: 'post', data: { ids } })
+}
+
+export function setClientAllowSelect(allow) {
+  return request({ url: '/erp/clients/allow-player-select', method: 'post', params: { allow } })
+}
+
+export function createClient(payload) {
+  return request({ url: '/erp/clients/create', method: 'post', data: payload })
+}
+
+export function updateClient(id, payload) {
+  return request({ url: '/erp/clients/update', method: 'post', params: { id }, data: payload })
 }
 
 export function initClientUpload(payload) {

@@ -5,6 +5,7 @@ import com.github.cocosoys.mc.soyshttpovermc.util.AjaxResult;
 import com.github.cocosoys.mc.soyshttpovermc.util.ConfigUtil;
 import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.spring.entity.ClientVersion;
+import com.github.cocosoys.mc.webgame.spring.entity.McVersionOption;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.ClientImpactVo;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.ClientVersionVo;
 import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
@@ -18,7 +19,6 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -35,8 +35,8 @@ import java.util.logging.Logger;
 /**
  * 客户端版本管理实现。
  *
- * <p>磁盘：{@code clients/<id>/index.html}；元数据：{@code clients/clients.yml}；
- * 上传临时文件：{@code clients/.upload/<uploadId>.part}。</p>
+ * <p>磁盘：{@code clients/<id>/index.html}；元数据：{@code clients.yml}（与 config.yml 同目录）；
+ * 上传临时文件：{@code clients/.upload/<uploadId>.part}。条目也可指向外部 URL 或任意本地文件。</p>
  */
 public class WebGameClientServiceImpl implements WebGameClientService {
 
@@ -55,12 +55,15 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     /** id → 版本（按 id 排序、并发安全）：WS 嗅探器会并发读取准入状态。 */
     private volatile Map<String, ClientVersion> versions = new ConcurrentSkipListMap<>();
     private volatile String defaultId = ClientVersion.BUILTIN_ID;
+    /** 是否允许玩家自行选择版本；关闭时只允许进入默认版本。 */
+    private volatile boolean allowPlayerSelect = true;
 
     public WebGameClientServiceImpl(WebGame plugin) {
         this.plugin = plugin;
         this.clientsDir = new File(plugin.getDataFolder(), "clients");
         ensureDir(clientsDir);
         ensureBuiltin();
+        migrateMeta();
         load();
     }
 
@@ -71,6 +74,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("defaultId", defaultId);
+            data.put("allowPlayerSelect", allowPlayerSelect);
             data.put("rows", toVos());
             return AjaxResult.success(data);
         } catch (Throwable t) {
@@ -109,8 +113,8 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             if (v == null) {
                 return AjaxResult.error("客户端不存在: " + id);
             }
-            if (v.isBuiltin() && !enabled) {
-                return AjaxResult.error("内置客户端不可关闭");
+            if (!enabled && id.equals(defaultId)) {
+                return AjaxResult.error("默认版本不可关闭，请先将其它版本设为默认");
             }
             int closed = 0;
             if (!enabled && kick) {
@@ -160,7 +164,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 return AjaxResult.error("内置客户端不可删除");
             }
             closeSessions(id);
-            deleteRecursively(new File(clientsDir, id));
+            // 只清理本插件托管的目录，外部路径（URL / 自定义本地文件）不动
+            if (ClientVersion.SOURCE_UPLOADED.equals(v.getSource())) {
+                deleteRecursively(new File(clientsDir, id));
+            }
             versions.remove(id);
             if (id.equals(defaultId)) {
                 defaultId = pickFallbackDefault();
@@ -180,10 +187,127 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             publishPages();
             Map<String, Object> data = new HashMap<>();
             data.put("defaultId", defaultId);
+            data.put("allowPlayerSelect", allowPlayerSelect);
             data.put("rows", toVos());
             return AjaxResult.success("已重新扫描客户端目录", data);
         } catch (Throwable t) {
             return AjaxResult.error("重扫失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult reorder(List<String> ids) {
+        try {
+            if (ids == null || ids.isEmpty()) {
+                return AjaxResult.error("排序列表不能为空");
+            }
+            List<String> applied = new ArrayList<>();
+            int next = 0;
+            for (String id : ids) {
+                ClientVersion v = id == null ? null : versions.get(id);
+                if (v == null || applied.contains(id)) {
+                    continue;
+                }
+                v.setOrder(next++);
+                applied.add(id);
+            }
+            // 未出现在提交列表中的版本按当前顺序追加，避免序号冲突
+            for (ClientVersion v : versions()) {
+                if (!applied.contains(v.getId())) {
+                    v.setOrder(next++);
+                }
+            }
+            save();
+            publishPages();
+            Map<String, Object> data = new HashMap<>();
+            data.put("rows", toVos());
+            return AjaxResult.success("排序已保存", data);
+        } catch (Throwable t) {
+            return AjaxResult.error("排序保存失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult setAllowPlayerSelect(boolean allow) {
+        try {
+            if (!allow && !isServableQuiet(defaultId)) {
+                return AjaxResult.error("默认版本不可用（已关闭或目录缺失），请先切换默认版本");
+            }
+            allowPlayerSelect = allow;
+            save();
+            publishPages();
+            return AjaxResult.success(allow
+                    ? "已允许玩家自行选择版本"
+                    : "已禁止玩家自行选择版本，/eagler/ 将直接进入默认版本", null);
+        } catch (Throwable t) {
+            return AjaxResult.error("设置失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult create(Map<String, Object> body) {
+        try {
+            String id = str(body == null ? null : body.get("id")).trim();
+            if (!isValidId(id)) {
+                return AjaxResult.error("客户端 id 只能包含字母、数字、下划线、点、短横线（1-32 位）");
+            }
+            if (ClientVersion.BUILTIN_ID.equalsIgnoreCase(id)) {
+                return AjaxResult.error("客户端 id " + ClientVersion.BUILTIN_ID + " 为内置客户端保留");
+            }
+            if (versions.containsKey(id)) {
+                return AjaxResult.error("客户端已存在: " + id);
+            }
+            ClientVersion v = new ClientVersion();
+            v.setId(id);
+            applyBody(v, body);
+            if (v.getPath().isEmpty()) {
+                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
+            }
+            v.setSource(deriveSource(v));
+            v.setOrder(maxOrder() + 1);
+            v.setUploadedAt(System.currentTimeMillis());
+            v.setMissing(!entryExists(v));
+            versions.put(id, v);
+            if (!isServableQuiet(defaultId)) {
+                defaultId = id;
+            }
+            save();
+            publishPages();
+            return AjaxResult.success("已新增 eagler 客户端 " + id, findVo(id));
+        } catch (Throwable t) {
+            return AjaxResult.error("新增失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult update(String id, Map<String, Object> body) {
+        try {
+            ClientVersion v = versions.get(id);
+            if (v == null) {
+                return AjaxResult.error("客户端不存在: " + id);
+            }
+            Boolean enabled = toBool(body == null ? null : body.get("enabled"));
+            if (Boolean.FALSE.equals(enabled) && id.equals(defaultId)) {
+                return AjaxResult.error("默认版本不可关闭，请先将其它版本设为默认");
+            }
+            String oldPath = v.getPath();
+            applyBody(v, body);
+            if (v.isBuiltin()) {
+                // 内置客户端路径固定，只允许调整展示信息与启用状态
+                v.setPath(oldPath);
+            }
+            if (v.getPath().isEmpty()) {
+                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
+            }
+            if (!v.isBuiltin()) {
+                v.setSource(deriveSource(v));
+            }
+            v.setMissing(!entryExists(v));
+            save();
+            publishPages();
+            return AjaxResult.success("已保存 eagler 客户端 " + id, findVo(id));
+        } catch (Throwable t) {
+            return AjaxResult.error("保存失败：" + t.getMessage());
         }
     }
 
@@ -194,10 +318,14 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         try {
             String id = str(body == null ? null : body.get("id")).trim();
             if (!isValidId(id)) {
-                return AjaxResult.error("版本 id 只能包含字母、数字、下划线、点、短横线（1-32 位）");
+                return AjaxResult.error("客户端 id 只能包含字母、数字、下划线、点、短横线（1-32 位）");
             }
             if (ClientVersion.BUILTIN_ID.equalsIgnoreCase(id)) {
-                return AjaxResult.error("版本 id " + ClientVersion.BUILTIN_ID + " 为内置客户端保留");
+                return AjaxResult.error("客户端 id " + ClientVersion.BUILTIN_ID + " 为内置客户端保留");
+            }
+            String fileName = safeFileName(str(body == null ? null : body.get("fileName")));
+            if (!isAllowedUpload(fileName)) {
+                return AjaxResult.error("仅支持上传 .html/.htm/.zip 文件");
             }
             String uploadId = UUID.randomUUID().toString().replace("-", "");
             File part = new File(uploadDir(), uploadId + ".part");
@@ -205,12 +333,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             if (!part.createNewFile()) {
                 return AjaxResult.error("无法创建上传临时文件");
             }
-            UploadSession session = new UploadSession(uploadId, id, part,
-                    str(body.get("name")).trim(),
-                    str(body.get("mcVersion")).trim(),
-                    toInt(body.get("mcProtocol"), 0),
-                    toInt(body.get("eaglerProtocol"), 0));
-            uploads.put(uploadId, session);
+            uploads.put(uploadId, new UploadSession(uploadId, id, part, fileName));
             Map<String, Object> data = new HashMap<>();
             data.put("uploadId", uploadId);
             data.put("chunkSize", CHUNK_SIZE);
@@ -265,34 +388,30 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 deleteQuietly(session.part);
                 return AjaxResult.error("上传内容为空");
             }
-            String sha = sha256(session.part);
             File dir = new File(clientsDir, session.id);
+            // 编辑/重复上传时先清空旧目录，保证内容与本次上传完全一致
+            deleteRecursively(dir);
             ensureDir(dir);
-            File target = new File(dir, INDEX_FILE);
-            Files.move(session.part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
 
-            ClientVersion v = versions.get(session.id);
-            if (v == null || v.isBuiltin()) {
-                v = new ClientVersion();
-                v.setId(session.id);
-                versions.put(session.id, v);
+            Map<String, Object> data = new HashMap<>();
+            data.put("id", session.id);
+            if (isZip(session.fileName)) {
+                int count = extractZip(session.part, dir);
+                deleteQuietly(session.part);
+                String prefix = "clients/" + session.id + "/";
+                data.put("path", prefix);
+                data.put("archive", true);
+                data.put("files", count);
+                return AjaxResult.success(
+                        "压缩包已解压到 " + prefix + "，请补充具体入口文件路径（如 " + prefix + "index.html）", data);
             }
-            v.setSource(ClientVersion.SOURCE_UPLOADED);
-            v.setName(session.name);
-            v.setMcVersion(session.mcVersion);
-            v.setMcProtocol(session.mcProtocol);
-            v.setEaglerProtocol(session.eaglerProtocol);
-            v.setEnabled(true);
-            v.setSha256(sha);
-            v.setSize(target.length());
-            v.setUploadedAt(System.currentTimeMillis());
-            v.setMissing(false);
-            if (!isServableQuiet(defaultId)) {
-                defaultId = session.id;
-            }
-            save();
-            publishPages();
-            return AjaxResult.success("上传完成：" + session.id, findVo(session.id));
+            File target = new File(dir, session.fileName);
+            Files.move(session.part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            String path = "clients/" + session.id + "/" + session.fileName;
+            data.put("path", path);
+            data.put("archive", false);
+            data.put("size", target.length());
+            return AjaxResult.success("上传完成：" + path, data);
         } catch (Throwable t) {
             deleteQuietly(session.part);
             return AjaxResult.error("上传完成失败：" + t.getMessage());
@@ -312,7 +431,12 @@ public class WebGameClientServiceImpl implements WebGameClientService {
 
     @Override
     public List<ClientVersion> versions() {
-        return new ArrayList<>(versions.values());
+        List<ClientVersion> list = new ArrayList<>(versions.values());
+        list.sort((a, b) -> {
+            int c = Integer.compare(a.getOrder(), b.getOrder());
+            return c != 0 ? c : a.getId().compareTo(b.getId());
+        });
+        return list;
     }
 
     @Override
@@ -321,7 +445,16 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             return false;
         }
         ClientVersion v = versions.get(id);
-        return v != null && v.isEnabled() && !v.isMissing();
+        if (v == null || !v.isEnabled() || v.isMissing()) {
+            return false;
+        }
+        // 禁止自选版本时，新连接只允许默认版本（已建立的会话不受影响）
+        return allowPlayerSelect || id.equals(defaultId);
+    }
+
+    @Override
+    public boolean allowPlayerSelect() {
+        return allowPlayerSelect;
     }
 
     @Override
@@ -361,6 +494,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 if (d != null && !d.trim().isEmpty()) {
                     def = d.trim();
                 }
+                allowPlayerSelect = yaml.getBoolean("allow-player-select", true);
                 ConfigurationSection section = yaml.getConfigurationSection("clients");
                 if (section != null) {
                     for (String key : section.getKeys(false)) {
@@ -374,10 +508,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                         ClientVersion v = new ClientVersion();
                         v.setId(key);
                         v.setName(c.getString("name", key));
-                        v.setMcVersion(c.getString("mc-version", ""));
-                        v.setMcProtocol(c.getInt("mc-protocol", 0));
+                        v.setPath(c.getString("path", ""));
+                        v.setMcVersions(readMcVersions(c));
                         v.setEaglerProtocol(c.getInt("eagler-protocol", 0));
                         v.setEnabled(c.getBoolean("enabled", true));
+                        v.setOrder(c.getInt("order", -1));
                         v.setSource(c.getString("source", ClientVersion.SOURCE_UPLOADED));
                         v.setSha256(c.getString("sha256", ""));
                         v.setSize(c.getLong("size", 0L));
@@ -398,15 +533,17 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             loaded.put(ClientVersion.BUILTIN_ID, builtin);
         }
         builtin.setSource(ClientVersion.SOURCE_BUILTIN);
-        builtin.setEnabled(true);
+        if (builtin.getPath().isEmpty()) {
+            builtin.setPath("clients/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE);
+        }
         if (builtin.getName().isEmpty() || builtin.getName().equals(builtin.getId())) {
             builtin.setName("1.12.2 内置客户端");
         }
-        if (builtin.getMcVersion().isEmpty()) {
-            builtin.setMcVersion("1.12.2");
-        }
-        if (builtin.getMcProtocol() <= 0) {
-            builtin.setMcProtocol(340);
+        if (builtin.getMcVersions().isEmpty()) {
+            McVersionOption opt = McVersionOption.find(ClientVersion.BUILTIN_ID);
+            if (opt != null) {
+                builtin.getMcVersions().add(opt);
+            }
         }
         if (builtin.getEaglerProtocol() <= 0) {
             builtin.setEaglerProtocol(4);
@@ -429,6 +566,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                     v = new ClientVersion();
                     v.setId(id);
                     v.setName(id);
+                    v.setPath("clients/" + id + "/" + INDEX_FILE);
                     v.setSource(ClientVersion.SOURCE_UPLOADED);
                     v.setEnabled(true);
                     v.setSize(index.length());
@@ -439,10 +577,19 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         }
 
         for (ClientVersion v : loaded.values()) {
-            File index = new File(new File(clientsDir, v.getId()), INDEX_FILE);
-            v.setMissing(!index.isFile());
-            if (v.isBuiltin()) {
-                v.setEnabled(true);
+            v.setMissing(!entryExists(v));
+        }
+
+        // 排序迁移：未指定顺序的条目按 id 顺序追加到已有序号之后
+        int nextOrder = 0;
+        for (ClientVersion v : loaded.values()) {
+            if (v.getOrder() >= 0 && v.getOrder() >= nextOrder) {
+                nextOrder = v.getOrder() + 1;
+            }
+        }
+        for (ClientVersion v : loaded.values()) {
+            if (v.getOrder() < 0) {
+                v.setOrder(nextOrder++);
             }
         }
 
@@ -458,14 +605,23 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         try {
             Map<String, Object> root = new LinkedHashMap<>();
             root.put("default-id", defaultId);
+            root.put("allow-player-select", allowPlayerSelect);
             Map<String, Object> clients = new LinkedHashMap<>();
             for (ClientVersion v : versions.values()) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("name", v.getName());
-                m.put("mc-version", v.getMcVersion());
-                m.put("mc-protocol", v.getMcProtocol());
+                m.put("path", v.getPath());
+                List<Map<String, Object>> mcVersions = new ArrayList<>();
+                for (McVersionOption opt : v.getMcVersions()) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("version", opt.getVersion());
+                    item.put("protocol", opt.getProtocol());
+                    mcVersions.add(item);
+                }
+                m.put("mc-versions", mcVersions);
                 m.put("eagler-protocol", v.getEaglerProtocol());
                 m.put("enabled", v.isEnabled());
+                m.put("order", v.getOrder());
                 m.put("source", v.getSource());
                 m.put("sha256", v.getSha256());
                 m.put("size", v.getSize());
@@ -506,10 +662,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             ClientVersionVo vo = new ClientVersionVo();
             vo.setId(v.getId());
             vo.setName(v.getName());
-            vo.setMcVersion(v.getMcVersion());
-            vo.setMcProtocol(v.getMcProtocol());
+            vo.setPath(v.getPath());
+            vo.setMcVersions(v.getMcVersions());
             vo.setEaglerProtocol(v.getEaglerProtocol());
             vo.setEnabled(v.isEnabled());
+            vo.setOrder(v.getOrder());
             vo.setDefaultVersion(v.getId().equals(defaultId));
             vo.setSource(v.getSource());
             vo.setSha256(v.getSha256());
@@ -541,6 +698,156 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         return v != null && v.isEnabled() && !v.isMissing();
     }
 
+    @Override
+    public File resolveClientFile(ClientVersion version) {
+        if (version == null || ClientVersion.isUrl(version.getPath())) {
+            return null;
+        }
+        String path = version.getPath().trim();
+        if (path.isEmpty()) {
+            return null;
+        }
+        File file = new File(path);
+        if (file.isAbsolute()) {
+            return file.isFile() ? file : null;
+        }
+        File inData = new File(plugin.getDataFolder(), path);
+        if (inData.isFile()) {
+            return inData;
+        }
+        File dataDir = plugin.getDataFolder();
+        File serverRoot = dataDir.getParentFile() == null ? null : dataDir.getParentFile().getParentFile();
+        if (serverRoot != null) {
+            File inServer = new File(serverRoot, path);
+            if (inServer.isFile()) {
+                return inServer;
+            }
+        }
+        return null;
+    }
+
+    /** URL 条目始终视为可用；本地条目要求文件存在。 */
+    private boolean entryExists(ClientVersion v) {
+        return ClientVersion.isUrl(v.getPath()) || resolveClientFile(v) != null;
+    }
+
+    private void applyBody(ClientVersion v, Map<String, Object> body) {
+        if (body == null) {
+            return;
+        }
+        String name = str(body.get("name")).trim();
+        v.setName(name.isEmpty() ? v.getId() : name);
+        String path = str(body.get("path")).trim();
+        if (!path.isEmpty()) {
+            v.setPath(path);
+        }
+        v.setMcVersions(parseMcVersions(body.get("mcVersions")));
+        v.setEaglerProtocol(toInt(body.get("eaglerProtocol"), 0));
+        Boolean enabled = toBool(body.get("enabled"));
+        if (enabled != null) {
+            v.setEnabled(enabled);
+        }
+    }
+
+    /** 读取 mc-versions 列表；为空时兼容旧的 mc-version / mc-protocol 单值。 */
+    private static List<McVersionOption> readMcVersions(ConfigurationSection c) {
+        List<McVersionOption> list = new ArrayList<>();
+        for (Map<?, ?> item : c.getMapList("mc-versions")) {
+            if (item == null) {
+                continue;
+            }
+            addMcVersion(list, resolveMcVersion(str(item.get("version")), toInt(item.get("protocol"), 0)));
+        }
+        if (list.isEmpty()) {
+            addMcVersion(list, resolveMcVersion(c.getString("mc-version", ""), c.getInt("mc-protocol", 0)));
+        }
+        return list;
+    }
+
+    /** 解析前端提交的 mcVersions（版本名数组或 {version,protocol} 数组），协议号以枚举为准。 */
+    private static List<McVersionOption> parseMcVersions(Object raw) {
+        List<McVersionOption> list = new ArrayList<>();
+        if (!(raw instanceof List)) {
+            return list;
+        }
+        for (Object item : (List<?>) raw) {
+            if (item instanceof Map) {
+                Map<?, ?> map = (Map<?, ?>) item;
+                addMcVersion(list, resolveMcVersion(str(map.get("version")), toInt(map.get("protocol"), 0)));
+            } else {
+                addMcVersion(list, resolveMcVersion(str(item), 0));
+            }
+        }
+        return list;
+    }
+
+    private static void addMcVersion(List<McVersionOption> list, McVersionOption opt) {
+        if (opt == null || opt.getVersion().isEmpty()) {
+            return;
+        }
+        for (McVersionOption exist : list) {
+            if (exist.getVersion().equalsIgnoreCase(opt.getVersion())) {
+                return;
+            }
+        }
+        list.add(opt);
+    }
+
+    /** 版本名优先按枚举补全协议号；未收录时按协议号取对应版本；仍未知则保留自定义条目。 */
+    private static McVersionOption resolveMcVersion(String version, int protocol) {
+        String name = version == null ? "" : version.trim();
+        McVersionOption found = McVersionOption.find(name);
+        if (found != null) {
+            return found;
+        }
+        if (protocol > 0) {
+            found = McVersionOption.findByProtocol(protocol);
+            if (found != null) {
+                return found;
+            }
+        }
+        return name.isEmpty() ? null : McVersionOption.of(name, protocol);
+    }
+
+    /** URL → url；本插件托管目录 → uploaded；其余本地路径 → local。 */
+    private String deriveSource(ClientVersion v) {
+        if (v.isBuiltin()) {
+            return ClientVersion.SOURCE_BUILTIN;
+        }
+        if (ClientVersion.isUrl(v.getPath())) {
+            return ClientVersion.SOURCE_URL;
+        }
+        String managed = "clients/" + v.getId() + "/" + INDEX_FILE;
+        return managed.equals(v.getPath().replace('\\', '/'))
+                ? ClientVersion.SOURCE_UPLOADED : ClientVersion.SOURCE_LOCAL;
+    }
+
+    private static Boolean toBool(Object o) {
+        if (o instanceof Boolean) {
+            return (Boolean) o;
+        }
+        if (o != null) {
+            String s = String.valueOf(o).trim();
+            if ("true".equalsIgnoreCase(s)) {
+                return Boolean.TRUE;
+            }
+            if ("false".equalsIgnoreCase(s)) {
+                return Boolean.FALSE;
+            }
+        }
+        return null;
+    }
+
+    private int maxOrder() {
+        int max = -1;
+        for (ClientVersion v : versions.values()) {
+            if (v.getOrder() > max) {
+                max = v.getOrder();
+            }
+        }
+        return max;
+    }
+
     private String pickFallbackDefault() {
         return pickFallbackDefault(versions);
     }
@@ -559,7 +866,25 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     }
 
     private File metaFile() {
-        return new File(clientsDir, META_FILE);
+        return new File(plugin.getDataFolder(), META_FILE);
+    }
+
+    /** 旧版元数据位于 clients/clients.yml，首次启动时移动到插件根目录。 */
+    private void migrateMeta() {
+        File target = metaFile();
+        if (target.isFile()) {
+            return;
+        }
+        File legacy = new File(clientsDir, META_FILE);
+        if (!legacy.isFile()) {
+            return;
+        }
+        try {
+            Files.move(legacy.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            LOG.info("已将客户端元数据迁移到 " + target.getPath());
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "迁移 clients.yml 失败: " + t);
+        }
     }
 
     private File uploadDir() {
@@ -594,20 +919,62 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         return o == null ? "" : String.valueOf(o);
     }
 
-    private static String sha256(File file) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        byte[] buf = new byte[8192];
-        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                md.update(buf, 0, n);
+    /** 只保留文件名部分，去掉路径分隔符与控制字符。 */
+    private static String safeFileName(String raw) {
+        String name = raw == null ? "" : raw.trim().replace('\\', '/');
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
+        }
+        name = name.replaceAll("\\p{Cntrl}", "");
+        if (".".equals(name) || "..".equals(name)) {
+            return "";
+        }
+        return name;
+    }
+
+    private static boolean isAllowedUpload(String fileName) {
+        String lower = fileName == null ? "" : fileName.toLowerCase();
+        return lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".zip");
+    }
+
+    private static boolean isZip(String fileName) {
+        return fileName != null && fileName.toLowerCase().endsWith(".zip");
+    }
+
+    /** 解压到目标目录，拒绝越界路径（zip slip）。 */
+    private static int extractZip(File zip, File dir) throws Exception {
+        int count = 0;
+        String base = dir.getCanonicalPath() + File.separator;
+        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(
+                new java.io.BufferedInputStream(new java.io.FileInputStream(zip)))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zin.getNextEntry()) != null) {
+                String name = entry.getName();
+                if (name == null || name.trim().isEmpty()) {
+                    continue;
+                }
+                File out = new File(dir, name);
+                if (!out.getCanonicalPath().startsWith(base)) {
+                    throw new java.io.IOException("压缩包包含非法路径: " + name);
+                }
+                if (entry.isDirectory()) {
+                    ensureDir(out);
+                } else {
+                    ensureDir(out.getParentFile());
+                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(out)) {
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = zin.read(buf)) > 0) {
+                            fos.write(buf, 0, n);
+                        }
+                    }
+                    count++;
+                }
+                zin.closeEntry();
             }
         }
-        StringBuilder sb = new StringBuilder(64);
-        for (byte b : md.digest()) {
-            sb.append(String.format("%02x", b & 0xff));
-        }
-        return sb.toString();
+        return count;
     }
 
     private static void deleteQuietly(File file) {
@@ -639,21 +1006,15 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         final String uploadId;
         final String id;
         final File part;
-        final String name;
-        final String mcVersion;
-        final int mcProtocol;
-        final int eaglerProtocol;
+        /** 原始文件名（已去除路径），用于决定落盘文件名或 zip 解压。 */
+        final String fileName;
         int nextIndex;
 
-        UploadSession(String uploadId, String id, File part, String name,
-                      String mcVersion, int mcProtocol, int eaglerProtocol) {
+        UploadSession(String uploadId, String id, File part, String fileName) {
             this.uploadId = uploadId;
             this.id = id;
             this.part = part;
-            this.name = name;
-            this.mcVersion = mcVersion;
-            this.mcProtocol = mcProtocol;
-            this.eaglerProtocol = eaglerProtocol;
+            this.fileName = fileName;
         }
     }
 }

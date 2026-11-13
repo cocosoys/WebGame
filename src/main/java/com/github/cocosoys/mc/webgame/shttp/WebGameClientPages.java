@@ -9,6 +9,9 @@ import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -27,6 +30,8 @@ public final class WebGameClientPages {
 
     /** 本类登记条目的专用 tag（与 SoysExpansion 的 dist tag 隔离）。 */
     public static final String TAG = "webgame-client-pages";
+
+    private static final String INDEX_FILE = "index.html";
 
     private final WebGame plugin;
     private final WebGameClientService clientService;
@@ -61,36 +66,71 @@ public final class WebGameClientPages {
 
         String pagePath = pagePath();
         String rel = pagePath.startsWith("/") ? pagePath.substring(1) : pagePath;
+        boolean allowSelect = clientService.allowPlayerSelect();
+        String defaultId = clientService.defaultId();
         for (ClientVersion v : clientService.versions()) {
             if (!v.isEnabled() || v.isMissing()) {
                 continue;
             }
-            File dir = new File(plugin.getDataFolder(), "clients/" + v.getId());
-            if (!dir.isDirectory()) {
+            // 禁止自选版本时只开放默认版本页面，其余版本页面 404
+            if (!allowSelect && !v.getId().equals(defaultId)) {
                 continue;
             }
-            try {
-                Set<WebRegistry.Entry> entries = pages.registerDirectory(plugin, "/" + rel + v.getId(), dir);
-                tag(entries);
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "登记客户端目录失败 " + v.getId() + ": " + t);
+            String id = v.getId();
+            String entry = pagePath + id + "/";
+            if (ClientVersion.isUrl(v.getPath())) {
+                // 远程 URL：入口页直接跳转
+                registerPage(pages, entry, buildRedirectPage(v.getPath().trim()));
+                continue;
+            }
+            File file = clientService.resolveClientFile(v);
+            if (file == null) {
+                continue;
+            }
+            if (INDEX_FILE.equalsIgnoreCase(file.getName())) {
+                // index.html：登记父目录，支持相对资源且懒读磁盘
+                try {
+                    Set<WebRegistry.Entry> entries = pages.registerDirectory(
+                            plugin, "/" + rel + id, file.getParentFile());
+                    tag(entries);
+                } catch (Throwable t) {
+                    LOG.log(Level.WARNING, "登记客户端目录失败 " + id + ": " + t);
+                }
+            } else {
+                try {
+                    registerPage(pages, entry, new String(
+                            Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                } catch (Throwable t) {
+                    LOG.log(Level.WARNING, "登记客户端页面失败 " + id + ": " + t);
+                }
             }
         }
 
-        byte[] html = buildSelectionPage().getBytes(StandardCharsets.UTF_8);
+        String entryHtml = allowSelect ? buildSelectionPage() : buildRedirectPage(defaultEntry(defaultId));
+        registerPage(pages, pagePath, entryHtml);
+    }
+
+    /** 登记 {@code <entry>index.html} 与目录别名 {@code <entry>}。 */
+    private void registerPage(WebPageApi pages, String entry, String html) {
+        byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
         try {
-            WebRegistry.Entry entry = pages.registerPage(plugin, pagePath + "index.html", html, TAG);
-            tag(entry);
+            WebRegistry.Entry e = pages.registerPage(plugin, entry + "index.html", bytes, TAG);
+            tag(e);
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "登记版本选择页失败: " + t);
+            LOG.log(Level.WARNING, "登记页面失败 " + entry + ": " + t);
         }
         try {
-            WebRegistry.Entry entry = pages.registerPage(plugin, pagePath, html, TAG);
-            tag(entry);
+            WebRegistry.Entry e = pages.registerPage(plugin, entry, bytes, TAG);
+            tag(e);
         } catch (Throwable t) {
             // 部分实现对以 "/" 结尾的路径不接受；index.html 已覆盖目录索引
-            LOG.log(Level.FINE, "登记选择页目录别名失败: " + t);
+            LOG.log(Level.FINE, "登记目录别名失败 " + entry + ": " + t);
         }
+    }
+
+    private String defaultEntry(String id) {
+        return com.github.cocosoys.mc.webgame.config.WebGameConfig.WEB_PLUGIN_PREFIX
+                + pagePath() + id + "/";
     }
 
     /** 撤销本类登记的全部页面（插件停用时调用）。 */
@@ -142,16 +182,30 @@ public final class WebGameClientPages {
         String prefix = com.github.cocosoys.mc.webgame.config.WebGameConfig.WEB_PLUGIN_PREFIX;
         String defaultId = clientService.defaultId();
 
-        StringBuilder cards = new StringBuilder(1024);
-        int count = 0;
+        // 默认版本强制置顶，其余按管理员拖拽顺序
+        List<ClientVersion> ordered = new ArrayList<>();
+        ClientVersion defaultVersion = null;
         for (ClientVersion v : clientService.versions()) {
             if (!v.isEnabled() || v.isMissing()) {
                 continue;
             }
+            if (v.getId().equals(defaultId)) {
+                defaultVersion = v;
+            } else {
+                ordered.add(v);
+            }
+        }
+        if (defaultVersion != null) {
+            ordered.add(0, defaultVersion);
+        }
+
+        StringBuilder cards = new StringBuilder(1024);
+        int count = 0;
+        for (ClientVersion v : ordered) {
             count++;
             String id = escape(v.getId());
             String name = escape(v.getName());
-            String mc = escape(v.getMcVersion());
+            String mc = escape(v.getMcVersionText());
             boolean isDefault = v.getId().equals(defaultId);
             cards.append("<a class=\"card").append(isDefault ? " card-default" : "")
                     .append("\" href=\"").append(prefix).append(pagePath).append(id).append("/\">")
@@ -206,11 +260,44 @@ public final class WebGameClientPages {
                 + "</div>\n</body>\n</html>\n";
     }
 
+    /**
+     * 跳转页：{@code /eagler/} 的严格模式入口与远程 URL 客户端共用。
+     *
+     * <p>不能把客户端 HTML 直接挂到 {@code /eagler/}：内置客户端的 WS 地址是
+     * {@code /eagler}，会被网关按子路径归属成内置版本。</p>
+     *
+     * @param target 完整跳转地址（可为绝对 URL 或站内路径）
+     */
+    private String buildRedirectPage(String target) {
+        String href = escape(target);
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<meta http-equiv=\"refresh\" content=\"0;url=" + href + "\">\n"
+                + "<title>正在进入游戏</title>\n"
+                + "<script>location.replace(" + js(target) + ");</script>\n"
+                + "<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:#0d1220;color:#8f9bb3;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',"
+                + "'Microsoft YaHei',sans-serif;font-size:14px}a{color:#4f8cff}</style>\n"
+                + "</head>\n<body>\n"
+                + "<p>正在进入游戏，若未自动跳转请<a href=\"" + href + "\">点击此处</a>。</p>\n"
+                + "</body>\n</html>\n";
+    }
+
     private static String escape(String s) {
         if (s == null) {
             return "";
         }
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 .replace("\"", "&quot;").replace("'", "&#39;");
+    }
+
+    /** JS 字符串字面量（仅用于内联跳转，路径不含引号/反斜杠）。 */
+    private static String js(String s) {
+        if (s == null) {
+            return "\"\"";
+        }
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 }

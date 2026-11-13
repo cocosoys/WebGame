@@ -1,5 +1,10 @@
 package com.github.cocosoys.mc.webgame.spring.entity.vo;
 
+import com.github.cocosoys.mc.webgame.spring.entity.McVersionOption;
+
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 客户端版本列表行（GET /erp/clients/list）。
  */
@@ -7,10 +12,14 @@ public class ClientVersionVo {
 
     private String id;
     private String name;
-    private String mcVersion;
-    private int mcProtocol;
+    /** 客户端入口路径（URL 或本地文件）。 */
+    private String path;
+    /** 支持的 Minecraft 版本（版本名 + 协议号）。 */
+    private List<McVersionOption> mcVersions = new ArrayList<>();
     private int eaglerProtocol;
     private boolean enabled;
+    /** 玩家选择页展示顺序（升序）。 */
+    private int order;
     /** 是否为当前默认版本。 */
     private boolean defaultVersion;
     /** builtin / uploaded。 */
@@ -38,20 +47,20 @@ public class ClientVersionVo {
         this.name = name;
     }
 
-    public String getMcVersion() {
-        return mcVersion;
+    public String getPath() {
+        return path;
     }
 
-    public void setMcVersion(String mcVersion) {
-        this.mcVersion = mcVersion;
+    public void setPath(String path) {
+        this.path = path;
     }
 
-    public int getMcProtocol() {
-        return mcProtocol;
+    public List<McVersionOption> getMcVersions() {
+        return mcVersions == null ? new ArrayList<>() : mcVersions;
     }
 
-    public void setMcProtocol(int mcProtocol) {
-        this.mcProtocol = mcProtocol;
+    public void setMcVersions(List<McVersionOption> mcVersions) {
+        this.mcVersions = mcVersions == null ? new ArrayList<>() : mcVersions;
     }
 
     public int getEaglerProtocol() {
@@ -68,6 +77,14 @@ public class ClientVersionVo {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public int getOrder() {
+        return order;
+    }
+
+    public void setOrder(int order) {
+        this.order = order;
     }
 
     public boolean isDefaultVersion() {

@@ -1,10 +1,13 @@
 package com.github.cocosoys.mc.webgame.spring.entity;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 一个已安装的 Eaglercraft 客户端版本（clients.yml 里的条目 + 运行时状态）。
+ * 一个已安装的 Eaglercraft 客户端（clients.yml 里的条目 + 运行时状态）。
  *
  * <p>磁盘布局：{@code plugins/WebGame/clients/<id>/index.html}；
- * 元数据集中在 {@code plugins/WebGame/clients/clients.yml}（不放进版本目录，
+ * 元数据集中在 {@code plugins/WebGame/clients.yml}（不放进版本目录，
  * 避免被页面托管直接暴露）。</p>
  */
 public class ClientVersion {
@@ -13,19 +16,46 @@ public class ClientVersion {
     public static final String BUILTIN_ID = "1.12.2";
     public static final String SOURCE_BUILTIN = "builtin";
     public static final String SOURCE_UPLOADED = "uploaded";
+    public static final String SOURCE_URL = "url";
+    public static final String SOURCE_LOCAL = "local";
 
     /** 版本标识，同时是页面子路径 /eagler/<id>/ 与 WS 子路径 /eagler/<id>。 */
     private String id = "";
     /** 展示名称。 */
     private String name = "";
-    /** 对应 Minecraft 版本（仅展示/提示，不参与协议协商）。 */
-    private String mcVersion = "";
-    /** MC 协议号（0 表示未知）。 */
-    private int mcProtocol;
+    /**
+     * 客户端入口路径：{@code http(s)://…} 直接跳转；否则视为本地文件
+     * （相对插件数据目录 / 服务器根目录，或绝对路径）。
+     */
+    private String path = "";
+    /** 支持的 Minecraft 版本（版本名 + 协议号，仅展示/记录，不参与协议协商）。 */
+    private List<McVersionOption> mcVersions = new ArrayList<>();
     /** Eaglercraft 协议版本（3/4，0 表示自适应）。 */
     private int eaglerProtocol;
-    /** 是否启用（内置版本恒为 true）。 */
+
+    public List<McVersionOption> getMcVersions() {
+        return mcVersions == null ? new ArrayList<>() : mcVersions;
+    }
+
+    public void setMcVersions(List<McVersionOption> mcVersions) {
+        this.mcVersions = mcVersions == null ? new ArrayList<>() : mcVersions;
+    }
+
+    /** 选择页展示用的版本名拼接（如 "1.8.9 / 1.12.2"）。 */
+    public String getMcVersionText() {
+        StringBuilder sb = new StringBuilder();
+        for (McVersionOption o : getMcVersions()) {
+            if (sb.length() > 0) {
+                sb.append(" / ");
+            }
+            sb.append(o.getVersion());
+        }
+        return sb.toString();
+    }
+    /** 是否启用。 */
     private boolean enabled = true;
+    /** 玩家选择页的展示顺序（升序；-1 表示未指定，加载时补号）。 */
+    private int order = -1;
     /** 数据来源：builtin / uploaded。 */
     private String source = SOURCE_UPLOADED;
     /** 文件 SHA-256（内置版本为空）。 */
@@ -53,20 +83,21 @@ public class ClientVersion {
         this.name = name == null ? "" : name;
     }
 
-    public String getMcVersion() {
-        return mcVersion == null ? "" : mcVersion;
+    public String getPath() {
+        return path == null ? "" : path;
     }
 
-    public void setMcVersion(String mcVersion) {
-        this.mcVersion = mcVersion == null ? "" : mcVersion;
+    public void setPath(String path) {
+        this.path = path == null ? "" : path;
     }
 
-    public int getMcProtocol() {
-        return mcProtocol;
-    }
-
-    public void setMcProtocol(int mcProtocol) {
-        this.mcProtocol = mcProtocol;
+    /** 是否为远程 URL（http/https）。 */
+    public static boolean isUrl(String path) {
+        if (path == null) {
+            return false;
+        }
+        String p = path.trim().toLowerCase();
+        return p.startsWith("http://") || p.startsWith("https://");
     }
 
     public int getEaglerProtocol() {
@@ -83,6 +114,14 @@ public class ClientVersion {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public int getOrder() {
+        return order;
+    }
+
+    public void setOrder(int order) {
+        this.order = order;
     }
 
     public String getSource() {

@@ -1,7 +1,7 @@
 name: WebGame
 version: '${project.version}'
 main: com.github.cocosoys.mc.webgame.WebGame
-softdepend: [SOYSHTTPOverMC, MCERP]
+depend: [SOYSHTTPOverMC, MCERP]
 author: cocosoys
 description: Serve Eaglercraft 1.12.2 web client on the MC port, letting browsers join the server.
 
@@ -29,14 +29,14 @@ permissions:
     description: ERP-编辑插件配置
     default: op
   webgame.erp.clients.list:
-    description: ERP-查看客户端版本列表
+    description: ERP-查看 eagler 客户端列表
     default: op
   webgame.erp.clients.upload:
-    description: ERP-上传客户端版本
+    description: ERP-上传 eagler 客户端文件
     default: op
   webgame.erp.clients.edit:
-    description: ERP-启用/关闭/设默认/重扫客户端版本
+    description: ERP-新增/编辑/启用/关闭/设默认/排序/重扫 eagler 客户端
     default: op
   webgame.erp.clients.delete:
-    description: ERP-删除客户端版本
+    description: ERP-删除 eagler 客户端
     default: op
