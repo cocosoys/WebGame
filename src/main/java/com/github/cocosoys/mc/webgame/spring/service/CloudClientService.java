@@ -50,4 +50,31 @@ public interface CloudClientService {
 
     /** 重新发布 /cloud/ 页面。 */
     void publishPages();
+
+    // ===== 运行态：上报 / 心跳 / 手动刷新（cloud-stream 客户端） =====
+
+    /**
+     * 客户端启动上报（TOFU 注册）：按 {@code ip:port} 找条目，不存在则新建一条。
+     *
+     * <p>共享密钥不匹配时返回失败（403 语义），只允许管理员用 {@link #applyKey} 覆盖。</p>
+     *
+     * @param cloudKey 请求头 X-Cloud-Key（空=客户端未配置 auth_token）
+     * @param body     name/ip/port/version/mcVersion/mc-version/startedAt
+     */
+    AjaxResult report(String cloudKey, Map<String, Object> body);
+
+    /** 单台手动刷新（按条目 id）；异步执行，返回本轮结果摘要。 */
+    AjaxResult refresh(String id);
+
+    /** 全部手动刷新（并发受限）；异步执行，返回本轮结果摘要。 */
+    AjaxResult refreshAll();
+
+    /** 管理员手动写入/更正共享密钥并立即探测一次（成功才落库）。 */
+    AjaxResult applyKey(String id, String key);
+
+    /** 启动 90s 心跳调度（onEnable 调用；重复调用幂等）。 */
+    void startHeartbeat();
+
+    /** 停止心跳调度（onDisable 调用）。 */
+    void stopHeartbeat();
 }

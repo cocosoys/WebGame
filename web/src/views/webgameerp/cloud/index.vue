@@ -7,6 +7,15 @@
       <el-col :span="1.5">
         <el-button type="success" icon="el-icon-plus" size="mini" @click="openCreate">新增客户端</el-button>
       </el-col>
+      <el-col :span="1.5">
+        <el-button
+          type="warning"
+          icon="el-icon-refresh-right"
+          size="mini"
+          :loading="refreshingAll"
+          @click="handleRefreshAll"
+        >全部刷新</el-button>
+      </el-col>
       <el-col :span="7">
         <span class="entry-hint">允许玩家自选客户端：</span>
         <el-switch
@@ -35,6 +44,28 @@
       </el-table-column>
       <el-table-column label="id" align="center" prop="id" width="90" />
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
+      <el-table-column label="设备地址" align="center" min-width="170">
+        <template slot-scope="scope">
+          <span v-if="scope.row.address">{{ (scope.row.tls ? 'https://' : 'http://') + scope.row.address }}</span>
+          <span v-else style="color: #909399">未上报</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="运行状态" align="center" width="130">
+        <template slot-scope="scope">
+          <el-tag size="mini" :type="runtimeTagType(scope.row.status)">{{ runtimeLabel(scope.row.status) }}</el-tag>
+          <div class="runtime-hint">
+            <span v-if="scope.row.latencyMs">延迟 {{ scope.row.latencyMs }}ms</span>
+            <span v-else-if="scope.row.version">v{{ scope.row.version }}</span>
+            <span v-else>—</span>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="最近成功" align="center" width="150">
+        <template slot-scope="scope">
+          <span v-if="scope.row.lastOk">{{ scope.row.lastOk }}</span>
+          <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="路径" align="center" prop="path" min-width="240" show-overflow-tooltip />
       <el-table-column label="MC 版本" align="center" min-width="120">
         <template slot-scope="scope">
@@ -47,7 +78,7 @@
           <el-tag size="mini" :type="sourceTagType(scope.row.source)">{{ sourceLabel(scope.row.source) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" align="center" width="110">
+      <el-table-column label="启用" align="center" width="110">
         <template slot-scope="scope">
           <el-switch
             v-model="scope.row.enabled"
@@ -57,8 +88,15 @@
           <el-tag v-if="scope.row.missing" size="mini" type="danger" style="margin-left: 6px">缺失</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" width="250">
+      <el-table-column label="操作" align="center" width="330">
         <template slot-scope="scope">
+          <el-button
+            type="text"
+            size="mini"
+            :loading="refreshingId === scope.row.id"
+            :disabled="!scope.row.address"
+            @click="handleRefresh(scope.row)"
+          >刷新</el-button>
           <el-button type="text" size="mini" @click="openEdit(scope.row)">编辑</el-button>
           <el-button
             type="text"
@@ -66,6 +104,7 @@
             :disabled="scope.row.defaultVersion || !scope.row.enabled || scope.row.missing"
             @click="handleSetDefault(scope.row)"
           >设为默认</el-button>
+          <el-button type="text" size="mini" @click="handleUpdateKey(scope.row)">密钥</el-button>
           <el-button type="text" size="mini" @click="openPage(scope.row)">打开页面</el-button>
           <el-button
             type="text"
@@ -120,7 +159,10 @@ import {
   reorderCloudClients,
   setCloudClientAllowSelect,
   createCloudClient,
-  updateCloudClient
+  updateCloudClient,
+  refreshCloudClient,
+  refreshAllCloudClients,
+  updateCloudClientKey
 } from '@/api/erp'
 import Sortable from 'sortablejs'
 
@@ -141,6 +183,8 @@ export default {
       defaultId: '',
       allowPlayerSelect: true,
       allowSelectSaving: false,
+      refreshingAll: false,
+      refreshingId: '',
       sortable: null,
       editVisible: false,
       editEditing: false,
@@ -281,6 +325,64 @@ export default {
     sourceTagType(source) {
       return { url: 'warning', local: 'success' }[source] || ''
     },
+    runtimeLabel(status) {
+      return {
+        online: '在线',
+        offline: '离线',
+        unauthorized: '密钥不符',
+        unknown: '未探测'
+      }[status] || '未探测'
+    },
+    runtimeTagType(status) {
+      return {
+        online: 'success',
+        offline: 'danger',
+        unauthorized: 'warning',
+        unknown: 'info'
+      }[status] || 'info'
+    },
+    handleRefresh(row) {
+      if (!row.address) {
+        this.$message.error('该条目未配置设备地址（ip:port）')
+        return
+      }
+      this.refreshingId = String(row.id)
+      refreshCloudClient(row.id).then(res => {
+        this.$modal.msgSuccess(res.msg || '刷新完成')
+        this.getList()
+      }).catch(() => {
+      }).finally(() => {
+        this.refreshingId = ''
+      })
+    },
+    handleRefreshAll() {
+      this.refreshingAll = true
+      refreshAllCloudClients().then(res => {
+        this.$modal.msgSuccess(res.msg || '全部刷新完成')
+        this.getList()
+      }).catch(() => {
+      }).finally(() => {
+        this.refreshingAll = false
+      })
+    },
+    handleUpdateKey(row) {
+      const target = row.address ? `${row.id}（${row.address}）` : `${row.id}（未上报地址）`
+      this.$prompt(
+        `为设备 ${target} 输入共享密钥（X-Cloud-Key，即 stream-setting 中的“访问口令”）`,
+        '更新共享密钥',
+        {
+          confirmButtonText: '验证并更新',
+          cancelButtonText: '取消',
+          inputPlaceholder: '粘贴访问口令',
+          inputValidator: value => (value && value.trim() ? true : '密钥不能为空')
+        }
+      ).then(({ value }) => {
+        updateCloudClientKey(row.id, value.trim()).then(res => {
+          this.$modal.msgSuccess(res.msg || '密钥已更新')
+          this.getList()
+        })
+      }).catch(() => {})
+    },
     onToggle(row, val) {
       setCloudClientEnabled(row.id, val).then(res => {
         this.$modal.msgSuccess(res.msg || '操作成功')
@@ -330,6 +432,11 @@ export default {
 }
 .drag-handle:hover {
   color: #409eff;
+}
+.runtime-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #909399;
 }
 .form-hint {
   margin-top: 4px;

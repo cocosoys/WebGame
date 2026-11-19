@@ -108,9 +108,22 @@ public final class WebGame extends JavaPlugin implements Listener {
         try {
             cloudClientService = new CloudClientServiceImpl(this);
             cloudClientPages = new CloudClientPages(this, cloudClientService);
+            // 90s 心跳：启动后立刻校准一轮，之后定时探测（离线阈值见 config.cloud.ttl-seconds）
+            cloudClientService.startHeartbeat();
         } catch (Throwable t) {
             getLogger().severe("WebGame 云游戏客户端初始化失败：");
             t.printStackTrace();
+        }
+
+        // 管理指令：/webgame cloud status|refresh|key
+        org.bukkit.command.PluginCommand webgameCommand = getCommand("webgame");
+        if (webgameCommand != null) {
+            com.github.cocosoys.mc.webgame.command.WebGameCommand executor =
+                    new com.github.cocosoys.mc.webgame.command.WebGameCommand(this);
+            webgameCommand.setExecutor(executor);
+            webgameCommand.setTabCompleter(executor);
+        } else {
+            getLogger().warning("plugin.yml 缺少 webgame 指令声明，/webgame cloud 不可用");
         }
 
         // 主类自身作为监听器：承接 SoysReadyEvent，网关稍后就绪时补挂扩展
@@ -132,6 +145,9 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
+        if (cloudClientService != null) {
+            cloudClientService.stopHeartbeat();
+        }
         if (clientPages != null) {
             clientPages.unpublish();
         }

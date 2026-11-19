@@ -105,7 +105,7 @@
             <artifactId>soyshttpovermc</artifactId>
             <version>${soys.version}</version>
             <scope>system</scope>
-            <systemPath>${project.basedir}/../SOYSHTTPOverMC/output/SOYSHTTPOverMC-1_12-${soys.version}.jar</systemPath>
+            <systemPath>${project.basedir}/libs/SOYSHTTPOverMC-1_12-${soys.version}.jar</systemPath>
         </dependency>
         <!-- MCERP：ERP 扩展基类（McerpExpansion/ErpMenus）编译期依赖，运行时由服务器提供 -->
         <dependency>
@@ -113,7 +113,7 @@
             <artifactId>mcerp</artifactId>
             <version>${mcerp.version}</version>
             <scope>system</scope>
-            <systemPath>${project.basedir}/../MCERP/target/original-MCERP-${mcerp.version}.jar</systemPath>
+            <systemPath>${project.basedir}/libs/MCERP-${mcerp.version}.jar</systemPath>
         </dependency>
     </dependencies>
 </project>

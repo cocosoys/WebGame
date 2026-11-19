@@ -95,4 +95,26 @@ public class WebGameCloudClientController {
                              @RequestBody Map<String, Object> body) {
         return cloudClientService.update(id, body);
     }
+
+    @ApiName("刷新云游戏客户端状态")
+    @ApiPermission("webgame.erp.cloudclients.refresh")
+    @PostMapping("/refresh")
+    public AjaxResult refresh(@RequestParam(name = "id", required = true) String id) {
+        return cloudClientService.refresh(id);
+    }
+
+    @ApiName("刷新全部云游戏客户端状态")
+    @ApiPermission("webgame.erp.cloudclients.refresh")
+    @PostMapping("/refresh-all")
+    public AjaxResult refreshAll() {
+        return cloudClientService.refreshAll();
+    }
+
+    @ApiName("更新云游戏客户端共享密钥")
+    @ApiPermission("webgame.erp.cloudclients.refresh")
+    @PostMapping("/key")
+    public AjaxResult key(@RequestParam(name = "id", required = true) String id,
+                          @RequestParam(name = "key", required = true) String key) {
+        return cloudClientService.applyKey(id, key);
+    }
 }

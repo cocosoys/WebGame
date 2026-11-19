@@ -49,3 +49,16 @@ permissions:
   webgame.erp.cloudclients.delete:
     description: ERP-删除云游戏客户端
     default: op
+  webgame.erp.cloudclients.refresh:
+    description: ERP-刷新云游戏客户端状态/更新共享密钥
+    default: op
+  webgame.cloud.admin:
+    description: 指令-/webgame cloud 查看与刷新云游戏客户端
+    default: op
+
+commands:
+  webgame:
+    description: WebGame 管理指令（云游戏客户端状态查看/刷新/密钥登记）
+    usage: "/webgame cloud status|refresh <id|all>|key <id> <key>"
+    permission: webgame.cloud.admin
+    permission-message: "没有权限：需要 webgame.cloud.admin"

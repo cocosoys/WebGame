@@ -122,6 +122,20 @@ export function createCloudClient(payload) {
   return request({ url: '/erp/cloud-clients/create', method: 'post', data: payload })
 }
 
+// ===== 云游戏客户端运行态（心跳/手动刷新/密钥） =====
+
+export function refreshCloudClient(id) {
+  return request({ url: '/erp/cloud-clients/refresh', method: 'post', params: { id } })
+}
+
+export function refreshAllCloudClients() {
+  return request({ url: '/erp/cloud-clients/refresh-all', method: 'post' })
+}
+
+export function updateCloudClientKey(id, key) {
+  return request({ url: '/erp/cloud-clients/key', method: 'post', params: { id, key } })
+}
+
 export function updateCloudClient(id, payload) {
   return request({ url: '/erp/cloud-clients/update', method: 'post', params: { id }, data: payload })
 }

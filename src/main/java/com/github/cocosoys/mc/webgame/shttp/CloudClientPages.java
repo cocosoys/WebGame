@@ -80,7 +80,9 @@ public final class CloudClientPages {
             String id = c.getId();
             String entry = PAGE_PATH + id + "/";
             if (CloudClient.isUrl(c.getPath())) {
-                registerPage(pages, entry, buildRedirectPage(c.getPath().trim()));
+                // 远程客户端（cloud-stream）：页面本身要带 token 才拿得到 WebSocket 会话，
+                // 否则前端会一直 "WebSocket disconnected. Attempting to reconnect..."。
+                registerPage(pages, entry, buildRedirectPage(withToken(c.getPath().trim(), c.getCloudKey())));
                 continue;
             }
             File file = cloudClientService.resolveClientFile(c);
@@ -107,7 +109,7 @@ public final class CloudClientPages {
 
         // 默认客户端缺失时仍展示选择页（空状态），避免跳转到无效地址
         String entryHtml = (!allowSelect && !defaultId.isEmpty())
-                ? buildRedirectPage(defaultEntry(defaultId))
+                ? buildRedirectPage(withToken(defaultEntry(defaultId), keyOf(defaultId)))
                 : buildSelectionPage();
         registerPage(pages, PAGE_PATH, entryHtml);
     }
@@ -164,6 +166,38 @@ public final class CloudClientPages {
 
     private String defaultEntry(String id) {
         return WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + id + "/";
+    }
+
+    /** 取某条目的共享密钥（= cloud-stream 的 auth_token），用于给跳转地址补 token。 */
+    private String keyOf(String id) {
+        for (CloudClient c : cloudClientService.versions()) {
+            if (c.getId().equals(id)) {
+                return c.getCloudKey();
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 给远程客户端地址补 {@code ?token=}。
+     *
+     * <p>selkies 的页面与 WebSocket 会话共用同一个 token：静态资源虽然开放，但
+     * {@code /api/*}（含 {@code /api/<mode>/signaling/}）默认要求它，缺 token 时
+     * 握手直接 401，前端表现就是无限重连。地址里已经带了 token 的不重复追加。</p>
+     */
+    private static String withToken(String url, String token) {
+        if (url == null || url.isEmpty() || token == null || token.isEmpty()) {
+            return url;
+        }
+        if (!CloudClient.isUrl(url) || url.contains("token=")) {
+            return url;
+        }
+        try {
+            return url + (url.contains("?") ? "&" : "?")
+                    + "token=" + java.net.URLEncoder.encode(token, "UTF-8");
+        } catch (Throwable t) {
+            return url;
+        }
     }
 
     private String buildSelectionPage() {

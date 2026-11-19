@@ -32,3 +32,12 @@ auto-join:
   enabled: true
   # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom
   default-username: "WebPlayer"
+cloud:
+  # 云游戏客户端（cloud-stream）运行态探测周期（秒）。
+  # 每轮向 cloud-clients.yml 里登记的设备请求 GET /api/v1/health，
+  # 带 Authorization: Bearer <cloud-key>（= stream-server 的 auth_token）。
+  heartbeat-seconds: 90
+  # 离线阈值（秒）：最近一次成功探测超过该时长才判 offline（默认 3 个周期，避免一次抖动翻红）。
+  ttl-seconds: 270
+  # 单次探测的连接/读取超时（毫秒）；范围 500–15000。
+  probe-timeout-ms: 3000
