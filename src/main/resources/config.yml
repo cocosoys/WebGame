@@ -45,3 +45,7 @@ cloud:
   # 玩家只访问 /web/plugins/WebGame/cloud/<id>/live/，不必为云主机单独做端口映射。
   # 关闭后回退为跳转设备地址（需要玩家能直连设备端口）。
   same-port-relay: true
+  # 会话代理端口（云主机上的 cloud-session-agent，默认 8090）。
+  # 玩家点"进入云游戏"后，服务端用它来 prepare/end 会话并轮询游戏状态；
+  # 端口改了要同步改代理监听端口与云主机防火墙。
+  session-agent-port: 8090

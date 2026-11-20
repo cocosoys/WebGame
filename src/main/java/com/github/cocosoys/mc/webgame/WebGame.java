@@ -11,6 +11,7 @@ import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionRegistry;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
@@ -56,6 +57,9 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     /** 云游戏客户端页面热登记器（/cloud/ 选择页 + /cloud/&lt;id&gt;/）。 */
     private CloudClientPages cloudClientPages;
+
+    /** 云游戏"点击即玩"会话服务（槽位占用 + 代理调用 + 看门狗）。 */
+    private CloudPlayService cloudPlayService;
 
     /** 插件启用时刻（毫秒），用于 status 端点的 uptimeSeconds。 */
     private long enabledAt;
@@ -107,9 +111,12 @@ public final class WebGame extends JavaPlugin implements Listener {
         // 云游戏客户端：独立元数据，仅页面托管，不接入 WS 网关
         try {
             cloudClientService = new CloudClientServiceImpl(this);
-            cloudClientPages = new CloudClientPages(this, cloudClientService);
+            cloudPlayService = new CloudPlayService(this, cloudClientService);
+            cloudClientPages = new CloudClientPages(this, cloudClientService, cloudPlayService);
             // 90s 心跳：启动后立刻校准一轮，之后定时探测（离线阈值见 config.cloud.ttl-seconds）
             cloudClientService.startHeartbeat();
+            // 会话看门狗：玩家在 MC 里退出后，会话必须被判定结束，否则桌面会解锁在玩家眼前
+            cloudPlayService.startWatchdog();
         } catch (Throwable t) {
             getLogger().severe("WebGame 云游戏客户端初始化失败：");
             t.printStackTrace();
@@ -145,6 +152,9 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
+        if (cloudPlayService != null) {
+            cloudPlayService.stopWatchdog();
+        }
         if (cloudClientService != null) {
             cloudClientService.stopHeartbeat();
         }
@@ -268,6 +278,10 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     public CloudClientPages getCloudClientPages() {
         return cloudClientPages;
+    }
+
+    public CloudPlayService getCloudPlayService() {
+        return cloudPlayService;
     }
 
     /** 已运行秒数。 */

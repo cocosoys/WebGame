@@ -40,9 +40,14 @@ public final class CloudClientPages {
      * 上游代理前缀。两者必须分开——页面注册 key 与 upstream 前缀共用同一路径会互相抢命中。
      */
     private static final String LIVE_SEGMENT = "/live";
+    /** 会话包装页子路径：{@code /cloud/<id>/play/}，里面 iframe 载直播页、轮询会话状态。 */
+    private static final String PLAY_SEGMENT = "/play/";
+    /** 插件 API 前缀（页面里用 fetch 直接打会话端点）。 */
+    private static final String API_PREFIX = "/api/plugins/WebGame";
 
     private final WebGame plugin;
     private final CloudClientService cloudClientService;
+    private final com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService playService;
 
     private volatile SoysHttpOverMcApi api;
 
@@ -52,9 +57,11 @@ public final class CloudClientPages {
      */
     private volatile java.util.Map<String, String> livePrefixes = java.util.Collections.emptyMap();
 
-    public CloudClientPages(WebGame plugin, CloudClientService cloudClientService) {
+    public CloudClientPages(WebGame plugin, CloudClientService cloudClientService,
+                            com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService playService) {
         this.plugin = plugin;
         this.cloudClientService = cloudClientService;
+        this.playService = playService;
     }
 
     /** 页面扩展注册成功后注入 api（页面扩展未就绪时不发布）。 */
@@ -121,16 +128,19 @@ public final class CloudClientPages {
                 // 外网用户只需要 MC 端口，不必再为 .128:8080 单独做端口映射。
                 // 若 SOYS 侧不支持 upstream（老 jar），自动退回原来的绝对地址跳转。
                 String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + id + LIVE_SEGMENT;
-                String html;
+                String token = c.getCloudKey();
+                String liveUrl;
                 if (relay && registerLiveUpstream(a, livePrefix, c, id)) {
                     live.put(id, livePrefix);
                     // 相对路径也要补 token：withToken 只处理绝对 URL，这里必须无条件追加，
                     // 否则 selkies 的 /api/* 会 401、前端表现为无限重连。
-                    html = buildRedirectPage(appendToken(livePrefix + "/", c.getCloudKey()));
+                    liveUrl = appendToken(livePrefix + "/", token);
                 } else {
-                    html = buildRedirectPage(withToken(c.getPath().trim(), c.getCloudKey()));
+                    liveUrl = withToken(c.getPath().trim(), token);
                 }
-                registerPage(pages, entry, html);
+                // 入口页不再直接跳直播：先收游戏名 → 起会话 → 才进直播（锁桌面那条链路的前置条件）
+                registerPage(pages, entry, buildEntryPage(c, token));
+                registerPage(pages, PAGE_PATH + id + PLAY_SEGMENT, buildPlayPage(c, liveUrl, token));
                 continue;
             }
             File file = cloudClientService.resolveClientFile(c);
@@ -434,6 +444,156 @@ public final class CloudClientPages {
                 + "</head>\n<body>\n"
                 + "<p>正在进入游戏，若未自动跳转请<a href=\"" + href + "\">点击此处</a>。</p>\n"
                 + "</body>\n</html>\n";
+    }
+
+    /**
+     * 入口页：{@code /cloud/<id>/}。玩家必须先填游戏名，再点"进入云游戏"。
+     *
+     * <p>前端校验只是体验层（空格、长度、字符集），服务端 {@code /cloud/session/start}
+     * 会再校验一次：绕过页面直接 POST 同样会被拒。</p>
+     */
+    private String buildEntryPage(CloudClient c, String token) {
+        String name = escape(c.getName());
+        String id = js(c.getId());
+        String tok = js(token);
+        String mc = escape(c.getMcVersion());
+        String mcLine = mc.isEmpty() ? "" : "<span class=\"pill\">MC " + mc + "</span>";
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>" + name + " · 进入云游戏</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
+                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
+                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
+                + ".sub{margin:0 0 24px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
+                + ".pill{display:inline-block;margin-right:8px;padding:2px 8px;border-radius:6px;"
+                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
+                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
+                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
+                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
+                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
+                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
+                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
+                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
+                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
+                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
+                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
+                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
+                + ".back:hover{color:#4f8cff}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"wrap\">\n"
+                + "<h1>" + name + "</h1>\n"
+                + "<p class=\"sub\"><span class=\"pill\">ID " + escape(c.getId()) + "</span>" + mcLine
+                + "<br>进入前请填写你在服务器里的游戏名；云主机将按它启动客户端并自动连接本服。</p>\n"
+                + "<form id=\"f\" autocomplete=\"off\">\n"
+                + "<div class=\"field\">游戏名称</div>\n"
+                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
+                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
+                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
+                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
+                + "<div class=\"msg\" id=\"m\"></div>\n"
+                + "</form>\n"
+                + "<a class=\"back\" href=\"" + WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + "\">← 返回客户端列表</a>\n"
+                + "</div>\n"
+                + "<script>\n"
+                + "var API=" + js(API_PREFIX) + ";\n"
+                + "var CLIENT=" + id + ";\n"
+                + "var TOKEN=" + tok + ";\n"
+                + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
+                + "var f=document.getElementById('f'),p=document.getElementById('p'),"
+                + "b=document.getElementById('b'),m=document.getElementById('m');\n"
+                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
+                + "f.addEventListener('submit',function(e){\n"
+                + "  e.preventDefault();\n"
+                + "  var v=(p.value||'').trim();\n"
+                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
+                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
+                + "  b.disabled=true;say('正在准备云主机，首次启动约需 1–3 分钟…',false);\n"
+                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN})})\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){\n"
+                + "    if(j&&j.code===200&&j.data&&j.data.playUrl){say('已进入，正在连接画面…',false);"
+                + "location.replace(j.data.playUrl);return;}\n"
+                + "    b.disabled=false;say((j&&j.msg)||'开始失败，请稍后重试',true);\n"
+                + "  })\n"
+                + "  .catch(function(){b.disabled=false;say('网络异常，请稍后重试',true);});\n"
+                + "});\n"
+                + "</script>\n</body>\n</html>\n";
+    }
+
+    /**
+     * 包装页：{@code /cloud/<id>/play/?s=<sessionId>}。
+     *
+     * <p>iframe 载直播画面，外层每 3 秒问一次会话状态；一旦会话结束（玩家在 MC 里退出、
+     * 看门狗判定游戏已停、或点"结束游戏"），立刻 {@code location.replace} 回选择页——
+     * 这样即使桌面被解锁，玩家也不会直面一个可操作的 Windows 桌面。</p>
+     */
+    private String buildPlayPage(CloudClient c, String liveUrl, String token) {
+        String name = escape(c.getName());
+        String live = js(liveUrl);
+        String tok = js(token);
+        String home = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>" + name + " · 云游戏中</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "html,body{margin:0;height:100%;overflow:hidden;background:#070a12;"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}\n"
+                + ".bar{height:40px;display:flex;align-items:center;gap:12px;padding:0 14px;"
+                + "background:#101728;color:#c7d0e2;font-size:13px;border-bottom:1px solid rgba(255,255,255,.08)}\n"
+                + ".dot{width:8px;height:8px;border-radius:50%;background:#67c23a}\n"
+                + ".grow{flex:1}\n"
+                + ".btn{padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.14);"
+                + "background:transparent;color:#c7d0e2;font-size:13px;cursor:pointer}\n"
+                + ".btn:hover{border-color:#4f8cff;color:#fff}\n"
+                + "iframe{display:block;width:100%;height:calc(100% - 40px);border:0;background:#000}\n"
+                + ".mask{position:fixed;inset:40px 0 0 0;display:flex;align-items:center;justify-content:center;"
+                + "background:rgba(7,10,18,.92);color:#8f9bb3;font-size:14px;text-align:center;line-height:1.8;z-index:2}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"bar\">\n"
+                + "<span class=\"dot\"></span><span>" + name + "</span><span id=\"pl\" class=\"grow\"></span>\n"
+                + "<button class=\"btn\" id=\"end\" type=\"button\">结束游戏</button>\n"
+                + "</div>\n"
+                + "<iframe id=\"v\" src=\"" + escape(liveUrl) + "\" allow=\"autoplay; fullscreen; microphone; camera;"
+                + " clipboard-read; clipboard-write; gamepad\" allowfullscreen></iframe>\n"
+                + "<div class=\"mask\" id=\"mask\">正在连接云主机…<br>首次启动客户端约需 1–3 分钟，请勿关闭本页</div>\n"
+                + "<script>\n"
+                + "var API=" + js(API_PREFIX) + ";\n"
+                + "var TOKEN=" + tok + ";\n"
+                + "var HOME=" + js(home) + ";\n"
+                + "var q=new URLSearchParams(location.search),S=q.get('s')||'';\n"
+                + "var mask=document.getElementById('mask'),pl=document.getElementById('pl'),"
+                + "v=document.getElementById('v'),endBtn=document.getElementById('end');\n"
+                + "function goHome(){location.replace(HOME);}\n"
+                + "function busy(on){mask.style.display=on?'flex':'none';}\n"
+                + "busy(true);\n"
+                + "v.addEventListener('load',function(){setTimeout(function(){busy(false);},1200);});\n"
+                + "setTimeout(function(){busy(false);},20000);\n"
+                + "function poll(){\n"
+                + "  fetch(API+'/cloud/session/status?s='+encodeURIComponent(S))\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){\n"
+                + "    var d=(j&&j.data)||{};\n"
+                + "    if(d.player){pl.textContent='玩家 '+d.player+' · '+(d.gameState||'');}\n"
+                + "    if(!S||d.state==='ended'||d.reason==='not-found'){goHome();}\n"
+                + "  }).catch(function(){});\n"
+                + "}\n"
+                + "if(!S){goHome();}else{setInterval(poll,3000);setTimeout(poll,600);}\n"
+                + "endBtn.addEventListener('click',function(){\n"
+                + "  endBtn.disabled=true;endBtn.textContent='正在结束…';\n"
+                + "  fetch(API+'/cloud/session/end',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({sessionId:S})}).catch(function(){}).then(goHome,goHome);\n"
+                + "});\n"
+                + "</script>\n</body>\n</html>\n";
     }
 
     private static String escape(String s) {

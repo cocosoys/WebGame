@@ -46,11 +46,14 @@ public class WebGameExpansion extends SoysExpansion {
     @Override
     protected List<Object> buildControllers() {
         // 上报端点与 ERP 无关：即使服务器没装 MCERP，云游戏客户端也要能上报
-        if (plugin.getCloudClientService() == null) {
+        if (plugin.getCloudClientService() == null || plugin.getCloudPlayService() == null) {
             return Collections.emptyList();
         }
-        return Collections.singletonList(
+        return java.util.Arrays.asList(
                 new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudReportController(
-                        plugin.getCloudClientService()));
+                        plugin.getCloudClientService()),
+                // 玩家"点一下就能玩"的会话端点（入口页/包装页都打这里）
+                new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudSessionController(
+                        plugin.getCloudPlayService()));
     }
 }
