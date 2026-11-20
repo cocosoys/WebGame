@@ -21,6 +21,11 @@ public class CloudClientVo {
     private boolean missing;
     /** 客户端页面完整访问路径（/web/plugins/WebGame/cloud/&lt;id&gt;/）。 */
     private String pagePath;
+    /**
+     * 同端口转播前缀（/web/plugins/WebGame/cloud/&lt;id&gt;/live/），空串表示该条目未走同端口转播
+     * （本地页面、老 SOYS jar、或管理员关闭了 cloud.same-port-relay）。
+     */
+    private String livePath;
 
     // ===== 运行态（前端展示用；密钥只给掩码） =====
 
@@ -120,6 +125,14 @@ public class CloudClientVo {
 
     public void setPagePath(String pagePath) {
         this.pagePath = pagePath;
+    }
+
+    public String getLivePath() {
+        return livePath;
+    }
+
+    public void setLivePath(String livePath) {
+        this.livePath = livePath;
     }
 
     public String getIp() {

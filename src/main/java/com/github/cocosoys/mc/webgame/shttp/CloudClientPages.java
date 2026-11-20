@@ -3,6 +3,7 @@ package com.github.cocosoys.mc.webgame.shttp;
 import com.github.cocosoys.mc.soyshttpovermc.api.SoysHttpOverMcApi;
 import com.github.cocosoys.mc.soyshttpovermc.api.WebPageApi;
 import com.github.cocosoys.mc.soyshttpovermc.web.WebRegistry;
+import com.github.cocosoys.mc.soyshttpovermc.web.upstream.UpstreamTarget;
 import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
@@ -34,11 +35,22 @@ public final class CloudClientPages {
     private static final String INDEX_FILE = "index.html";
     /** 云游戏客户端固定挂载路径（相对插件页面根）。 */
     private static final String PAGE_PATH = "/cloud/";
+    /**
+     * 同端口转播子路径：{@code /cloud/<id>/} 是跳转页，{@code /cloud/<id>/live/} 才是
+     * 上游代理前缀。两者必须分开——页面注册 key 与 upstream 前缀共用同一路径会互相抢命中。
+     */
+    private static final String LIVE_SEGMENT = "/live";
 
     private final WebGame plugin;
     private final CloudClientService cloudClientService;
 
     private volatile SoysHttpOverMcApi api;
+
+    /**
+     * 已生效的同端口转播前缀（id → {@code /web/plugins/WebGame/cloud/&lt;id&gt;/live}）。
+     * ERP 列表用它展示"同端口接入"状态；未登记成功（老 jar / 关闭开关）的条目不在其中。
+     */
+    private volatile java.util.Map<String, String> livePrefixes = java.util.Collections.emptyMap();
 
     public CloudClientPages(WebGame plugin, CloudClientService cloudClientService) {
         this.plugin = plugin;
@@ -48,6 +60,23 @@ public final class CloudClientPages {
     /** 页面扩展注册成功后注入 api（页面扩展未就绪时不发布）。 */
     public void attach(SoysHttpOverMcApi api) {
         this.api = api;
+    }
+
+    /** 某条目当前生效的同端口转播前缀（未转播返回 null）。 */
+    public String livePrefixOf(String id) {
+        if (id == null) {
+            return null;
+        }
+        return livePrefixes.get(id);
+    }
+
+    /** 同端口转播开关（{@code cloud.same-port-relay}，默认开启）。 */
+    private boolean relayEnabled() {
+        try {
+            return plugin.getConfig().getBoolean("cloud.same-port-relay", true);
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     /** 幂等重建：先撤销本 tag 全部条目，再按当前客户端列表重新登记。 */
@@ -65,10 +94,18 @@ public final class CloudClientPages {
         } catch (Throwable t) {
             LOG.log(Level.FINE, "unregister cloud client pages failed: " + t);
         }
+        // 同端口转播前缀与页面同生命周期：先全撤，再按当前客户端重建
+        try {
+            a.unregisterUpstreamByTag(TAG);
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "unregister cloud upstreams failed: " + t);
+        }
 
         String rel = PAGE_PATH.substring(1);
         boolean allowSelect = cloudClientService.allowPlayerSelect();
         String defaultId = cloudClientService.defaultId();
+        boolean relay = relayEnabled();
+        java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
         for (CloudClient c : cloudClientService.versions()) {
             if (!c.isEnabled() || c.isMissing()) {
                 continue;
@@ -80,9 +117,20 @@ public final class CloudClientPages {
             String id = c.getId();
             String entry = PAGE_PATH + id + "/";
             if (CloudClient.isUrl(c.getPath())) {
-                // 远程客户端（cloud-stream）：页面本身要带 token 才拿得到 WebSocket 会话，
-                // 否则前端会一直 "WebSocket disconnected. Attempting to reconnect..."。
-                registerPage(pages, entry, buildRedirectPage(withToken(c.getPath().trim(), c.getCloudKey())));
+                // 远程客户端（cloud-stream）：默认走 SOYS 同端口转播（前缀 + 反代 + wss 隧道），
+                // 外网用户只需要 MC 端口，不必再为 .128:8080 单独做端口映射。
+                // 若 SOYS 侧不支持 upstream（老 jar），自动退回原来的绝对地址跳转。
+                String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + id + LIVE_SEGMENT;
+                String html;
+                if (relay && registerLiveUpstream(a, livePrefix, c, id)) {
+                    live.put(id, livePrefix);
+                    // 相对路径也要补 token：withToken 只处理绝对 URL，这里必须无条件追加，
+                    // 否则 selkies 的 /api/* 会 401、前端表现为无限重连。
+                    html = buildRedirectPage(appendToken(livePrefix + "/", c.getCloudKey()));
+                } else {
+                    html = buildRedirectPage(withToken(c.getPath().trim(), c.getCloudKey()));
+                }
+                registerPage(pages, entry, html);
                 continue;
             }
             File file = cloudClientService.resolveClientFile(c);
@@ -112,6 +160,7 @@ public final class CloudClientPages {
                 ? buildRedirectPage(withToken(defaultEntry(defaultId), keyOf(defaultId)))
                 : buildSelectionPage();
         registerPage(pages, PAGE_PATH, entryHtml);
+        livePrefixes = live;
     }
 
     /** 撤销本类登记的全部页面（插件停用时调用）。 */
@@ -128,6 +177,12 @@ public final class CloudClientPages {
         } catch (Throwable t) {
             LOG.log(Level.FINE, "unpublish cloud client pages failed: " + t);
         }
+        try {
+            a.unregisterUpstreamByTag(TAG);
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "unpublish cloud upstreams failed: " + t);
+        }
+        livePrefixes = java.util.Collections.emptyMap();
     }
 
     // ===== 内部 =====
@@ -192,11 +247,93 @@ public final class CloudClientPages {
         if (!CloudClient.isUrl(url) || url.contains("token=")) {
             return url;
         }
+        return appendToken(url, token);
+    }
+
+    /**
+     * 无条件给目标补 {@code ?token=}（不区分绝对/相对地址）。
+     * <p>同端口转播的跳转目标是本地相对前缀，{@link #withToken} 会因"不是 URL"而跳过它，
+     * 所以此处单列一条路径。</p>
+     */
+    private static String appendToken(String url, String token) {
+        if (url == null || url.isEmpty() || token == null || token.isEmpty() || url.contains("token=")) {
+            return url;
+        }
         try {
             return url + (url.contains("?") ? "&" : "?")
                     + "token=" + java.net.URLEncoder.encode(token, "UTF-8");
         } catch (Throwable t) {
             return url;
+        }
+    }
+
+    // ===== 同端口转播 =====
+
+    /**
+     * 把一条远程客户端的 {@code <livePrefix>} 前缀注册给 SOYS 的 upstream 转播。
+     *
+     * <p>换算规则只有一条：上游路径 = 请求路径 − 本地前缀，前缀只做剥离、不参与上游拼接。
+     * 因此浏览器在 {@code <livePrefix>/api/websockets?token=X} 上发起的 WS，
+     * 到上游就是 {@code /api/websockets?token=X}，这正是 selkies 的原始路径。</p>
+     *
+     * @return true 表示注册成功（调用方应把跳转页指向本地前缀）；false 表示该 SOYS 版本
+     *         不支持 upstream（老 jar），调用方退回绝对地址跳转
+     */
+    private boolean registerLiveUpstream(SoysHttpOverMcApi a, String livePrefix, CloudClient c, String id) {
+        String base = c.getPath() == null ? "" : c.getPath().trim();
+        if (base.isEmpty()) {
+            return false;
+        }
+        try {
+            // 内网自签证书必须放宽校验，否则 TLS 握手直接失败；公网目标保持严格校验
+            boolean insecure = isPrivateHost(base);
+            a.registerUpstream(livePrefix, UpstreamTarget.of(base, insecure), TAG);
+            LOG.info("云客户端 " + id + " 已注册同端口转播前缀 " + livePrefix + " -> " + base
+                    + (insecure ? "（内网自签，跳过证书校验）" : ""));
+            return true;
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "云客户端 " + id + " 注册同端口转播失败，回退直连地址: " + t);
+            return false;
+        }
+    }
+
+    /**
+     * 目标是否属于内网/本机（据此决定是否跳过证书校验）。
+     * <p>只认字面地址：10/8、172.16-31/12、192.168/16、127/8、localhost、[::1]、169.254/16。</p>
+     */
+    private static boolean isPrivateHost(String url) {
+        String host;
+        try {
+            host = new java.net.URI(url).getHost();
+        } catch (Throwable t) {
+            return false;
+        }
+        if (host == null || host.isEmpty()) {
+            return false;
+        }
+        host = host.toLowerCase(java.util.Locale.ROOT);
+        if (host.equals("localhost") || host.equals("::1") || host.equals("[::1]")) {
+            return true;
+        }
+        String[] parts = host.split("\\.");
+        if (parts.length != 4) {
+            return false;
+        }
+        try {
+            int a = Integer.parseInt(parts[0]);
+            int b = Integer.parseInt(parts[1]);
+            if (a == 10 || a == 127) {
+                return true;
+            }
+            if (a == 192 && b == 168) {
+                return true;
+            }
+            if (a == 172 && b >= 16 && b <= 31) {
+                return true;
+            }
+            return a == 169 && b == 254;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 

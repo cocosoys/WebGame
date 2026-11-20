@@ -41,3 +41,7 @@ cloud:
   ttl-seconds: 270
   # 单次探测的连接/读取超时（毫秒）；范围 500–15000。
   probe-timeout-ms: 3000
+  # 同端口转播：URL 客户端的页面/资源/WebSocket 全部经 MC 端口（SOYS upstream 前缀转播），
+  # 玩家只访问 /web/plugins/WebGame/cloud/<id>/live/，不必为云主机单独做端口映射。
+  # 关闭后回退为跳转设备地址（需要玩家能直连设备端口）。
+  same-port-relay: true

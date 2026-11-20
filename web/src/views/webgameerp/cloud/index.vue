@@ -28,6 +28,12 @@
       <el-col :span="9">
         <span class="entry-hint">玩家入口：{{ entryUrl }}</span>
       </el-col>
+      <el-col :span="24">
+        <span class="entry-hint">
+          URL 客户端默认由 MC 端口同端口转播（/cloud/&lt;id&gt;/live/），玩家只需访问 MC 端口，不必为云主机单独做端口映射；
+          关掉 cloud.same-port-relay 后回退为直连跳转。
+        </span>
+      </el-col>
     </el-row>
 
     <el-table ref="table" v-loading="loading" :data="rows" size="small">
@@ -64,6 +70,31 @@
         <template slot-scope="scope">
           <span v-if="scope.row.lastOk">{{ scope.row.lastOk }}</span>
           <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="接入方式" align="center" min-width="260">
+        <template slot-scope="scope">
+          <template v-if="scope.row.source === 'url'">
+            <el-tooltip
+              v-if="scope.row.livePath"
+              :content="'同端口转播：' + scope.row.livePath"
+              placement="top"
+            >
+              <el-tag size="mini" type="success">同端口</el-tag>
+            </el-tooltip>
+            <el-tooltip v-else content="未走同端口转播，跳转到设备地址" placement="top">
+              <el-tag size="mini" type="warning">直连</el-tag>
+            </el-tooltip>
+            <span class="live-path">{{ scope.row.livePath || '—' }}</span>
+            <el-button
+              v-if="scope.row.livePath"
+              type="text"
+              size="mini"
+              icon="el-icon-document-copy"
+              @click="copyText(liveUrl(scope.row))"
+            >复制</el-button>
+          </template>
+          <el-tag v-else size="mini" type="info">本地页面</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="路径" align="center" prop="path" min-width="240" show-overflow-tooltip />
@@ -106,6 +137,7 @@
           >设为默认</el-button>
           <el-button type="text" size="mini" @click="handleUpdateKey(scope.row)">密钥</el-button>
           <el-button type="text" size="mini" @click="openPage(scope.row)">打开页面</el-button>
+          <el-button type="text" size="mini" @click="copyText(liveUrl(scope.row))">复制入口</el-button>
           <el-button
             type="text"
             size="mini"
@@ -134,6 +166,9 @@
             v-model="editForm.path"
             placeholder="https://example.com/index.html"
           />
+          <div class="form-hint">
+            URL 客户端由 MC 端口同端口转播，玩家访问 {{ entryUrl }}&lt;id&gt;/ 即可，无需为设备单独开端口。
+          </div>
         </el-form-item>
         <el-form-item label="MC 版本">
           <el-input v-model="editForm.mcVersion" maxlength="32" placeholder="自由填写，如 1.12.2 / 1.8.9" />
@@ -196,8 +231,7 @@ export default {
     entryUrl() {
       return window.location.origin + '/web/plugins/WebGame/cloud/'
     }
-  },
-  created() {
+  },  created() {
     this.getList()
   },
   beforeDestroy() {
@@ -411,6 +445,37 @@ export default {
     },
     openPage(row) {
       window.open(row.pagePath, '_blank')
+    },
+    /** 玩家入口完整链接：跳转页由服务端补 token，这里不需要暴露密钥。 */
+    liveUrl(row) {
+      return window.location.origin + (row.pagePath || '')
+    },
+    copyText(text) {
+      if (!text) {
+        return
+      }
+      const fallback = () => {
+        const input = document.createElement('textarea')
+        input.value = text
+        input.style.position = 'fixed'
+        input.style.opacity = '0'
+        document.body.appendChild(input)
+        input.select()
+        try {
+          document.execCommand('copy')
+          this.$modal.msgSuccess('链接已复制')
+        } catch (e) {
+          this.$message.error('复制失败，请手动复制：' + text)
+        }
+        document.body.removeChild(input)
+      }
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => {
+          this.$modal.msgSuccess('链接已复制')
+        }).catch(fallback)
+        return
+      }
+      fallback()
     }
   }
 }
@@ -436,6 +501,17 @@ export default {
 .runtime-hint {
   margin-top: 2px;
   font-size: 11px;
+  color: #909399;
+}
+.live-path {
+  display: inline-block;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  margin: 0 4px;
+  font-size: 12px;
   color: #909399;
 }
 .form-hint {

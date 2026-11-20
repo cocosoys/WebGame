@@ -930,6 +930,7 @@ public class CloudClientServiceImpl implements CloudClientService {
     private List<CloudClientVo> toVos() {
         List<CloudClientVo> rows = new ArrayList<>();
         String prefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
+        CloudClientPages pages = plugin.getCloudClientPages();
         for (CloudClient c : versions()) {
             CloudClientVo vo = new CloudClientVo();
             vo.setId(c.getId());
@@ -942,6 +943,8 @@ public class CloudClientServiceImpl implements CloudClientService {
             vo.setSource(c.getSource());
             vo.setMissing(c.isMissing());
             vo.setPagePath(prefix + c.getId() + "/");
+            String livePrefix = pages == null ? null : pages.livePrefixOf(c.getId());
+            vo.setLivePath(livePrefix == null || livePrefix.isEmpty() ? "" : livePrefix + "/");
             vo.setIp(c.getIp());
             vo.setPort(c.getPort());
             vo.setTls(c.isTls());
