@@ -45,8 +45,10 @@ public class WebGameCloudSessionController {
         String clientId = str(payload.get("clientId"));
         String player = str(payload.get("player"));
         String token = str(payload.get("token"));
+        // alias：玩家从 /cloud/<别名> 进来时带上门牌，服务端据此校验"这个名字确实指向这台机器"
+        String alias = str(payload.get("alias"));
         // identity 目前只做透传占位（free / verified），P0 一律按 free 处理
-        return playService.start(clientId, player, token);
+        return playService.start(clientId, player, token, alias);
     }
 
     /** 会话状态：包装页靠它判断何时跳回选择页。 */

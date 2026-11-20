@@ -40,6 +40,20 @@ public class CloudClient {
     /** 运行时：入口文件不存在。 */
     private boolean missing;
 
+    /**
+     * 对外别名（根路径门牌）：{@code /cloud/<alias>}。可同时给中文与 ASCII，
+     * 例：{@code aliases: [测试服务器, test]}。
+     *
+     * <p>别名是"玩家看到的名字"，id 是"系统内部编号"——玩家不该记 {@code /cloud/1/}。
+     * 同一客户端可以有多个别名；全局唯一（冲突时按 order+id 先到先得，其余记警告）。</p>
+     */
+    private java.util.List<String> aliases = new java.util.ArrayList<>();
+    /**
+     * 预留：逻辑池名（未来"唯一入口、不选设备、点击自动匹配"时，alias/池 映射到多台机器）。
+     * P0 一律为空字符串 = 该客户端自成一池。
+     */
+    private String pool = "";
+
     // ===== 运行态（cloud-stream 客户端上报 + 服务端定时探测） =====
 
     /** 设备 IPv4/IPv6 或主机名（上报时带上来；管理员也可手动填）。 */
@@ -135,6 +149,22 @@ public class CloudClient {
 
     public void setMissing(boolean missing) {
         this.missing = missing;
+    }
+
+    public java.util.List<String> getAliases() {
+        return aliases;
+    }
+
+    public void setAliases(java.util.List<String> aliases) {
+        this.aliases = aliases == null ? new java.util.ArrayList<>() : aliases;
+    }
+
+    public String getPool() {
+        return pool == null ? "" : pool;
+    }
+
+    public void setPool(String pool) {
+        this.pool = pool == null ? "" : pool.trim();
     }
 
     public String getIp() {

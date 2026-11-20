@@ -62,6 +62,15 @@ public final class CloudPlayService {
 
     /** 开始一次会话：校验玩家名 → 找槽位 → 让代理准备客户端并启动游戏。 */
     public AjaxResult start(String clientId, String player, String token) {
+        return start(clientId, player, token, "");
+    }
+
+    /**
+     * 开始一次会话（带门牌别名）。
+     *
+     * @param alias 玩家进来的门牌（{@code /cloud/<alias>}）；空串表示走内部命名空间路径
+     */
+    public AjaxResult start(String clientId, String player, String token, String alias) {
         String name = player == null ? "" : player.trim();
         if (!PLAYER_RE.matcher(name).matches()) {
             return AjaxResult.error("游戏名称不合法：3–16 位字母/数字/下划线");
@@ -82,6 +91,18 @@ public final class CloudPlayService {
         }
         if (c.getIp().isEmpty() || c.getPort() <= 0) {
             return AjaxResult.error("该客户端尚未上报设备地址");
+        }
+        // 别名校验：门牌必须真的属于这台机器，否则玩家能借 A 的名字进 B 的机器
+        String gate = com.github.cocosoys.mc.webgame.shttp.CloudClientPages.normalizeAlias(alias);
+        if (!gate.isEmpty()) {
+            CloudClient owner = plugin.getCloudClientPages() == null
+                    ? null : plugin.getCloudClientPages().resolveAlias(gate);
+            if (owner == null) {
+                return AjaxResult.error("入口 /cloud/" + gate + " 不存在");
+            }
+            if (!owner.getId().equals(c.getId())) {
+                return AjaxResult.error("入口 /cloud/" + gate + " 与客户端不匹配");
+            }
         }
 
         String busySession = slots.get(c.getId());
@@ -129,8 +150,8 @@ public final class CloudPlayService {
             data.put("sessionId", sessionId);
             data.put("clientId", c.getId());
             data.put("player", name);
-            data.put("playUrl", playUrl(c.getId(), sessionId));
-            data.put("liveUrl", liveUrl(c.getId(), key));
+            data.put("playUrl", playUrl(c.getId(), sessionId, gate));
+            data.put("liveUrl", liveUrl(c.getId(), key, gate));
             return AjaxResult.success("云游戏会话已开始", data);
         } catch (Throwable t) {
             slots.remove(c.getId(), sessionId);
@@ -254,16 +275,22 @@ public final class CloudPlayService {
         return "http://" + c.getIp() + ":" + port;
     }
 
-    private String playUrl(String clientId, String sessionId) {
-        return WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId + "/play/?s=" + sessionId;
+    /** 包装页地址：走门牌时是 {@code /cloud/<别名>/play}，否则是内部命名空间路径。 */
+    private String playUrl(String clientId, String sessionId, String alias) {
+        String base = alias == null || alias.isEmpty()
+                ? WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId
+                : "/cloud/" + alias;
+        return base + "/play/?s=" + sessionId;
     }
 
-    private String liveUrl(String clientId, String key) {
+    private String liveUrl(String clientId, String key, String alias) {
+        String base = alias == null || alias.isEmpty()
+                ? WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId
+                : "/cloud/" + alias;
         try {
-            return WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId + "/live/?token="
-                    + URLEncoder.encode(key, "UTF-8");
+            return base + "/live/?token=" + URLEncoder.encode(key, "UTF-8");
         } catch (Throwable t) {
-            return WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId + "/live/";
+            return base + "/live/";
         }
     }
 

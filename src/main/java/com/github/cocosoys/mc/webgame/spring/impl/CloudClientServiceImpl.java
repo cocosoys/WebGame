@@ -816,6 +816,9 @@ public class CloudClientServiceImpl implements CloudClientService {
                         client.setEnabled(c.getBoolean("enabled", true));
                         client.setOrder(c.getInt("order", -1));
                         client.setSource(c.getString("source", CloudClient.SOURCE_LOCAL));
+                        // 对外别名与预留池名（老文件没有这段 → 空列表 / 空串）
+                        client.setAliases(c.getStringList("aliases"));
+                        client.setPool(c.getString("pool", ""));
                         // 运行态（可能不存在：老文件升级上来时全部为空/unknown）
                         client.setIp(c.getString("ip", ""));
                         client.setPort(c.getInt("port", 0));
@@ -886,6 +889,8 @@ public class CloudClientServiceImpl implements CloudClientService {
                 m.put("enabled", c.isEnabled());
                 m.put("order", c.getOrder());
                 m.put("source", c.getSource());
+                m.put("aliases", new java.util.ArrayList<>(c.getAliases()));
+                m.put("pool", c.getPool());
                 // 运行态：必须一起写回，否则管理员在 ERP 改任意字段都会把状态抹掉
                 m.put("ip", c.getIp());
                 m.put("port", c.getPort());

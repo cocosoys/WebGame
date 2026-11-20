@@ -44,6 +44,13 @@ public final class CloudClientPages {
     private static final String PLAY_SEGMENT = "/play/";
     /** 插件 API 前缀（页面里用 fetch 直接打会话端点）。 */
     private static final String API_PREFIX = "/api/plugins/WebGame";
+    /** 根路径门牌前缀：{@code /cloud/<别名>}（不经 /web/plugins 命名空间）。 */
+    private static final String ROOT_CLOUD_PATH = "/cloud/";
+    /** 别名长度上限（够写"测试服务器"或"test"，太长没人愿意敲）。 */
+    private static final int ALIAS_MAX_LEN = 24;
+    /** 别名保留字：与我们的固定子路径/常用入口冲突。 */
+    private static final java.util.Set<String> ALIAS_RESERVED = new java.util.HashSet<>(java.util.Arrays.asList(
+            "session", "live", "play", "index", "index.html", "favicon.ico", ".", ".."));
 
     private final WebGame plugin;
     private final CloudClientService cloudClientService;
@@ -56,6 +63,9 @@ public final class CloudClientPages {
      * ERP 列表用它展示"同端口接入"状态；未登记成功（老 jar / 关闭开关）的条目不在其中。
      */
     private volatile java.util.Map<String, String> livePrefixes = java.util.Collections.emptyMap();
+
+    /** 别名（已规范化）→ 客户端 id；publish 时重建，供会话层校验"别名属于谁"。 */
+    private volatile java.util.Map<String, String> aliasToClient = java.util.Collections.emptyMap();
 
     public CloudClientPages(WebGame plugin, CloudClientService cloudClientService,
                             com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService playService) {
@@ -112,6 +122,8 @@ public final class CloudClientPages {
         String defaultId = cloudClientService.defaultId();
         boolean relay = relayEnabled();
         java.util.Map<String, String> live = new java.util.LinkedHashMap<>();
+        // 别名表先建好：全局唯一（同一别名只归一台机器），重复的按顺序先到先得并记警告
+        java.util.Map<String, String> aliasMap = buildAliasMap();
         for (CloudClient c : cloudClientService.versions()) {
             if (!c.isEnabled() || c.isMissing()) {
                 continue;
@@ -140,8 +152,18 @@ public final class CloudClientPages {
                     live.put(id, livePrefix);
                 }
                 // 入口页不再直接跳直播：先收游戏名 → 起会话 → 才进直播（锁桌面那条链路的前置条件）
-                registerPage(pages, entry, buildEntryPage(c, token));
-                registerPage(pages, PAGE_PATH + id + PLAY_SEGMENT, buildPlayPage(c, liveUrl, token));
+                registerPage(pages, entry, buildEntryPage(c, token, ""));
+                registerPage(pages, PAGE_PATH + id + PLAY_SEGMENT,
+                        buildPlayPage(c, liveUrl, token, WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH, ""));
+                // 根路径门牌：/cloud/<别名> 直接就是同一套入口+包装页，地址栏全程不暴露内部 id
+                if (relay) {
+                    for (String alias : normalizedAliases(c)) {
+                        if (!aliasMap.containsKey(alias) || !aliasMap.get(alias).equals(id)) {
+                            continue;
+                        }
+                        registerAliasPages(pages, c, alias, token, liveUrl);
+                    }
+                }
                 continue;
             }
             File file = cloudClientService.resolveClientFile(c);
@@ -171,7 +193,13 @@ public final class CloudClientPages {
                 ? buildRedirectPage(withToken(defaultEntry(defaultId), keyOf(defaultId)))
                 : buildSelectionPage();
         registerPage(pages, PAGE_PATH, entryHtml);
+        // 根路径门牌目录：/cloud 与 /cloud/ 都登记（浏览器只发其一，另一边 404 会让人以为服务坏了）
+        String dirHtml = buildRootDirectoryPage(aliasMap);
+        byte[] dirBytes = dirHtml.getBytes(StandardCharsets.UTF_8);
+        registerProxyPage(pages, ROOT_CLOUD_PATH, dirBytes);
+        registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), dirBytes);
         livePrefixes = live;
+        aliasToClient = aliasMap;
     }
 
     /** 撤销本类登记的全部页面（插件停用时调用）。 */
@@ -216,11 +244,26 @@ public final class CloudClientPages {
         if (c == null || !CloudClient.isUrl(c.getPath())) {
             return false;
         }
-        String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT;
-        return registerLiveUpstream(a, livePrefix, c, clientId, liveTag(clientId));
+        // 命名空间前缀 + 全部别名前缀一起开闸：玩家从哪块门牌进来，画面就从哪条前缀流
+        boolean ok = registerLiveUpstream(a, WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT,
+                c, clientId, liveTag(clientId));
+        for (String alias : normalizedAliases(c)) {
+            if (!isAliasOwner(alias, clientId)) {
+                continue;
+            }
+            for (String v : aliasVariants(alias)) {
+                try {
+                    registerLiveUpstream(a, ROOT_CLOUD_PATH + v + LIVE_SEGMENT, c, clientId, liveTag(clientId));
+                    ok = true;
+                } catch (Throwable t) {
+                    LOG.log(Level.FINE, "别名直播前缀注册失败 " + v + ": " + t);
+                }
+            }
+        }
+        return ok;
     }
 
-    /** 会话结束时"关闸"：撤销直播前缀。 */
+    /** 会话结束时"关闸"：撤销该客户端所有前缀（命名空间 + 各别名，共用同一 tag）。 */
     public synchronized void closeLive(String clientId) {
         SoysHttpOverMcApi a = api;
         if (a == null) {
@@ -230,6 +273,188 @@ public final class CloudClientPages {
             a.unregisterUpstreamByTag(liveTag(clientId));
         } catch (Throwable t) {
             LOG.log(Level.FINE, "close cloud live upstream failed " + clientId + ": " + t);
+        }
+    }
+
+    /** 别名（已规范化）归属哪个客户端；未登记/未启用返回 null。 */
+    public CloudClient resolveAlias(String alias) {
+        String key = normalizeAlias(alias);
+        if (key.isEmpty()) {
+            return null;
+        }
+        String clientId = aliasToClient.get(key);
+        return clientId == null ? null : clientOf(clientId);
+    }
+
+    /** 某客户端的别名列表（规范化后，已排除冲突/保留字/非法项）。 */
+    public List<String> aliasesOf(String clientId) {
+        java.util.Map<String, String> map = aliasToClient;
+        List<String> out = new ArrayList<>();
+        for (java.util.Map.Entry<String, String> e : map.entrySet()) {
+            if (!e.getValue().equals(clientId)) {
+                continue;
+            }
+            // 只回规范形（小写），大小写变体是同一个门牌的别名，不重复展示
+            if (e.getKey().equals(e.getKey().toLowerCase(java.util.Locale.ROOT))) {
+                out.add(e.getKey());
+            }
+        }
+        return out;
+    }
+
+    private boolean isAliasOwner(String alias, String clientId) {
+        String owner = aliasToClient.get(alias);
+        return owner == null || owner.equals(clientId);
+    }
+
+    /**
+     * 建别名表：规范化 → 去重 → 全局唯一。
+     * <p>同一别名被两台机器登记时按 {@code order} 先到先得，后到的记警告并丢弃——
+     * 宁可少一块门牌，也不能出现"点 A 名字进了 B 机器"。</p>
+     */
+    private java.util.Map<String, String> buildAliasMap() {
+        java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+        for (CloudClient c : cloudClientService.versions()) {
+            if (!c.isEnabled() || c.isMissing()) {
+                continue;
+            }
+            for (String alias : normalizedAliases(c)) {
+                String owner = map.get(alias);
+                if (owner == null) {
+                    map.put(alias, c.getId());
+                } else if (!owner.equals(c.getId())) {
+                    LOG.warning("别名冲突：/cloud/" + alias + " 已属于客户端 " + owner
+                            + "，忽略客户端 " + c.getId() + " 的同名登记");
+                    continue;
+                }
+                // 大小写等价写法一并入表，让 /cloud/TEST、/cloud/Test 也能过"别名归属"校验
+                for (String v : aliasVariants(alias)) {
+                    if (!map.containsKey(v)) {
+                        map.put(v, c.getId());
+                    }
+                }
+            }
+        }
+        return map;
+    }
+
+    /** 客户端声明的别名：规范化 + 过滤非法/保留字/重复。 */
+    private List<String> normalizedAliases(CloudClient c) {
+        List<String> out = new ArrayList<>();
+        List<String> raw = c.getAliases();
+        if (raw == null) {
+            return out;
+        }
+        for (String a : raw) {
+            String n = normalizeAlias(a);
+            if (n.isEmpty() || ALIAS_RESERVED.contains(n) || out.contains(n)) {
+                if (!n.isEmpty() && ALIAS_RESERVED.contains(n)) {
+                    LOG.warning("别名 " + a + " 是保留字，已忽略（客户端 " + c.getId() + "）");
+                }
+                continue;
+            }
+            out.add(n);
+        }
+        return out;
+    }
+
+    /**
+     * 规范化别名：去空白、去首尾斜杠、ASCII 转小写（中文原样保留）。
+     * <p>ASCII 不区分大小写是为了"Test / test / TEST 都是同一块门牌"；
+     * 中文没有大小写，不做额外变换，避免 NFC/NFD 之类反而制造两个 key。</p>
+     */
+    public static String normalizeAlias(String alias) {
+        if (alias == null) {
+            return "";
+        }
+        String s = alias.trim();
+        while (s.startsWith("/")) {
+            s = s.substring(1);
+        }
+        while (s.endsWith("/")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        if (s.isEmpty() || s.length() > ALIAS_MAX_LEN) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '/' || ch == '?' || ch == '#' || ch == '%' || ch == '\\' || Character.isWhitespace(ch)) {
+                return "";
+            }
+            if ((ch >= 'A' && ch <= 'Z')) {
+                ch = (char) (ch + 32);
+            }
+            sb.append(ch);
+        }
+        return sb.toString();
+    }
+
+    /** 登记某别名的入口页与包装页（根路径，无 /web/plugins 前缀）。 */
+    private void registerAliasPages(WebPageApi pages, CloudClient c, String alias, String token, String liveUrl) {
+        byte[] entry = buildEntryPage(c, token, alias).getBytes(StandardCharsets.UTF_8);
+        byte[] play = buildPlayPage(c, appendToken(ROOT_CLOUD_PATH + alias + LIVE_SEGMENT + "/", token),
+                token, ROOT_CLOUD_PATH, alias).getBytes(StandardCharsets.UTF_8);
+        // 注册表是精确匹配、不折叠大小写，所以 ASCII 别名要把 test / TEST / Test 三种写法都登记上
+        for (String v : aliasVariants(alias)) {
+            String base = ROOT_CLOUD_PATH + v;
+            // 带/不带尾斜杠都登记：人手动敲地址时十有八九不带斜杠
+            registerProxyPage(pages, base, entry);
+            registerProxyPage(pages, base + "/", entry);
+            registerProxyPage(pages, base + "/play", play);
+            registerProxyPage(pages, base + "/play/", play);
+        }
+    }
+
+    private static String urlToken(String token) {
+        try {
+            return java.net.URLEncoder.encode(token, "UTF-8");
+        } catch (Throwable t) {
+            return token;
+        }
+    }
+
+    /**
+     * ASCII 别名的大小写等价写法：小写（规范形）、全大写、首字母大写。
+     * <p>中文别名原样返回——中文没有大小写，也不做 NFC/NFD 变换。</p>
+     */
+    public static List<String> aliasVariants(String alias) {
+        List<String> out = new ArrayList<>();
+        if (alias == null || alias.isEmpty()) {
+            return out;
+        }
+        out.add(alias);
+        boolean ascii = true;
+        for (int i = 0; i < alias.length(); i++) {
+            if (alias.charAt(i) > 127) {
+                ascii = false;
+                break;
+            }
+        }
+        if (!ascii) {
+            return out;
+        }
+        String upper = alias.toUpperCase(java.util.Locale.ROOT);
+        if (!out.contains(upper)) {
+            out.add(upper);
+        }
+        String cap = alias.substring(0, 1).toUpperCase(java.util.Locale.ROOT) + alias.substring(1);
+        if (!out.contains(cap)) {
+            out.add(cap);
+        }
+        return out;
+    }
+
+    /** 根路径登记（无 /plugins 前缀）；返回的 Entry 手工打 tag 以便随发布整体撤销。 */
+    private WebRegistry.Entry registerProxyPage(WebPageApi pages, String path, byte[] content) {
+        try {
+            WebRegistry.Entry e = pages.registerProxyPage(plugin, path, content);
+            tag(e);
+            return e;
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "登记根路径页面失败 " + path + ": " + t);
+            return null;
         }
     }
 
@@ -506,17 +731,106 @@ public final class CloudClientPages {
     }
 
     /**
-     * 入口页：{@code /cloud/<id>/}。玩家必须先填游戏名，再点"进入云游戏"。
+     * 根路径门牌目录：{@code /cloud} 与 {@code /cloud/}。
+     *
+     * <p>没有这块页面，别名就是"知道的人才能用"；有了它，一张短地址 {@code /cloud/} 就能把
+     * 所有可用门牌列出来（后续"唯一入口、自动匹配"也会落在这里）。</p>
+     */
+    private String buildRootDirectoryPage(java.util.Map<String, String> aliasMap) {
+        StringBuilder cards = new StringBuilder(1024);
+        int count = 0;
+        for (java.util.Map.Entry<String, String> e : aliasMap.entrySet()) {
+            CloudClient c = clientOf(e.getValue());
+            if (c == null || !c.isEnabled() || c.isMissing()) {
+                continue;
+            }
+            count++;
+            String alias = e.getKey();
+            String name = escape(c.getName());
+            String mc = escape(c.getMcVersion());
+            boolean online = CloudClient.STATUS_ONLINE.equals(c.getStatus());
+            String base = ROOT_CLOUD_PATH + escape(alias);
+            cards.append("<a class=\"card\" href=\"").append(base).append("\">")
+                    .append("<div class=\"card-head\"><span class=\"card-name\">").append(name).append("</span>")
+                    .append("<span class=\"dot").append(online ? "" : " off").append("\"></span></div>")
+                    .append("<div class=\"card-url\">/cloud/").append(escape(alias)).append("</div>")
+                    .append("<div class=\"card-meta\">");
+            if (!mc.isEmpty()) {
+                cards.append("<span>MC ").append(mc).append("</span>");
+            }
+            cards.append("<span>").append(online ? "在线" : escape(c.getStatus())).append("</span>")
+                    .append("</div></a>");
+        }
+        if (count == 0) {
+            // 没配别名时退化成"按 id 进入"，避免页面空白让人以为服务坏了
+            for (CloudClient c : cloudClientService.versions()) {
+                if (!c.isEnabled() || c.isMissing() || !CloudClient.isUrl(c.getPath())) {
+                    continue;
+                }
+                count++;
+                cards.append("<a class=\"card\" href=\"")
+                        .append(WebGameConfig.WEB_PLUGIN_PREFIX).append(PAGE_PATH).append(escape(c.getId()))
+                        .append("/\">")
+                        .append("<div class=\"card-head\"><span class=\"card-name\">").append(escape(c.getName()))
+                        .append("</span></div>")
+                        .append("<div class=\"card-url\">未配置别名，按 ID 进入</div></a>");
+            }
+        }
+        if (count == 0) {
+            cards.append("<div class=\"empty\">暂无可用的云游戏入口，请联系管理员。</div>");
+        }
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>云游戏入口</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;"
+                + "color:#e8edf7}\n"
+                + ".wrap{width:100%;max-width:820px;padding:44px 24px}\n"
+                + "h1{margin:0 0 8px;font-size:26px;font-weight:600;letter-spacing:1px}\n"
+                + ".sub{margin:0 0 28px;color:#8f9bb3;font-size:13px}\n"
+                + ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}\n"
+                + ".card{display:block;padding:18px;border-radius:14px;text-decoration:none;color:inherit;"
+                + "background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);"
+                + "transition:transform .15s ease,border-color .15s ease,background .15s ease}\n"
+                + ".card:hover{transform:translateY(-3px);border-color:#4f8cff;background:rgba(79,140,255,.12)}\n"
+                + ".card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}\n"
+                + ".card-name{font-size:17px;font-weight:600}\n"
+                + ".dot{width:8px;height:8px;border-radius:50%;background:#67c23a}\n"
+                + ".dot.off{background:#7c879c}\n"
+                + ".card-url{margin-top:6px;font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#7fa7ff}\n"
+                + ".card-meta{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;color:#9aa6bd;font-size:12px}\n"
+                + ".card-meta span{padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.06)}\n"
+                + ".empty{padding:32px;text-align:center;color:#8f9bb3;border:1px dashed rgba(255,255,255,.15);"
+                + "border-radius:14px}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"wrap\">\n"
+                + "<h1>云游戏入口</h1>\n"
+                + "<p class=\"sub\">选一个入口进入；首次进入需要填写你在服务器中的游戏名。</p>\n"
+                + "<div class=\"grid\">" + cards + "</div>\n"
+                + "</div>\n</body>\n</html>\n";
+    }
+
+    /**
+     * 入口页：{@code /cloud/<id>/} 或 {@code /cloud/<别名>}。玩家必须先填游戏名，再点"进入云游戏"。
      *
      * <p>前端校验只是体验层（空格、长度、字符集），服务端 {@code /cloud/session/start}
      * 会再校验一次：绕过页面直接 POST 同样会被拒。</p>
      */
-    private String buildEntryPage(CloudClient c, String token) {
+    private String buildEntryPage(CloudClient c, String token, String alias) {
         String name = escape(c.getName());
         String id = js(c.getId());
         String tok = js(token);
         String mc = escape(c.getMcVersion());
         String mcLine = mc.isEmpty() ? "" : "<span class=\"pill\">MC " + mc + "</span>";
+        // 别名入口：地址栏已经是 /cloud/<别名>，返回链接也要回门牌目录，别把人甩到长 URL
+        boolean byAlias = alias != null && !alias.isEmpty();
+        String home = byAlias ? ROOT_CLOUD_PATH : WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
+        String aliasLine = byAlias ? "<span class=\"pill\">/cloud/" + escape(alias) + "</span>" : "";
         return "<!DOCTYPE html>\n"
                 + "<html lang=\"zh-CN\">\n<head>\n"
                 + "<meta charset=\"utf-8\">\n"
@@ -547,7 +861,7 @@ public final class CloudClientPages {
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"wrap\">\n"
                 + "<h1>" + name + "</h1>\n"
-                + "<p class=\"sub\"><span class=\"pill\">ID " + escape(c.getId()) + "</span>" + mcLine
+                + "<p class=\"sub\">" + aliasLine + "<span class=\"pill\">ID " + escape(c.getId()) + "</span>" + mcLine
                 + "<br>进入前请填写你在服务器里的游戏名；云主机将按它启动客户端并自动连接本服。</p>\n"
                 + "<form id=\"f\" autocomplete=\"off\">\n"
                 + "<div class=\"field\">游戏名称</div>\n"
@@ -557,12 +871,13 @@ public final class CloudClientPages {
                 + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
                 + "<div class=\"msg\" id=\"m\"></div>\n"
                 + "</form>\n"
-                + "<a class=\"back\" href=\"" + WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + "\">← 返回客户端列表</a>\n"
+                + "<a class=\"back\" href=\"" + escape(home) + "\">← 返回门牌目录</a>\n"
                 + "</div>\n"
                 + "<script>\n"
                 + "var API=" + js(API_PREFIX) + ";\n"
                 + "var CLIENT=" + id + ";\n"
                 + "var TOKEN=" + tok + ";\n"
+                + "var ALIAS=" + js(byAlias ? alias : "") + ";\n"
                 + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
                 + "var f=document.getElementById('f'),p=document.getElementById('p'),"
                 + "b=document.getElementById('b'),m=document.getElementById('m');\n"
@@ -574,7 +889,7 @@ public final class CloudClientPages {
                 + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
                 + "  b.disabled=true;say('正在准备云主机，首次启动约需 1–3 分钟…',false);\n"
                 + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
-                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN})})\n"
+                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN,alias:ALIAS})})\n"
                 + "  .then(function(r){return r.json();})\n"
                 + "  .then(function(j){\n"
                 + "    if(j&&j.code===200&&j.data&&j.data.playUrl){say('已进入，正在连接画面…',false);"
@@ -593,11 +908,13 @@ public final class CloudClientPages {
      * 看门狗判定游戏已停、或点"结束游戏"），立刻 {@code location.replace} 回选择页——
      * 这样即使桌面被解锁，玩家也不会直面一个可操作的 Windows 桌面。</p>
      */
-    private String buildPlayPage(CloudClient c, String liveUrl, String token) {
+    private String buildPlayPage(CloudClient c, String liveUrl, String token, String homeUrl, String alias) {
         String name = escape(c.getName());
         String live = js(liveUrl);
         String tok = js(token);
-        String home = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
+        String home = homeUrl;
+        String aliasTag = alias == null || alias.isEmpty()
+                ? "" : "<span class=\"pill\">/cloud/" + escape(alias) + "</span>";
         return "<!DOCTYPE html>\n"
                 + "<html lang=\"zh-CN\">\n<head>\n"
                 + "<meta charset=\"utf-8\">\n"
@@ -610,6 +927,8 @@ public final class CloudClientPages {
                 + ".bar{height:40px;display:flex;align-items:center;gap:12px;padding:0 14px;"
                 + "background:#101728;color:#c7d0e2;font-size:13px;border-bottom:1px solid rgba(255,255,255,.08)}\n"
                 + ".dot{width:8px;height:8px;border-radius:50%;background:#67c23a}\n"
+                + ".pill{padding:1px 8px;border-radius:999px;background:rgba(255,255,255,.08);"
+                + "color:#9aa6bd;font-size:12px}\n"
                 + ".grow{flex:1}\n"
                 + ".btn{padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.14);"
                 + "background:transparent;color:#c7d0e2;font-size:13px;cursor:pointer}\n"
@@ -619,7 +938,8 @@ public final class CloudClientPages {
                 + "background:rgba(7,10,18,.92);color:#8f9bb3;font-size:14px;text-align:center;line-height:1.8;z-index:2}\n"
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"bar\">\n"
-                + "<span class=\"dot\"></span><span>" + name + "</span><span id=\"pl\" class=\"grow\"></span>\n"
+                + "<span class=\"dot\"></span><span>" + name + "</span>" + aliasTag
+                + "<span id=\"pl\" class=\"grow\"></span>\n"
                 + "<button class=\"btn\" id=\"end\" type=\"button\">结束游戏</button>\n"
                 + "</div>\n"
                 + "<iframe id=\"v\" src=\"" + escape(liveUrl) + "\" allow=\"autoplay; fullscreen; microphone; camera;"
