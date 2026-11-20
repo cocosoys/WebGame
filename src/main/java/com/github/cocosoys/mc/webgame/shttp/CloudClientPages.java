@@ -64,8 +64,7 @@ public final class CloudClientPages {
         this.playService = playService;
     }
 
-    /** 页面扩展注册成功后注入 api（页面扩展未就绪时不发布）。 */
-    public void attach(SoysHttpOverMcApi api) {
+    /** 页面扩展注册成功后注入 api（页面扩展未就绪时不发布）。 */    public void attach(SoysHttpOverMcApi api) {
         this.api = api;
     }
 
@@ -129,14 +128,16 @@ public final class CloudClientPages {
                 // 若 SOYS 侧不支持 upstream（老 jar），自动退回原来的绝对地址跳转。
                 String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + id + LIVE_SEGMENT;
                 String token = c.getCloudKey();
+                // 直播前缀默认不开：只有在会话进行中才注册 upstream（openLive）。
+                // 否则任何人拿到地址就能直接看/操作 .128 的桌面（游戏未跑时那就是一台解锁的 Windows）。
                 String liveUrl;
-                if (relay && registerLiveUpstream(a, livePrefix, c, id)) {
+                try {
+                    a.unregisterUpstreamByTag(liveTag(id));
+                } catch (Throwable ignored) {
+                }
+                liveUrl = relay ? appendToken(livePrefix + "/", token) : withToken(c.getPath().trim(), token);
+                if (relay) {
                     live.put(id, livePrefix);
-                    // 相对路径也要补 token：withToken 只处理绝对 URL，这里必须无条件追加，
-                    // 否则 selkies 的 /api/* 会 401、前端表现为无限重连。
-                    liveUrl = appendToken(livePrefix + "/", token);
-                } else {
-                    liveUrl = withToken(c.getPath().trim(), token);
                 }
                 // 入口页不再直接跳直播：先收游戏名 → 起会话 → 才进直播（锁桌面那条链路的前置条件）
                 registerPage(pages, entry, buildEntryPage(c, token));
@@ -188,11 +189,65 @@ public final class CloudClientPages {
             LOG.log(Level.FINE, "unpublish cloud client pages failed: " + t);
         }
         try {
-            a.unregisterUpstreamByTag(TAG);
+            for (CloudClient c : cloudClientService.versions()) {
+                a.unregisterUpstreamByTag(liveTag(c.getId()));
+            }
         } catch (Throwable t) {
             LOG.log(Level.FINE, "unpublish cloud upstreams failed: " + t);
         }
         livePrefixes = java.util.Collections.emptyMap();
+    }
+
+    /**
+     * 会话开始时"开闸"：把该客户端的直播前缀注册给 SOYS upstream。
+     *
+     * <p>这是防"绕开入口页"的关键一环——页面只是体验，真正的门在这里：
+     * 没有进行中的会话，前缀根本不存在，{@code /cloud/<id>/live/} 就是 404，
+     * 谁也没法凭地址直接看到（更别说操作）云主机的桌面。</p>
+     *
+     * @return true 表示已开闸；false 表示同端口转播不可用（老 jar / 关闭开关）
+     */
+    public synchronized boolean openLive(String clientId) {
+        SoysHttpOverMcApi a = api;
+        if (a == null || !relayEnabled()) {
+            return false;
+        }
+        CloudClient c = clientOf(clientId);
+        if (c == null || !CloudClient.isUrl(c.getPath())) {
+            return false;
+        }
+        String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT;
+        return registerLiveUpstream(a, livePrefix, c, clientId, liveTag(clientId));
+    }
+
+    /** 会话结束时"关闸"：撤销直播前缀。 */
+    public synchronized void closeLive(String clientId) {
+        SoysHttpOverMcApi a = api;
+        if (a == null) {
+            return;
+        }
+        try {
+            a.unregisterUpstreamByTag(liveTag(clientId));
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "close cloud live upstream failed " + clientId + ": " + t);
+        }
+    }
+
+    /** 每个客户端独立的 upstream tag，便于"只撤这一台的直播"而保留页面。 */
+    private static String liveTag(String id) {
+        return TAG + "-live-" + (id == null ? "" : id);
+    }
+
+    private CloudClient clientOf(String id) {
+        if (id == null) {
+            return null;
+        }
+        for (CloudClient c : cloudClientService.versions()) {
+            if (c.getId().equals(id)) {
+                return c;
+            }
+        }
+        return null;
     }
 
     // ===== 内部 =====
@@ -290,6 +345,10 @@ public final class CloudClientPages {
      *         不支持 upstream（老 jar），调用方退回绝对地址跳转
      */
     private boolean registerLiveUpstream(SoysHttpOverMcApi a, String livePrefix, CloudClient c, String id) {
+        return registerLiveUpstream(a, livePrefix, c, id, TAG);
+    }
+
+    private boolean registerLiveUpstream(SoysHttpOverMcApi a, String livePrefix, CloudClient c, String id, String tag) {
         String base = c.getPath() == null ? "" : c.getPath().trim();
         if (base.isEmpty()) {
             return false;
@@ -297,7 +356,7 @@ public final class CloudClientPages {
         try {
             // 内网自签证书必须放宽校验，否则 TLS 握手直接失败；公网目标保持严格校验
             boolean insecure = isPrivateHost(base);
-            a.registerUpstream(livePrefix, UpstreamTarget.of(base, insecure), TAG);
+            a.registerUpstream(livePrefix, UpstreamTarget.of(base, insecure), tag);
             LOG.info("云客户端 " + id + " 已注册同端口转播前缀 " + livePrefix + " -> " + base
                     + (insecure ? "（内网自签，跳过证书校验）" : ""));
             return true;

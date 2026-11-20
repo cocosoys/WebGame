@@ -113,6 +113,18 @@ public final class CloudPlayService {
             s.state = Session.STATE_RUNNING;
             s.gameState = "running";
             s.lastPollAt = System.currentTimeMillis();
+            // 开闸：直播前缀只在会话期存在；开不出来就别把玩家放进包装页
+            boolean opened = true;
+            try {
+                opened = plugin.getCloudClientPages() != null && plugin.getCloudClientPages().openLive(c.getId());
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "开闸失败 " + s.sessionId + ": " + t);
+                opened = false;
+            }
+            if (!opened) {
+                finish(s, "live-gate-failed");
+                return AjaxResult.error("直播通道不可用（同端口转播未启用，检查 cloud.same-port-relay）");
+            }
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("sessionId", sessionId);
             data.put("clientId", c.getId());
@@ -218,6 +230,14 @@ public final class CloudPlayService {
         s.state = Session.STATE_ENDED;
         s.endReason = reason;
         slots.remove(s.clientId, s.sessionId);
+        // 关闸先于收尾：即使代理清理慢，桌面通道也已经对所有人 404 了
+        try {
+            if (plugin.getCloudClientPages() != null) {
+                plugin.getCloudClientPages().closeLive(s.clientId);
+            }
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "关闸失败 " + s.sessionId + ": " + t.getMessage());
+        }
         try {
             http(s.agentBase + "/session/end", "POST", "{}", s.token, 60_000);
         } catch (Throwable t) {
