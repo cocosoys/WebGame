@@ -49,3 +49,32 @@ cloud:
   # 玩家点"进入云游戏"后，服务端用它来 prepare/end 会话并轮询游戏状态；
   # 端口改了要同步改代理监听端口与云主机防火墙。
   session-agent-port: 8090
+  # 浏览器心跳：包装页每 interval-seconds 发一次 POST /cloud/session/heartbeat，
+  # 超过 timeout-seconds 收不到就判"玩家关掉了浏览器"，按同一套收尾逻辑结束会话、释放槽位。
+  # 注意：浏览器会把后台标签页的定时器节流到约 1 次/分钟，timeout 低于 60 秒时，
+  # 玩家把游戏页切到后台超过该时长会被判离——觉得误杀就把 timeout 调到 90~120。
+  heartbeat:
+    enabled: true
+    # 0 = 用页面里下发的默认值（10 秒）；由页面 JS 按它设置 setInterval
+    interval-seconds: 10
+    timeout-seconds: 30
+  # 等待进度条：纯前端动画，参数在这里调，不需要重新构建前端
+  progress:
+    # 无论成功与否，先把进度推到 initial-percent 的时长（秒）
+    initial-seconds: 15
+    initial-percent: 90
+    # 90 之后每次 +1 的间隔区间（秒，随机取值），到 cap-percent 就停住等人
+    tick-min-seconds: 3
+    tick-max-seconds: 7
+    cap-percent: 99
+  # 云游戏客户端包更新：zip 放 plugins/WebGame/packages/ 下，由 WebGame 托管下载；
+  # WebGame 只在 prepare 时把 version 发给云主机代理，代理比对本地版本，不一致才去下载解包。
+  # 代理从不主动更新——版本号是唯一的触发器。
+  client-update:
+    enabled: true
+    # 期望版本号（空 = 不做版本比对，等价于关闭）
+    version: "1.12.2-Forge_14.23.5.2864"
+    # 包文件名（相对 plugins/WebGame/packages/）与包内客户端目录名
+    package: "cloud-client.zip"
+    # 代理把 zip 解开后落到 games/clients/ 下的目录名
+    target-dir: "1.12.2-Forge_14.23.5.2864"

@@ -61,6 +61,9 @@ public final class WebGame extends JavaPlugin implements Listener {
     /** 云游戏"点击即玩"会话服务（槽位占用 + 代理调用 + 看门狗）。 */
     private CloudPlayService cloudPlayService;
 
+    /** 启动对齐只做一次（SOYS 重试注册会反复走 registerPageExpansion）。 */
+    private boolean reconciled;
+
     /** 插件启用时刻（毫秒），用于 status 端点的 uptimeSeconds。 */
     private long enabledAt;
 
@@ -117,6 +120,8 @@ public final class WebGame extends JavaPlugin implements Listener {
             cloudClientService.startHeartbeat();
             // 会话看门狗：玩家在 MC 里退出后，会话必须被判定结束，否则桌面会解锁在玩家眼前
             cloudPlayService.startWatchdog();
+            // 启动对齐：云主机上可能还跑着上一轮的会话，等页面托管就绪后对一次账
+            scheduleReconcile(1);
         } catch (Throwable t) {
             getLogger().severe("WebGame 云游戏客户端初始化失败：");
             t.printStackTrace();
@@ -248,6 +253,33 @@ public final class WebGame extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onSoysReady(SoysReadyEvent event) {
         syncSoysModules();
+    }
+
+    /**
+     * 启动对齐：等页面托管就绪（否则开闸没有落点），再读各云主机代理的 /health，
+     * 把"机器上还跑着、但内存里没记录"的会话恢复回来。最多重试 10 次（每 5 秒一次）。
+     */
+    private void scheduleReconcile(int tries) {
+        getServer().getScheduler().runTaskLaterAsynchronously(this, () -> {
+            if (cloudPlayService == null) {
+                return;
+            }
+            if (cloudClientPages == null || !cloudClientPages.isAttached()) {
+                if (tries < 10) {
+                    scheduleReconcile(tries + 1);
+                }
+                return;
+            }
+            if (reconciled) {
+                return;
+            }
+            reconciled = true;
+            try {
+                cloudPlayService.reconcileFromAgents();
+            } catch (Throwable t) {
+                getLogger().warning("云会话启动对齐失败：" + t);
+            }
+        }, 100L);
     }
 
     // ===== getters =====

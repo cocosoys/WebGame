@@ -42,6 +42,8 @@ public final class CloudPlayService {
     private static final Pattern STATE_RE = Pattern.compile("\"state\"\\s*:\\s*\"([^\"]*)\"");
     private static final Pattern OK_RE = Pattern.compile("\"ok\"\\s*:\\s*(true|false)");
     private static final Pattern ERROR_RE = Pattern.compile("\"error\"\\s*:\\s*\"([^\"]*)\"");
+    private static final Pattern SESSION_RE = Pattern.compile("\"session\"\\s*:\\s*\"([^\"]*)\"");
+    private static final Pattern PLAYER_RE_JSON = Pattern.compile("\"player\"\\s*:\\s*\"([^\"]*)\"");
 
     private static final long AGENT_TIMEOUT_MS = 20_000L;
     private static final long STATUS_MIN_INTERVAL_MS = 2_000L;
@@ -51,7 +53,14 @@ public final class CloudPlayService {
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     /** clientId → sessionId（槽位占用表，一台机器一个槽）。 */
     private final Map<String, String> slots = new ConcurrentHashMap<>();
+    /** clientId → 更新开始时间：包更新是几十秒到几分钟的事，绝不阻塞玩家那次请求。 */
+    private final Map<String, Long> updatingClients = new ConcurrentHashMap<>();
+    /** clientId → 最近一次更新失败原因（失败后要停下，不然每次点击都重下一遍 200MB）。 */
+    private final Map<String, String> updateErrors = new ConcurrentHashMap<>();
     private volatile BukkitTask watchdog;
+
+    /** 一次包更新最多等多久（毫秒）；超时就允许下一次点击重新发起。 */
+    private static final long UPDATE_MAX_MS = 15 * 60 * 1000L;
 
     public CloudPlayService(WebGame plugin, CloudClientService clients) {
         this.plugin = plugin;
@@ -110,6 +119,19 @@ public final class CloudPlayService {
             return AjaxResult.error("云游戏机占用中（会话 " + busySession + "），请稍后再试");
         }
 
+        // 客户端包版本：只在"真的不一样"时才动文件，而且更新走后台，不占用玩家的这次请求
+        String versionCheck = ensureClientVersion(c);
+        if ("updating".equals(versionCheck)) {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("updating", true);
+            data.put("retrySeconds", 20);
+            data.put("clientId", c.getId());
+            return AjaxResult.success("正在更新云游戏客户端，完成后会自动继续", data);
+        }
+        if (versionCheck.startsWith("err:")) {
+            return AjaxResult.error(versionCheck.substring(4));
+        }
+
         String sessionId = "s-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
         // 先占位再准备：两个请求同时进来时，第二个必须在准备之前就被拒掉
         slots.put(c.getId(), sessionId);
@@ -121,10 +143,26 @@ public final class CloudPlayService {
         s.agentBase = agentBase(c);
         s.state = Session.STATE_PREPARING;
         s.createdAt = System.currentTimeMillis();
+        s.lastHeartbeatAt = s.createdAt;
         sessions.put(sessionId, s);
 
         try {
-            String body = "{\"sessionId\":\"" + sessionId + "\",\"player\":\"" + name + "\"}";
+            // 客户端版本是唯一的更新触发器：代理只在"我这儿版本不对"时才去下载解包，
+            // 从不主动更新（包由 WebGame 托管，地址与 sha256 一并下发，代理据此校验）
+            String wantVersion = "";
+            String pkgUrl = "";
+            String pkgSha = "";
+            if (plugin.getCloudClientPages() != null) {
+                wantVersion = plugin.getCloudClientPages().clientPackageVersion();
+                if (clientUpdateEnabled() && !wantVersion.isEmpty()) {
+                    pkgUrl = plugin.getCloudClientPages().clientPackageUrl();
+                    pkgSha = plugin.getCloudClientPages().clientPackageSha();
+                }
+            }
+            String body = "{\"sessionId\":\"" + sessionId + "\",\"player\":\"" + name + "\""
+                    + ",\"clientVersion\":\"" + jsonEscape(wantVersion) + "\""
+                    + ",\"clientUrl\":\"" + jsonEscape(pkgUrl) + "\""
+                    + ",\"clientSha256\":\"" + jsonEscape(pkgSha) + "\"}";
             String resp = http(s.agentBase + "/session/prepare", "POST", body, key, 120_000);
             if (!ok(resp)) {
                 slots.remove(c.getId(), sessionId);
@@ -161,6 +199,96 @@ public final class CloudPlayService {
         }
     }
 
+    /**
+     * 客户端包版本闸门。
+     *
+     * <p>返回三种结果：{@code "ok"}（版本一致或该功能关闭）、{@code "updating"}（后台正在下载/解包）、
+     * {@code "err:原因"}（做不到，必须告诉玩家）。注意：<b>更新不能同步阻塞玩家的请求</b>——
+     * SOYS 的 HTTP 管线撑不住几十秒不响应的请求（实测 30 秒级会被直接断掉），
+     * 所以这里只负责"发起"，下载放在后台任务里跑。</p>
+     */
+    private String ensureClientVersion(CloudClient c) {
+        if (!clientUpdateEnabled()) {
+            return "ok";
+        }
+        String want = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageVersion();
+        if (want.isEmpty()) {
+            return "ok"; // 没配版本号 = 不校验
+        }
+        Long started = updatingClients.get(c.getId());
+        if (started != null) {
+            if (System.currentTimeMillis() - started < UPDATE_MAX_MS) {
+                return "updating";
+            }
+            updatingClients.remove(c.getId());
+        }
+        String err = updateErrors.get(c.getId());
+        if (err != null) {
+            return "err:" + err;
+        }
+        String local = verifyClientVersion(c, want);
+        if (local == null) {
+            // 代理没回话：不拦人，进到 prepare 才知道真相；真有问题那里会报
+            return "ok";
+        }
+        if (local.equals(want)) {
+            return "ok";
+        }
+        String url = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageUrl();
+        if (url.isEmpty()) {
+            return "err:客户端版本不符（期望 " + want + "，实际 " + (local.isEmpty() ? "未知" : local)
+                    + "），且 config.yml 没配 cloud.client-update.base-url";
+        }
+        startAsyncUpdate(c, want, url);
+        return "updating";
+    }
+
+    /** 读代理的本地版本；请求失败返回 null（与"版本是空串"区分开）。 */
+    private String verifyClientVersion(CloudClient c, String want) {
+        try {
+            String resp = http(agentBase(c) + "/client/verify?version=" + URLEncoder.encode(want, "UTF-8"),
+                    "GET", null, c.getCloudKey(), 8_000L);
+            Matcher m = Pattern.compile("\"version\"\\s*:\\s*\"([^\"]*)\"").matcher(resp);
+            return m.find() ? m.group(1) : null;
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "版本校验失败 " + c.getId() + ": " + t.getMessage());
+            return null;
+        }
+    }
+
+    /** 后台更新：下载 → 校验 → 解包 → 换目录，全程不碰玩家的请求线程。 */
+    private void startAsyncUpdate(CloudClient c, String want, String url) {
+        final String clientId = c.getId();
+        updatingClients.put(clientId, System.currentTimeMillis());
+        String sha = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageSha();
+        final String token = c.getCloudKey();
+        final String base = agentBase(c);
+        final String body = "{\"url\":\"" + jsonEscape(url) + "\",\"sha256\":\"" + jsonEscape(sha)
+                + "\",\"version\":\"" + jsonEscape(want) + "\"}";
+        LOG.info("客户端 " + clientId + " 版本不符，开始后台更新到 " + want + "：" + url);
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                String resp = http(base + "/client/redeploy", "POST", body, token, 900_000L);
+                if (!ok(resp)) {
+                    throw new RuntimeException(errorOf(resp));
+                }
+                updateErrors.remove(clientId);
+                LOG.info("客户端 " + clientId + " 更新完成：" + resp);
+            } catch (Throwable t) {
+                String msg = "客户端包更新失败：" + t.getMessage();
+                updateErrors.put(clientId, msg);
+                LOG.log(Level.WARNING, "客户端 " + clientId + " " + msg);
+            } finally {
+                updatingClients.remove(clientId);
+            }
+        });
+    }
+
+    /** 当前该客户端是否正在更新（ERP/状态展示可用）。 */
+    public boolean isUpdating(String clientId) {
+        return updatingClients.containsKey(clientId);
+    }
+
     /** 会话状态：浏览器侧的包装页靠它决定"什么时候跳回选择页"。 */
     public AjaxResult status(String sessionId) {
         Session s = sessionId == null ? null : sessions.get(sessionId);
@@ -187,6 +315,29 @@ public final class CloudPlayService {
         }
         finish(s, "requested");
         return AjaxResult.success("会话已结束", null);
+    }
+
+    /**
+     * 浏览器心跳：包装页每 10 秒（{@code cloud.heartbeat.interval-seconds}）打一次。
+     *
+     * <p>玩家直接关掉标签页后，JS 不会发任何"再见"——只有靠"这个会话再没人吭声"来判定。
+     * 心跳与状态轮询共用同一个页面，页面被节流时两者一起变慢，因此判离阈值必须留足余量。</p>
+     */
+    public AjaxResult heartbeat(String sessionId) {
+        Session s = sessionId == null ? null : sessions.get(sessionId);
+        Map<String, Object> data = new LinkedHashMap<>();
+        if (s == null) {
+            data.put("state", Session.STATE_ENDED);
+            data.put("reason", "not-found");
+            return AjaxResult.success("会话不存在", data);
+        }
+        s.lastHeartbeatAt = System.currentTimeMillis();
+        s.heartbeatSeen = true;
+        data.put("state", s.state);
+        data.put("gameState", s.gameState);
+        data.put("player", s.player);
+        data.put("clientId", s.clientId);
+        return AjaxResult.success("ok", data);
     }
 
     public void startWatchdog() {
@@ -216,13 +367,104 @@ public final class CloudPlayService {
     // ===== 内部 =====
 
     private void watch() {
+        long now = System.currentTimeMillis();
+        long timeoutMs = heartbeatTimeoutSeconds() * 1000L;
+        boolean hbOn = heartbeatEnabled();
         for (Session s : sessions.values()) {
-            if (Session.STATE_RUNNING.equals(s.state)) {
-                refresh(s, false);
-                // 游戏已退出：立刻清工作区并释放槽位，页面随后跳回选择页
-                if ("stopped".equals(s.gameState)) {
-                    finish(s, "game-stopped");
+            if (!Session.STATE_RUNNING.equals(s.state)) {
+                continue;
+            }
+            refresh(s, false);
+            // 游戏已退出：立刻清工作区并释放槽位，页面随后跳回选择页
+            if ("stopped".equals(s.gameState)) {
+                finish(s, "game-stopped");
+                continue;
+            }
+            // 玩家关掉浏览器：只有"浏览器真的发过心跳"之后才开始计时，
+            // 否则刚恢复/刚开始的会话会在页面还没加载时被自己判死。
+            if (hbOn && s.heartbeatSeen && now - s.lastHeartbeatAt > timeoutMs) {
+                LOG.info("会话 " + s.sessionId + " 已 " + ((now - s.lastHeartbeatAt) / 1000)
+                        + " 秒没有心跳，判定玩家已离开");
+                finish(s, "browser-left");
+            }
+        }
+    }
+
+    /**
+     * 启动对齐：插件重启后内存里的槽位表是空的，但云主机上可能还跑着上一轮的会话。
+     * <p>有会话就恢复占位并重新开闸（玩家刷新页面能接着看），没有就清干净；会话在、
+     * 游戏已经停了则顺手让代理收尾——否则会出现"机器被占着但页面显示空闲"。</p>
+     */
+    public void reconcileFromAgents() {
+        LOG.info("启动对齐：开始核对 " + clients.versions().size() + " 个云客户端");
+        for (CloudClient c : clients.versions()) {
+            if (!c.isEnabled() || c.isMissing() || !CloudClient.isUrl(c.getPath())) {
+                continue;
+            }
+            if (c.getIp().isEmpty() || c.getPort() <= 0 || c.getCloudKey().isEmpty()) {
+                continue;
+            }
+            String base = agentBase(c);
+            String active = "";
+            String gameState = "";
+            String player = "";
+            try {
+                String resp = http(base + "/health", "GET", null, c.getCloudKey(), 5_000L);
+                active = fieldOf(resp, SESSION_RE);
+                gameState = stateOf(resp);
+                player = fieldOf(resp, PLAYER_RE_JSON);
+            } catch (Throwable t) {
+                LOG.log(Level.FINE, "启动对齐查询 " + c.getId() + " 失败: " + t.getMessage());
+                continue;
+            }
+            try {
+                if (active == null || active.isEmpty()) {
+                    slots.remove(c.getId());
+                    if (plugin.getCloudClientPages() != null) {
+                        plugin.getCloudClientPages().closeLive(c.getId());
+                    }
+                    continue;
                 }
+                if ("stopped".equals(gameState) || "unknown".equals(gameState)) {
+                    // 会话记录还在但游戏已经没了：让代理把残留工作区收掉，别把机器白占着
+                    LOG.info("启动对齐：客户端 " + c.getId() + " 残留会话 " + active
+                            + "（游戏状态 " + gameState + "），通知代理收尾");
+                    try {
+                        http(base + "/session/end", "POST", "{}", c.getCloudKey(), 60_000L);
+                    } catch (Throwable t) {
+                        LOG.log(Level.FINE, "启动对齐收尾失败 " + c.getId() + ": " + t.getMessage());
+                    }
+                    slots.remove(c.getId());
+                    if (plugin.getCloudClientPages() != null) {
+                        plugin.getCloudClientPages().closeLive(c.getId());
+                    }
+                    continue;
+                }
+                Session s = new Session();
+                s.sessionId = active;
+                s.clientId = c.getId();
+                s.player = player == null || player.isEmpty() ? "" : player;
+                s.token = c.getCloudKey();
+                s.agentBase = base;
+                s.state = Session.STATE_RUNNING;
+                s.gameState = gameState;
+                s.createdAt = System.currentTimeMillis();
+                s.lastHeartbeatAt = s.createdAt;
+                s.heartbeatSeen = false; // 页面还没连上来，先不按心跳计时
+                s.restored = true;
+                sessions.put(active, s);
+                slots.put(c.getId(), active);
+                if (plugin.getCloudClientPages() != null) {
+                    try {
+                        plugin.getCloudClientPages().openLive(c.getId());
+                    } catch (Throwable t) {
+                        LOG.log(Level.FINE, "启动对齐开闸失败 " + c.getId() + ": " + t.getMessage());
+                    }
+                }
+                LOG.info("启动对齐：客户端 " + c.getId() + " 恢复会话 " + active
+                        + "（玩家 " + s.player + "，游戏 " + gameState + "）");
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "启动对齐处理 " + c.getId() + " 失败: " + t);
             }
         }
     }
@@ -273,6 +515,67 @@ public final class CloudPlayService {
         } catch (Throwable ignored) {
         }
         return "http://" + c.getIp() + ":" + port;
+    }
+
+    // ===== 配置（改 config.yml 即生效，不需要重启） =====
+
+    public boolean heartbeatEnabled() {
+        try {
+            return plugin.getConfig().getBoolean("cloud.heartbeat.enabled", true);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    /** 页面心跳间隔（秒）：下发给包装页 JS。 */
+    public int heartbeatIntervalSeconds() {
+        int v = 10;
+        try {
+            v = plugin.getConfig().getInt("cloud.heartbeat.interval-seconds", 10);
+        } catch (Throwable ignored) {
+        }
+        return v < 3 ? 3 : (v > 120 ? 120 : v);
+    }
+
+    /** 判离阈值（秒）：超过这么久没心跳就当玩家关了浏览器。 */
+    public int heartbeatTimeoutSeconds() {
+        int v = 30;
+        try {
+            v = plugin.getConfig().getInt("cloud.heartbeat.timeout-seconds", 30);
+        } catch (Throwable ignored) {
+        }
+        // 必须大于心跳间隔，否则一次抖动就误杀
+        int min = heartbeatIntervalSeconds() * 2;
+        return v < min ? min : v;
+    }
+
+    /** 期望的云游戏客户端版本（prepare 时发给代理做比对，空 = 不比对）。 */
+    public String clientVersion() {
+        try {
+            return plugin.getConfig().getString("cloud.client-update.version", "").trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private boolean clientUpdateEnabled() {
+        try {
+            return plugin.getConfig().getBoolean("cloud.client-update.enabled", true);
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static String jsonEscape(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "");
+    }
+
+    private static String fieldOf(String resp, Pattern p) {
+        Matcher m = p.matcher(resp == null ? "" : resp);
+        return m.find() ? m.group(1) : "";
     }
 
     /** 包装页地址：走门牌时是 {@code /cloud/<别名>/play}，否则是内部命名空间路径。 */
@@ -393,6 +696,12 @@ public final class CloudPlayService {
         private String endReason = "";
         private long createdAt;
         private long lastPollAt;
+        /** 最近一次浏览器心跳；0 = 还没收到过。 */
+        private long lastHeartbeatAt;
+        /** 浏览器是否已经发过心跳：没发过就不按心跳超时判离（页面还没加载完）。 */
+        private boolean heartbeatSeen;
+        /** 该会话是插件重启后从代理 /health 恢复出来的。 */
+        private boolean restored;
 
         public String getSessionId() {
             return sessionId;
@@ -408,6 +717,18 @@ public final class CloudPlayService {
 
         public String getState() {
             return state;
+        }
+
+        public boolean isRestored() {
+            return restored;
+        }
+
+        public long getLastHeartbeatAt() {
+            return lastHeartbeatAt;
+        }
+
+        public String getEndReason() {
+            return endReason;
         }
 
         public String getGameState() {

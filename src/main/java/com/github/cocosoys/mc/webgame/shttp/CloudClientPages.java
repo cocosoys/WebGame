@@ -67,6 +67,12 @@ public final class CloudClientPages {
     /** 别名（已规范化）→ 客户端 id；publish 时重建，供会话层校验"别名属于谁"。 */
     private volatile java.util.Map<String, String> aliasToClient = java.util.Collections.emptyMap();
 
+    /** 客户端包摘要缓存（按 mtime + size 命中，避免每次 publish 重算几十 MB 的 sha256）。 */
+    private long cachedPkgMtime = -1;
+    private long cachedPkgSize = -1;
+    private String cachedPkgSha = "";
+    private int cachedPkgFiles = 0;
+
     public CloudClientPages(WebGame plugin, CloudClientService cloudClientService,
                             com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService playService) {
         this.plugin = plugin;
@@ -76,6 +82,11 @@ public final class CloudClientPages {
 
     /** 页面扩展注册成功后注入 api（页面扩展未就绪时不发布）。 */    public void attach(SoysHttpOverMcApi api) {
         this.api = api;
+    }
+
+    /** 页面扩展是否就绪（启动对齐要等它，否则开闸没有落点）。 */
+    public boolean isAttached() {
+        return api != null && api.getWebPage() != null;
     }
 
     /** 某条目当前生效的同端口转播前缀（未转播返回 null）。 */
@@ -155,6 +166,14 @@ public final class CloudClientPages {
                 registerPage(pages, entry, buildEntryPage(c, token, ""));
                 registerPage(pages, PAGE_PATH + id + PLAY_SEGMENT,
                         buildPlayPage(c, liveUrl, token, WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH, ""));
+                if (relay) {
+                    // 命名空间下的直播前缀也要有门禁页（会话说"没开闸"时别落 SPA 兜底）
+                    // 路径里已经带了 /web/plugins/WebGame 前缀，必须用 proxy 登记（不补前缀）
+                    byte[] gate = buildLiveGatePage(c,
+                            WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + id).getBytes(StandardCharsets.UTF_8);
+                    registerProxyPage(pages, livePrefix, gate);
+                    registerProxyPage(pages, livePrefix + "/", gate);
+                }
                 // 根路径门牌：/cloud/<别名> 直接就是同一套入口+包装页，地址栏全程不暴露内部 id
                 if (relay) {
                     for (String alias : normalizedAliases(c)) {
@@ -200,6 +219,146 @@ public final class CloudClientPages {
         registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), dirBytes);
         livePrefixes = live;
         aliasToClient = aliasMap;
+        // 客户端更新包：目录登记 + manifest（代理按 version/sha256 决定要不要下载）
+        publishClientPackage(pages);
+    }
+
+    /**
+     * 客户端更新包托管：{@code plugins/WebGame/packages/} 整个目录登记成可下载目录，
+     * 同时把 {@code manifest.json}（version + 文件数 + sha256）放到同路径下。
+     *
+     * <p>代理只认这份 manifest：版本号来自 config.yml，sha256 由磁盘上的 zip 现算，
+     * 所以"把新包丢进目录 + 改 version"就是一次发布，不需要重启插件。</p>
+     */
+    private void publishClientPackage(WebPageApi pages) {
+        File dir = new File(plugin.getDataFolder(), "packages");
+        if (!dir.isDirectory()) {
+            return;
+        }
+        String rel = "/cloud/client";
+        try {
+            Set<WebRegistry.Entry> entries = pages.registerDirectory(plugin, rel, dir);
+            tag(entries);
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "登记客户端更新包目录失败: " + t);
+        }
+        try {
+            registerPage(pages, rel + "/manifest.json", buildClientManifest(dir));
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "登记 manifest 失败: " + t);
+        }
+    }
+
+    /** manifest.json：版本 + 大小 + 文件数 + sha256 + 下载地址。 */
+    private String buildClientManifest(File dir) {
+        String version = "";
+        String pkg = "cloud-client.zip";
+        String target = "";
+        boolean enabled = true;
+        try {
+            org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
+            enabled = cfg.getBoolean("cloud.client-update.enabled", true);
+            version = cfg.getString("cloud.client-update.version", "");
+            pkg = cfg.getString("cloud.client-update.package", pkg);
+            target = cfg.getString("cloud.client-update.target-dir", "");
+        } catch (Throwable ignored) {
+        }
+        version = version == null ? "" : version.trim();
+        pkg = pkg == null || pkg.trim().isEmpty() ? "cloud-client.zip" : pkg.trim();
+        File zip = new File(dir, pkg);
+        long size = zip.isFile() ? zip.length() : 0;
+        long mtime = zip.isFile() ? zip.lastModified() : 0;
+        String sha = "";
+        int files = 0;
+        if (zip.isFile()) {
+            // 同一个文件不重复算：zip 动辄几十 MB，manifest 又会被反复重建
+            if (mtime == cachedPkgMtime && size == cachedPkgSize && !cachedPkgSha.isEmpty()) {
+                sha = cachedPkgSha;
+                files = cachedPkgFiles;
+            } else {
+                try {
+                    sha = sha256(zip);
+                    files = countZipEntries(zip);
+                    cachedPkgMtime = mtime;
+                    cachedPkgSize = size;
+                    cachedPkgSha = sha;
+                    cachedPkgFiles = files;
+                } catch (Throwable t) {
+                    LOG.log(Level.WARNING, "计算客户端包摘要失败 " + zip + ": " + t);
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("{\"enabled\":").append(enabled)
+                .append(",\"version\":\"").append(jsonStr(version))
+                .append("\",\"package\":\"").append(jsonStr(pkg))
+                .append("\",\"size\":").append(size)
+                .append(",\"files\":").append(files)
+                .append(",\"sha256\":\"").append(sha)
+                .append("\",\"targetDir\":\"").append(jsonStr(target))
+                .append("\",\"url\":\"").append(jsonStr(WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/client/" + pkg))
+                .append("\"}");
+        return sb.toString();
+    }
+
+    private String clientUrlFor(String pkg) {
+        String base = "";
+        try {
+            base = plugin.getConfig().getString("cloud.client-update.base-url", "").trim();
+        } catch (Throwable ignored) {
+        }
+        if (base.isEmpty()) {
+            return "";
+        }
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base + WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/client/" + pkg;
+    }
+
+    private static String sha256(File f) throws Exception {
+        java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+        java.io.FileInputStream in = new java.io.FileInputStream(f);
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                md.update(buf, 0, n);
+            }
+        } finally {
+            in.close();
+        }
+        byte[] d = md.digest();
+        StringBuilder sb = new StringBuilder(d.length * 2);
+        for (byte b : d) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    /** zip 里的文件条数（不含目录项）；用于 manifest 里给人看的"文件数"。 */
+    private static int countZipEntries(File zip) throws Exception {
+        int count = 0;
+        java.util.zip.ZipFile zf = new java.util.zip.ZipFile(zip);
+        try {
+            java.util.Enumeration<? extends java.util.zip.ZipEntry> en = zf.entries();
+            while (en.hasMoreElements()) {
+                java.util.zip.ZipEntry e = en.nextElement();
+                if (!e.isDirectory()) {
+                    count++;
+                }
+            }
+        } finally {
+            zf.close();
+        }
+        return count;
+    }
+
+    private static String jsonStr(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /** 撤销本类登记的全部页面（插件停用时调用）。 */
@@ -391,6 +550,59 @@ public final class CloudClientPages {
         return sb.toString();
     }
 
+    /** 期望的客户端包版本（config.yml 的 cloud.client-update.version；空 = 不比对）。 */
+    public String clientPackageVersion() {
+        try {
+            String v = plugin.getConfig().getString("cloud.client-update.version", "");
+            return v == null ? "" : v.trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 客户端包下载地址（给云主机代理用；base-url 没配就返回空，代理会跳过更新）。 */
+    public String clientPackageUrl() {
+        String pkg = "cloud-client.zip";
+        try {
+            String p = plugin.getConfig().getString("cloud.client-update.package", pkg);
+            if (p != null && !p.trim().isEmpty()) {
+                pkg = p.trim();
+            }
+        } catch (Throwable ignored) {
+        }
+        return clientUrlFor(pkg);
+    }
+
+    /** 当前包 sha256（与 manifest 同源；包不存在返回空串）。 */
+    public String clientPackageSha() {
+        File dir = new File(plugin.getDataFolder(), "packages");
+        String pkg = "cloud-client.zip";
+        try {
+            String p = plugin.getConfig().getString("cloud.client-update.package", pkg);
+            if (p != null && !p.trim().isEmpty()) {
+                pkg = p.trim();
+            }
+        } catch (Throwable ignored) {
+        }
+        File zip = new File(dir, pkg);
+        if (!zip.isFile()) {
+            return "";
+        }
+        if (zip.lastModified() == cachedPkgMtime && zip.length() == cachedPkgSize && !cachedPkgSha.isEmpty()) {
+            return cachedPkgSha;
+        }
+        try {
+            cachedPkgMtime = zip.lastModified();
+            cachedPkgSize = zip.length();
+            cachedPkgSha = sha256(zip);
+            cachedPkgFiles = countZipEntries(zip);
+            return cachedPkgSha;
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "计算客户端包摘要失败: " + t);
+            return "";
+        }
+    }
+
     /** 登记某别名的入口页与包装页（根路径，无 /web/plugins 前缀）。 */
     private void registerAliasPages(WebPageApi pages, CloudClient c, String alias, String token, String liveUrl) {
         byte[] entry = buildEntryPage(c, token, alias).getBytes(StandardCharsets.UTF_8);
@@ -404,7 +616,54 @@ public final class CloudClientPages {
             registerProxyPage(pages, base + "/", entry);
             registerProxyPage(pages, base + "/play", play);
             registerProxyPage(pages, base + "/play/", play);
+            // 直播前缀的门禁页：没会话时不该落 SPA 兜底（语义含糊），给一页明确的"请从入口进入"
+            byte[] gate = buildLiveGatePage(c, base).getBytes(StandardCharsets.UTF_8);
+            registerProxyPage(pages, base + LIVE_SEGMENT, gate);
+            registerProxyPage(pages, base + LIVE_SEGMENT + "/", gate);
         }
+    }
+
+    /**
+     * 无会话访问 {@code live} 的提示页（403 语义）。
+     *
+     * <p>直播前缀只在会话期由 upstream 注册，会话一结束就撤掉；撤掉之后如果什么都不登记，
+     * 请求会落到 WebGame SPA 兜底——页面看着"正常"，实际是在骗人。这里登记一页静态的
+     * 门禁页：告诉玩家通道没开、给出从哪个入口重进的链接。</p>
+     *
+     * <p>说明：SOYS 的注册页接口只出口 200，拿不到真正的 403 状态码；页面上按 403 语义
+     * 标注，HTTP 状态仍是 200。</p>
+     */
+    private String buildLiveGatePage(CloudClient c, String entryPath) {
+        String name = escape(c.getName());
+        String entry = escape(entryPath);
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>403 · 直播通道未开启</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;"
+                + "color:#e8edf7}\n"
+                + ".wrap{width:100%;max-width:560px;padding:40px 24px}\n"
+                + ".code{font-size:64px;font-weight:700;letter-spacing:4px;color:#ff8b8b;margin:0 0 8px}\n"
+                + "h1{margin:0 0 12px;font-size:22px;font-weight:600}\n"
+                + ".sub{margin:0 0 26px;color:#9aa6bd;font-size:14px;line-height:1.9}\n"
+                + ".btn{display:inline-block;padding:12px 20px;border-radius:12px;text-decoration:none;"
+                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:15px;font-weight:600}\n"
+                + ".hint{margin-top:22px;font-size:12px;color:#6f7a90;line-height:1.8}\n"
+                + "code{font-family:ui-monospace,Consolas,monospace;color:#7fa7ff}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"wrap\">\n"
+                + "<p class=\"code\">403</p>\n"
+                + "<h1>直播通道未开启 · " + name + "</h1>\n"
+                + "<p class=\"sub\">这个地址是云游戏的<strong>画面通道</strong>，只在会话进行中开放。" + "\n"
+                + "现在没有进行中的会话，所以它拒绝访问——这是设计行为，不是故障。</p>\n"
+                + "<a class=\"btn\" href=\"" + entry + "\">请从入口进入</a>\n"
+                + "<p class=\"hint\">入口要先填游戏名、起一次会话，画面通道才会打开：<code>" + entry + "</code></p>\n"
+                + "</div>\n</body>\n</html>\n";
     }
 
     private static String urlToken(String token) {
@@ -856,6 +1115,11 @@ public final class CloudClientPages {
                 + "button:disabled{opacity:.55;cursor:not-allowed}\n"
                 + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
                 + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
+                + ".wait{margin-top:16px;display:none}\n"
+                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
+                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
+                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
+                + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
                 + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
                 + ".back:hover{color:#4f8cff}\n"
                 + "</style>\n</head>\n<body>\n"
@@ -870,6 +1134,8 @@ public final class CloudClientPages {
                 + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
                 + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
                 + "<div class=\"msg\" id=\"m\"></div>\n"
+                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配云主机…</span></p></div>\n"
                 + "</form>\n"
                 + "<a class=\"back\" href=\"" + escape(home) + "\">← 返回门牌目录</a>\n"
                 + "</div>\n"
@@ -878,25 +1144,41 @@ public final class CloudClientPages {
                 + "var CLIENT=" + id + ";\n"
                 + "var TOKEN=" + tok + ";\n"
                 + "var ALIAS=" + js(byAlias ? alias : "") + ";\n"
+                + "var P=" + progressConfig() + ";\n"
+                + progressJs()
                 + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
                 + "var f=document.getElementById('f'),p=document.getElementById('p'),"
-                + "b=document.getElementById('b'),m=document.getElementById('m');\n"
+                + "b=document.getElementById('b'),m=document.getElementById('m'),"
+                + "wait=document.getElementById('wait'),fill=document.getElementById('fill'),pc=document.getElementById('pc'),"
+                + "st=document.getElementById('st');\n"
                 + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
+                + "var pr=null,attempts=0;\n"
+                + "function attempt(v){\n"
+                + "  if(!pr){pr=startProgress(fill,pc);}\n"
+                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN,alias:ALIAS})})\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){\n"
+                + "    var d=(j&&j.data)||{};\n"
+                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配，正在连接画面…';"
+                + "location.replace(d.playUrl);return;}\n"
+                + "    // 客户端包在后台更新：进度条继续走，到点自己再点一次（不让人手动猜时间）\n"
+                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
+                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
+                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
+                + "    pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say((j&&j.msg)||'开始失败，请稍后重试',true);\n"
+                + "  })\n"
+                + "  .catch(function(){pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say('网络异常，请稍后重试',true);});\n"
+                + "}\n"
                 + "f.addEventListener('submit',function(e){\n"
                 + "  e.preventDefault();\n"
                 + "  var v=(p.value||'').trim();\n"
                 + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
                 + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
-                + "  b.disabled=true;say('正在准备云主机，首次启动约需 1–3 分钟…',false);\n"
-                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
-                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN,alias:ALIAS})})\n"
-                + "  .then(function(r){return r.json();})\n"
-                + "  .then(function(j){\n"
-                + "    if(j&&j.code===200&&j.data&&j.data.playUrl){say('已进入，正在连接画面…',false);"
-                + "location.replace(j.data.playUrl);return;}\n"
-                + "    b.disabled=false;say((j&&j.msg)||'开始失败，请稍后重试',true);\n"
-                + "  })\n"
-                + "  .catch(function(){b.disabled=false;say('网络异常，请稍后重试',true);});\n"
+                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
+                + "st.textContent='正在分配云主机并启动客户端…';attempt(v);\n"
                 + "});\n"
                 + "</script>\n</body>\n</html>\n";
     }
@@ -915,6 +1197,14 @@ public final class CloudClientPages {
         String home = homeUrl;
         String aliasTag = alias == null || alias.isEmpty()
                 ? "" : "<span class=\"pill\">/cloud/" + escape(alias) + "</span>";
+        int hbSec = 10;
+        int hbKeep = 30;
+        try {
+            org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
+            hbSec = Math.max(3, cfg.getInt("cloud.heartbeat.interval-seconds", 10));
+            hbKeep = Math.max(hbSec, cfg.getInt("cloud.heartbeat.timeout-seconds", 30));
+        } catch (Throwable ignored) {
+        }
         return "<!DOCTYPE html>\n"
                 + "<html lang=\"zh-CN\">\n<head>\n"
                 + "<meta charset=\"utf-8\">\n"
@@ -935,7 +1225,15 @@ public final class CloudClientPages {
                 + ".btn:hover{border-color:#4f8cff;color:#fff}\n"
                 + "iframe{display:block;width:100%;height:calc(100% - 40px);border:0;background:#000}\n"
                 + ".mask{position:fixed;inset:40px 0 0 0;display:flex;align-items:center;justify-content:center;"
-                + "background:rgba(7,10,18,.92);color:#8f9bb3;font-size:14px;text-align:center;line-height:1.8;z-index:2}\n"
+                + "background:rgba(7,10,18,.94);color:#8f9bb3;font-size:14px;text-align:center;line-height:1.8;z-index:2}\n"
+                + ".mw{width:min(420px,80vw)}\n"
+                + ".mt{margin:0 0 14px;font-size:15px;color:#c7d0e2}\n"
+                + ".track{height:9px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
+                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
+                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
+                + ".mp{margin:10px 0 0;font-size:12px;color:#9aa6bd}\n"
+                + ".mp b{color:#e8edf7;font-weight:600}\n"
+                + ".note{margin:10px 0 0;font-size:12px;color:#6f7a90}\n"
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"bar\">\n"
                 + "<span class=\"dot\"></span><span>" + name + "</span>" + aliasTag
@@ -944,19 +1242,35 @@ public final class CloudClientPages {
                 + "</div>\n"
                 + "<iframe id=\"v\" src=\"" + escape(liveUrl) + "\" allow=\"autoplay; fullscreen; microphone; camera;"
                 + " clipboard-read; clipboard-write; gamepad\" allowfullscreen></iframe>\n"
-                + "<div class=\"mask\" id=\"mask\">正在连接云主机…<br>首次启动客户端约需 1–3 分钟，请勿关闭本页</div>\n"
+                + "<div class=\"mask\" id=\"mask\"><div class=\"mw\">\n"
+                + "<p class=\"mt\" id=\"mt\">正在连接云主机…</p>\n"
+                + "<div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<p class=\"mp\"><b><span id=\"pc\">0</span>%</b> · <span id=\"st\">首次启动客户端是冷启动，约需 10 分钟</span></p>\n"
+                + "<p class=\"note\">关掉本页不会立刻释放机器：服务端约 " + hbKeep + " 秒收不到心跳才会收尾；"
+                + "正常离开请点右上角「结束游戏」。</p>\n"
+                + "</div></div>\n"
                 + "<script>\n"
                 + "var API=" + js(API_PREFIX) + ";\n"
                 + "var TOKEN=" + tok + ";\n"
                 + "var HOME=" + js(home) + ";\n"
+                + "var HB=" + hbSec + ";\n"
+                + "var P=" + progressConfig() + ";\n"
+                + progressJs()
                 + "var q=new URLSearchParams(location.search),S=q.get('s')||'';\n"
                 + "var mask=document.getElementById('mask'),pl=document.getElementById('pl'),"
-                + "v=document.getElementById('v'),endBtn=document.getElementById('end');\n"
+                + "v=document.getElementById('v'),endBtn=document.getElementById('end'),"
+                + "fill=document.getElementById('fill'),pc=document.getElementById('pc'),st=document.getElementById('st'),"
+                + "mt=document.getElementById('mt');\n"
                 + "function goHome(){location.replace(HOME);}\n"
                 + "function busy(on){mask.style.display=on?'flex':'none';}\n"
-                + "busy(true);\n"
-                + "v.addEventListener('load',function(){setTimeout(function(){busy(false);},1200);});\n"
-                + "setTimeout(function(){busy(false);},20000);\n"
+                + "var pr=startProgress(fill,pc),loaded=false,inited=false,shown=false;\n"
+                + "function reveal(){if(shown)return;shown=true;busy(false);}\n"
+                + "// 画面连上了也要等进度条走到 90% 再揭开遮罩：15 秒的等待是写在规则里的，不跳步\n"
+                + "function tryReveal(){if(loaded&&inited){reveal();return;}setTimeout(tryReveal,200);}\n"
+                + "v.addEventListener('load',function(){loaded=true;pr.finish();"
+                + "mt.textContent='正在启动游戏客户端…';st.textContent='画面通道已连通，等待游戏进程就绪';});\n"
+                + "(function watchInit(){if(pr.atInit()){inited=true;if(loaded)reveal();return;}setTimeout(watchInit,200);})();\n"
+                + "tryReveal();\n"
                 + "function poll(){\n"
                 + "  fetch(API+'/cloud/session/status?s='+encodeURIComponent(S))\n"
                 + "  .then(function(r){return r.json();})\n"
@@ -966,13 +1280,57 @@ public final class CloudClientPages {
                 + "    if(!S||d.state==='ended'||d.reason==='not-found'){goHome();}\n"
                 + "  }).catch(function(){});\n"
                 + "}\n"
-                + "if(!S){goHome();}else{setInterval(poll,3000);setTimeout(poll,600);}\n"
+                + "function beat(){\n"
+                + "  fetch(API+'/cloud/session/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({sessionId:S})})\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){var d=(j&&j.data)||{};"
+                + "if(!S||d.state==='ended'||d.reason==='not-found'){goHome();}}).catch(function(){});\n"
+                + "}\n"
+                + "if(!S){goHome();}else{beat();setInterval(beat,Math.max(3,HB)*1000);"
+                + "setInterval(poll,3000);setTimeout(poll,600);}\n"
                 + "endBtn.addEventListener('click',function(){\n"
                 + "  endBtn.disabled=true;endBtn.textContent='正在结束…';\n"
                 + "  fetch(API+'/cloud/session/end',{method:'POST',headers:{'Content-Type':'application/json'},"
                 + "body:JSON.stringify({sessionId:S})}).catch(function(){}).then(goHome,goHome);\n"
                 + "});\n"
                 + "</script>\n</body>\n</html>\n";
+    }
+
+    /** 进度条参数（{@code cloud.progress.*}）：改 config.yml 即可调整，不用重编前端。 */
+    private String progressConfig() {
+        int initSec = 15, initPct = 90, minSec = 3, maxSec = 7, cap = 99;
+        try {
+            org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
+            initSec = Math.max(1, cfg.getInt("cloud.progress.initial-seconds", 15));
+            initPct = Math.min(99, Math.max(1, cfg.getInt("cloud.progress.initial-percent", 90)));
+            minSec = Math.max(1, cfg.getInt("cloud.progress.tick-min-seconds", 3));
+            maxSec = Math.max(minSec, cfg.getInt("cloud.progress.tick-max-seconds", 7));
+            cap = Math.min(100, Math.max(initPct, cfg.getInt("cloud.progress.cap-percent", 99)));
+        } catch (Throwable ignored) {
+        }
+        return "{initSec:" + initSec + ",initPct:" + initPct + ",minSec:" + minSec
+                + ",maxSec:" + maxSec + ",cap:" + cap + "}";
+    }
+
+    /**
+     * 共享进度条 JS（依赖前面的 {@code var P=<progressConfig()>}）。
+     *
+     * <p>节奏是"不谎报"：{@code initSec} 秒匀速走到 {@code initPct}（默认 15s → 90%），
+     * 之后每 {@code minSec~maxSec} 秒（默认 3–7 秒随机）+1，走到 {@code cap}（99%）就停住等人。
+     * 真正就绪时调用 {@code finish()} 一次性补到 100；失败时 {@code stop()} 冻住。</p>
+     */
+    private static String progressJs() {
+        return "function startProgress(fillEl,pctEl){var p=0,stop=false,t0=Date.now();"
+                + "function paint(){if(fillEl)fillEl.style.width=p+'%';if(pctEl)pctEl.textContent=Math.floor(p);}"
+                + "function gap(){return (P.minSec+Math.random()*(P.maxSec-P.minSec))*1000;}"
+                + "function creep(){if(stop)return;if(p<P.cap){p+=1;paint();}"
+                + "if(p<P.cap){setTimeout(creep,gap());}}"
+                + "(function tick(){if(stop)return;var el=(Date.now()-t0)/1000;"
+                + "if(el<P.initSec){p=P.initPct*(el/P.initSec);paint();setTimeout(tick,60);return;}"
+                + "p=P.initPct;paint();setTimeout(creep,gap());})();"
+                + "return{finish:function(){stop=true;p=100;paint();},stop:function(){stop=true;},"
+                + "atInit:function(){return p>=P.initPct;}};}\n";
     }
 
     private static String escape(String s) {

@@ -66,6 +66,17 @@ public class WebGameCloudSessionController {
         return playService.end(str(payload.get("sessionId")));
     }
 
+    /**
+     * 浏览器心跳：包装页每 10 秒打一次；玩家关掉标签页后停止发送，
+     * 服务端超过阈值（{@code cloud.heartbeat.timeout-seconds}）收不到就按同一套收尾释放槽位。
+     */
+    @ApiName("云游戏会话心跳")
+    @PostMapping("/heartbeat")
+    public AjaxResult heartbeat(@RequestBody Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : body;
+        return playService.heartbeat(str(payload.get("sessionId")));
+    }
+
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o).trim();
     }
