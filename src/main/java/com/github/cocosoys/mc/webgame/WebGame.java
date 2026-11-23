@@ -14,9 +14,12 @@ import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionRegistry;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
@@ -122,6 +125,20 @@ public final class WebGame extends JavaPlugin implements Listener {
             cloudPlayService.startWatchdog();
             // 启动对齐：云主机上可能还跑着上一轮的会话，等页面托管就绪后对一次账
             scheduleReconcile(1);
+            // 客户端品牌只做审计：1.12.2 的 Player API 没有 getClientBrandName()，
+            // 只能靠 MC|Brand 入站通道；注册失败不影响任何判定。
+            try {
+                getServer().getMessenger().registerIncomingPluginChannel(this, "MC|Brand",
+                        (channel, player, message) -> {
+                            if (cloudPlayService == null || player == null || message == null) {
+                                return;
+                            }
+                            cloudPlayService.noteBrand(player.getName(),
+                                    new String(message, java.nio.charset.StandardCharsets.UTF_8));
+                        });
+            } catch (Throwable t) {
+                getLogger().warning("MC|Brand 审计通道注册失败（品牌不参与判定，可忽略）：" + t.getMessage());
+            }
         } catch (Throwable t) {
             getLogger().severe("WebGame 云游戏客户端初始化失败：");
             t.printStackTrace();
@@ -157,6 +174,10 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
+        try {
+            getServer().getMessenger().unregisterIncomingPluginChannel(this, "MC|Brand");
+        } catch (Throwable ignored) {
+        }
         if (cloudPlayService != null) {
             cloudPlayService.stopWatchdog();
         }
@@ -280,6 +301,41 @@ public final class WebGame extends JavaPlugin implements Listener {
                 getLogger().warning("云会话启动对齐失败：" + t);
             }
         }, 100L);
+    }
+
+    /**
+     * 云游戏进服判定入口：这里只把事件递给会话服务，判定规则（来源 IP 必须是该会话
+     * 那台云机的地址、回环永不判云）全部收在 {@link CloudPlayService} 里，避免两处口径漂移。
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onCloudPlayerJoin(PlayerJoinEvent event) {
+        CloudPlayService svc = cloudPlayService;
+        Player p = event == null ? null : event.getPlayer();
+        if (svc == null || p == null) {
+            return;
+        }
+        svc.onPlayerJoin(p.getName(), addressOf(p), svc.brandOf(p.getName()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onCloudPlayerQuit(PlayerQuitEvent event) {
+        CloudPlayService svc = cloudPlayService;
+        Player p = event == null ? null : event.getPlayer();
+        if (svc == null || p == null) {
+            return;
+        }
+        svc.onPlayerQuit(p.getName(), addressOf(p));
+    }
+
+    /** 玩家来源地址（IPv4/IPv6 字符串）；拿不到就返回空串，判定时按"非云机"处理。 */
+    private static String addressOf(Player p) {
+        try {
+            if (p.getAddress() != null && p.getAddress().getAddress() != null) {
+                return p.getAddress().getAddress().getHostAddress();
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
     }
 
     // ===== getters =====

@@ -63,6 +63,8 @@ public final class CloudPlayService {
     private final Map<String, String> updateErrors = new ConcurrentHashMap<>();
     /** clientId → 最近一次被池挑中/起会话的时刻（"最久未用"策略用）。 */
     private final Map<String, Long> lastUsed = new ConcurrentHashMap<>();
+    /** 玩家名 → 最近一次上报的 MC|Brand（只用于日志审计，不参与判定）。 */
+    private final Map<String, String> brands = new ConcurrentHashMap<>();
     private volatile BukkitTask watchdog;
     /** 主线程巡检：玩家名在本服上线 = "连服务器"阶段真的过了。 */
     private volatile BukkitTask stageTask;
@@ -228,6 +230,9 @@ public final class CloudPlayService {
             // prepare 返回 = 工作区已分配、game/start 已发出；下一步等进程真的起来
             s.stage = Session.STAGE_JVM;
             s.lastPollAt = System.currentTimeMillis();
+            // 启动兜底从 game/start 已发出开始计时：即使代理一直报 unknown，
+            // 也不能让会话无限期占着机器（后来真的 running 时不会再覆盖它）
+            s.armAt = s.lastPollAt;
             // 开闸：直播前缀只在会话期存在；开不出来就别把玩家放进包装页
             boolean opened = true;
             try {
@@ -424,6 +429,16 @@ public final class CloudPlayService {
         data.put("pool", s.pool);
         data.put("stage", s.stage);
         data.put("stageIndex", stageIndex(s.stage));
+        // 进服判定的结果：页面靠 joined + revealInMs 决定什么时候揭遮罩，
+        // joinIp/joinBrand 只是给玩家和管理员看的审计信息，不参与判定。
+        data.put("joined", s.joined);
+        data.put("joinIp", s.joinIp);
+        data.put("joinBrand", s.joinBrand);
+        data.put("minHoldSeconds", minHoldSeconds());
+        long hold = minHoldSeconds() * 1000L;
+        data.put("revealInMs", s.joined
+                ? Math.max(0L, s.joinedAt + hold - System.currentTimeMillis())
+                : -1L);
         return AjaxResult.success(msg, data);
     }
 
@@ -524,6 +539,22 @@ public final class CloudPlayService {
                 finish(s, "game-stopped");
                 continue;
             }
+            // 启动兜底：进程起来后 startup-timeout 秒还没看到「可信进服」，就别再占着机器
+            if (!s.joined && s.armAt > 0 && now - s.armAt > startupTimeoutSeconds() * 1000L) {
+                LOG.warning("会话 " + s.sessionId + " 游戏进程已起 " + ((now - s.armAt) / 1000)
+                        + " 秒仍未见云机进服（云机 " + s.clientId + "），按超时结束并释放槽位");
+                finish(s, "join-timeout");
+                continue;
+            }
+            // 进服后 join-window 秒内页面仍没回执「画面已载入」：阶段按进服推进，
+            // 不再把第 4 格悬着（画面本身在 iframe 里，页面自己会揭遮罩）
+            if (s.joined && !Session.STAGE_SCREEN.equals(s.stage)
+                    && now - s.joinedAt > joinWindowSeconds() * 1000L) {
+                s.stage = Session.STAGE_SCREEN;
+                s.screenAt = now;
+                LOG.info("会话 " + s.sessionId + " 进服后 " + joinWindowSeconds()
+                        + " 秒未收到画面回执，按进服判定推进到 screen");
+            }
             // 玩家关掉浏览器：只有"浏览器真的发过心跳"之后才开始计时，
             // 否则刚恢复/刚开始的会话会在页面还没加载时被自己判死。
             if (hbOn && s.heartbeatSeen && now - s.lastHeartbeatAt > timeoutMs) {
@@ -592,8 +623,10 @@ public final class CloudPlayService {
                 s.agentBase = base;
                 s.state = Session.STATE_RUNNING;
                 s.gameState = gameState;
-                // 恢复出来的会话：工作区与进程都已经在了，直接站到"连服务器"这一步
-                s.stage = Session.STAGE_JOIN;
+                // 从代理恢复出来的会话只知道「进程还活着」，不知道玩家在不在服里。
+                // 阶段最多给到 jvm；join 必须由进服事件的 IP 判定或兜底巡检补上。
+                s.stage = gameUp(gameState) ? Session.STAGE_JVM : Session.STAGE_WORKSPACE;
+                s.armAt = gameUp(gameState) ? System.currentTimeMillis() : 0L;
                 s.pool = c.getPool();
                 s.createdAt = System.currentTimeMillis();
                 s.lastHeartbeatAt = s.createdAt;
@@ -617,25 +650,194 @@ public final class CloudPlayService {
     }
 
     /**
-     * 主线程巡检：会话玩家在本服上线 = "连服务器"阶段真的过了。
+     * 「玩家真的进来了」的唯一判定入口（由 {@code PlayerJoinEvent} 调用，主线程）。
      *
-     * <p>为什么不查 {@code Bukkit.getPlayerExact} 于异步线程：Bukkit 的在线玩家表不是并发
-     * 容器，异步读属于"能跑但迟早出事"的那类。这里每 2 秒在主线程扫一遍（会话数量是常数级），
-     * 顺带也覆盖"插件重启后会话被恢复、玩家其实早就进来了"的情况。</p>
+     * <p>判据是<b>来源 IP</b>：这台云主机的 {@code cloud-clients.yml} 里 {@code ip} 就是云机自己的
+     * 地址，云游戏客户端一定从它出网；eagler（WS 隧道）永远从回环 {@code 127.0.0.1} 进服，
+     * 玩家自己电脑上的原生客户端则是玩家自己的地址。名字只做审计——eagler 可以随便填一个名字
+     * 冒名顶替，IP 不行。回环地址永远不判成云机。</p>
      */
-    private void scanJoins() {
+    public void onPlayerJoin(String playerName, String rawAddress, String brand) {
+        String ip = normalizeIp(rawAddress);
+        Session s = matchSession(playerName, ip);
+        if (s == null) {
+            LOG.fine("[进服审计] " + playerName + " 从 " + ip + " 进服（品牌 " + brand
+                    + "），当前没有云游戏会话，忽略");
+            return;
+        }
+        boolean fromCloud = isCloudAddress(s, ip);
+        LOG.info("[进服审计] 玩家 " + playerName + "（会话 " + s.sessionId + "，云机 " + s.clientId
+                + "）来源 " + ip + " 品牌 " + (brand.isEmpty() ? "未知" : brand)
+                + " → " + (fromCloud ? "云游戏客户端" : "非云机来源（回环/玩家本机），不判进服"));
+        if (!fromCloud) {
+            return;
+        }
+        markJoined(s, playerName, ip, brand, "事件");
+    }
+
+    /** 玩家退出：只做审计与记录，会话收尾仍然交给「游戏进程已停」那条硬判据。 */
+    public void onPlayerQuit(String playerName, String rawAddress) {
+        String ip = normalizeIp(rawAddress);
+        brands.remove(playerName);
         for (Session s : sessions.values()) {
-            if (Session.STATE_ENDED.equals(s.state) || s.player == null || s.player.isEmpty()) {
-                continue;
-            }
-            if (Session.STAGE_SCREEN.equals(s.stage)) {
-                continue;
-            }
-            Player p = Bukkit.getPlayerExact(s.player);
-            if (p != null) {
-                s.stage = Session.STAGE_SCREEN;
+            if (s.joined && s.joinName.equals(playerName) && sameHost(s.joinIp, ip)) {
+                s.leftAt = System.currentTimeMillis();
+                LOG.info("[进服审计] 玩家 " + playerName + " 离开服务器（会话 " + s.sessionId
+                        + "，在服 " + ((s.leftAt - s.joinedAt) / 1000) + " 秒）");
+                return;
             }
         }
+    }
+
+    /** 客户端品牌（{@code MC|Brand}）只进日志，不参与任何判定。 */
+    public void noteBrand(String playerName, String brand) {
+        if (playerName == null || brand == null || brand.isEmpty()) {
+            return;
+        }
+        brands.put(playerName, brand);
+        for (Session s : sessions.values()) {
+            if (s.joined && s.joinName.equals(playerName)) {
+                s.joinBrand = brand;
+                LOG.info("[进服审计] 会话 " + s.sessionId + " 玩家 " + playerName
+                        + " 的客户端品牌：" + brand);
+                return;
+            }
+        }
+    }
+
+    /** 已记录的品牌（进服事件早于品牌包时，用它补上审计字段）。 */
+    public String brandOf(String playerName) {
+        String v = playerName == null ? null : brands.get(playerName);
+        return v == null ? "" : v;
+    }
+
+    /** 阶段 4：页面确认画面真的载入过（{@code POST /cloud/session/screen}）。 */
+    public AjaxResult screen(String sessionId) {
+        Session s = sessionId == null ? null : sessions.get(sessionId);
+        if (s == null) {
+            return AjaxResult.success("会话不存在", null);
+        }
+        if (!s.joined) {
+            return AjaxResult.error("玩家还没进服，画面阶段暂不确认");
+        }
+        if (!Session.STAGE_SCREEN.equals(s.stage)) {
+            s.stage = Session.STAGE_SCREEN;
+            s.screenAt = System.currentTimeMillis();
+            LOG.info("会话 " + s.sessionId + " 画面已载入（进服后 "
+                    + ((s.screenAt - s.joinedAt) / 1000) + " 秒）");
+        }
+        return AjaxResult.success("画面已就绪", null);
+    }
+
+    /** 记一次可信进服：阶段推到 join，并留时间戳给页面算揭示倒计时。 */
+    private void markJoined(Session s, String playerName, String ip, String brand, String source) {
+        if (s.joined) {
+            return;
+        }
+        s.joined = true;
+        s.joinedAt = System.currentTimeMillis();
+        s.joinName = playerName == null ? "" : playerName;
+        s.joinIp = ip == null ? "" : ip;
+        s.joinBrand = brand == null ? "" : brand;
+        if (!Session.STAGE_SCREEN.equals(s.stage)) {
+            s.stage = Session.STAGE_JOIN;
+        }
+        LOG.info("会话 " + s.sessionId + " 玩家已进服（" + source + "，云机 " + s.clientId
+                + "，来源 " + s.joinIp + "），" + minHoldSeconds() + " 秒后交由页面揭示画面");
+    }
+
+    /**
+     * 主线程兜底巡检：事件漏掉（插件中途启用、会话从代理恢复）时，用在线玩家表补一次。
+     * <p>规则与事件路径完全一致：只有来源等于该会话云机 IP 才算数，回环永远不算。</p>
+     */
+    private void scanJoins() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            String ip = normalizeIp(p.getAddress() == null || p.getAddress().getAddress() == null
+                    ? "" : p.getAddress().getAddress().getHostAddress());
+            Session s = matchSession(p.getName(), ip);
+            if (s == null || s.joined || !isCloudAddress(s, ip)) {
+                continue;
+            }
+            LOG.info("[进服审计] 巡检补记：" + p.getName() + " 来源 " + ip
+                    + " 与会话 " + s.sessionId + " 的云机地址一致");
+            markJoined(s, p.getName(), ip, brandOf(p.getName()), "巡检");
+        }
+    }
+
+    /**
+     * 找到这次进服属于哪个会话：先按来源 IP 与会话云机地址配对，再按会话玩家名配对。
+     * <p>返回 null 表示与本插件无关的普通进服。</p>
+     */
+    private Session matchSession(String playerName, String ip) {
+        for (Session s : sessions.values()) {
+            if (Session.STATE_ENDED.equals(s.state)) {
+                continue;
+            }
+            String cloudIp = clientIpOf(s);
+            if (!cloudIp.isEmpty() && !isLoopback(ip) && sameHost(cloudIp, ip)) {
+                return s;
+            }
+        }
+        for (Session s : sessions.values()) {
+            if (Session.STATE_ENDED.equals(s.state)) {
+                continue;
+            }
+            if (s.player != null && !s.player.isEmpty() && s.player.equalsIgnoreCase(playerName)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    /** 这次进服的地址是否就是该会话那台云机的地址（回环一律否）。 */
+    private boolean isCloudAddress(Session s, String ip) {
+        String cloudIp = clientIpOf(s);
+        return !cloudIp.isEmpty() && !isLoopback(ip) && sameHost(cloudIp, ip);
+    }
+
+    private String clientIpOf(Session s) {
+        CloudClient c = findClient(s.clientId);
+        return c == null ? "" : normalizeIp(c.getIp());
+    }
+
+    /** 归一化地址：去掉 {@code /}、端口与 IPv6 方括号，IPv4 映射地址折回 IPv4。 */
+    static String normalizeIp(String raw) {
+        String v = raw == null ? "" : raw.trim();
+        if (v.isEmpty()) {
+            return "";
+        }
+        if (v.startsWith("/")) {
+            v = v.substring(1);
+        }
+        int pct = v.indexOf('%');
+        if (pct > 0) {
+            v = v.substring(0, pct);
+        }
+        if (v.startsWith("[") && v.contains("]")) {
+            v = v.substring(1, v.indexOf(']'));
+        } else if (v.indexOf(':') == v.lastIndexOf(':') && v.contains(":")) {
+            // host:port（IPv4 只有一个冒号）
+            v = v.substring(0, v.indexOf(':'));
+        }
+        String lower = v.toLowerCase(java.util.Locale.ROOT);
+        if ("::1".equals(lower) || "0:0:0:0:0:0:0:1".equals(lower)) {
+            return "127.0.0.1";
+        }
+        if (lower.startsWith("::ffff:")) {
+            v = v.substring(7);
+        }
+        return v;
+    }
+
+    private static boolean isLoopback(String ip) {
+        String v = normalizeIp(ip);
+        return v.isEmpty() || "127.0.0.1".equals(v) || v.startsWith("127.");
+    }
+
+    private static boolean sameHost(String a, String b) {
+        String x = normalizeIp(a);
+        String y = normalizeIp(b);
+        return !x.isEmpty() && x.equalsIgnoreCase(y);
     }
 
     /**
@@ -809,10 +1011,13 @@ public final class CloudPlayService {
             if (st != null && !st.isEmpty()) {
                 s.gameState = st;
             }
-            // 进程起来了（starting/running）才算"起 JVM"过了；unknown/stopped 继续等，不谎报
-            if (gameUp(s.gameState)
-                    && (Session.STAGE_WORKSPACE.equals(s.stage) || Session.STAGE_JVM.equals(s.stage))) {
-                s.stage = Session.STAGE_JOIN;
+            // 进程起来（starting/running）只说明「JVM 起来了」，不代表玩家进了服务器。
+            // 阶段 3（join）必须由 PlayerJoinEvent 的 IP 判定推进，这里最多推进到 jvm。
+            if (gameUp(s.gameState) && Session.STAGE_WORKSPACE.equals(s.stage)) {
+                s.stage = Session.STAGE_JVM;
+            }
+            if (gameUp(s.gameState) && s.armAt == 0) {
+                s.armAt = now; // 启动兜底从「进程真的起来」开始计时，而不是从点进页面开始
             }
         } catch (Throwable t) {
             LOG.log(Level.FINE, "会话状态查询失败 " + s.sessionId + ": " + t.getMessage());
@@ -880,6 +1085,43 @@ public final class CloudPlayService {
         // 必须大于心跳间隔，否则一次抖动就误杀
         int min = heartbeatIntervalSeconds() * 2;
         return v < min ? min : v;
+    }
+
+    /**
+     * 启动兜底（秒）：游戏进程起来之后，最多等这么久还没看到「云机进服」。
+     * <p>实测进服 15–120 秒，180 秒是留足余量的兜底；超时就结束会话释放机器，
+     * 避免一台跑着没人玩的 Windows 桌面把槽位占死。</p>
+     */
+    public int startupTimeoutSeconds() {
+        int v = 180;
+        try {
+            v = plugin.getConfig().getInt("cloud.reveal.startup-timeout-seconds", 180);
+        } catch (Throwable ignored) {
+        }
+        return v < 30 ? 30 : (v > 900 ? 900 : v);
+    }
+
+    /**
+     * 进服窗口（秒）：玩家已进服后，再给页面这么久来上报「画面已载入」。
+     * <p>超时就按进服判定把阶段推进到 screen——玩家已经在游戏里了，没理由让他继续盯遮罩。</p>
+     */
+    public int joinWindowSeconds() {
+        int v = 30;
+        try {
+            v = plugin.getConfig().getInt("cloud.reveal.join-window-seconds", 30);
+        } catch (Throwable ignored) {
+        }
+        return v < 5 ? 5 : (v > 300 ? 300 : v);
+    }
+
+    /** 揭幕下限（秒）：进服后页面至少再压这么久才揭开遮罩，避免画面闪一下又黑屏。 */
+    public int minHoldSeconds() {
+        int v = 15;
+        try {
+            v = plugin.getConfig().getInt("cloud.reveal.min-hold-seconds", 15);
+        } catch (Throwable ignored) {
+        }
+        return v < 0 ? 0 : (v > 120 ? 120 : v);
     }
 
     /** 期望的云游戏客户端版本（prepare 时发给代理做比对，空 = 不比对）。 */
@@ -1038,7 +1280,6 @@ public final class CloudPlayService {
         public static final String STAGE_JOIN = "join";
         /** 阶段：玩家已进服（画面由包装页自己确认）。 */
         public static final String STAGE_SCREEN = "screen";
-
         private String sessionId;
         private String clientId;
         private String player;
@@ -1059,6 +1300,36 @@ public final class CloudPlayService {
         private boolean heartbeatSeen;
         /** 该会话是插件重启后从代理 /health 恢复出来的。 */
         private boolean restored;
+        /** 是否已确认「玩家真的进了本服」（只由来源 IP 判定，名字不算数）。 */
+        private boolean joined;
+        /** 确认进服的时刻；0 = 还没进服。 */
+        private long joinedAt;
+        /** 进服时用的名字 / 来源地址 / 客户端品牌（审计用）。 */
+        private String joinName = "";
+        private String joinIp = "";
+        private String joinBrand = "";
+        /** 第一次观察到游戏进程起来的时刻：启动兜底从这里开始计时。 */
+        private long armAt;
+        /** 页面回执「画面已载入」的时刻。 */
+        private long screenAt;
+        /** 玩家离开服务器的时刻（只做审计，会话收尾仍看进程状态）。 */
+        private long leftAt;
+
+        public boolean isJoined() {
+            return joined;
+        }
+
+        public long getJoinedAt() {
+            return joinedAt;
+        }
+
+        public String getJoinIp() {
+            return joinIp;
+        }
+
+        public String getJoinBrand() {
+            return joinBrand;
+        }
 
         public String getSessionId() {
             return sessionId;

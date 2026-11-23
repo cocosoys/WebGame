@@ -67,6 +67,17 @@ cloud:
     tick-min-seconds: 3
     tick-max-seconds: 7
     cap-percent: 99
+  # 揭开画面的判定（以服务器侧真实信号为准，不靠时间猜）：
+  #   阶段 3「连服务器」= 有一条进服事件，且来源 IP 等于该会话云机的 ip；
+  #   eagler（WS 隧道，永远回环 127.0.0.1）与玩家自己电脑上的客户端都不会被判成云机进服；
+  #   玩家名只做审计，冒名不算数。
+  reveal:
+    # 启动兜底（秒）：游戏进程起来后还看不到「云机进服」，超时就结束会话释放机器。
+    startup-timeout-seconds: 180
+    # 进服窗口（秒）：玩家已进服后，再给页面这么久上报「画面已载入」；超时按进服判定推进。
+    join-window-seconds: 30
+    # 揭幕下限（秒）：进服后页面至少再压这么久才揭开遮罩，避免画面闪一下又黑屏。
+    min-hold-seconds: 15
   # 云游戏客户端包更新：zip 放 plugins/WebGame/packages/ 下，由 WebGame 托管下载；
   # WebGame 只在 prepare 时把 version 发给云主机代理，代理比对本地版本，不一致才去下载解包。
   # 代理从不主动更新——版本号是唯一的触发器；ERP 的「下发更新」是同一链路的主动版。

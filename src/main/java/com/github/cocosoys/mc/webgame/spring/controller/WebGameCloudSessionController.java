@@ -69,6 +69,17 @@ public class WebGameCloudSessionController {
     }
 
     /**
+     * 画面回执：包装页在 iframe 真的载入后打一次，把阶段 4 落到服务端。
+     * <p>只认已经「可信进服」的会话；没进服就来说画面好了属于谎报，直接拒。</p>
+     */
+    @ApiName("云游戏画面就绪回执")
+    @PostMapping("/screen")
+    public AjaxResult screen(@RequestBody Map<String, Object> body) {
+        Map<String, Object> payload = body == null ? new LinkedHashMap<>() : body;
+        return playService.screen(str(payload.get("sessionId")));
+    }
+
+    /**
      * 浏览器心跳：包装页每 10 秒打一次；玩家关掉标签页后停止发送，
      * 服务端超过阈值（{@code cloud.heartbeat.timeout-seconds}）收不到就按同一套收尾释放槽位。
      */
