@@ -45,6 +45,12 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     /** 分块大小：512KB（base64 后约 683KB，规避网关请求体上限）。 */
     public static final int CHUNK_SIZE = 512 * 1024;
     private static final String INDEX_FILE = "index.html";
+    /**
+     * 内置版本随 index.html 一起释放的旁挂资源（同名同目录）。
+     * <p>内置客户端页用 {@code <script src="eagler-bootstrap.js" defer>} 引用它；只释放 index.html
+     * 会让该请求 404，浏览器侧（?user= 记忆名自动进服、倒计时跳过）就整段失效。</p>
+     */
+    private static final String[] BUILTIN_SIDECARS = {"eagler-bootstrap.js"};
     private static final String META_FILE = "eagler-clients.yml";
     private static final String CLIENTS_DIR = "eagler-clients";
     private static final String UPLOAD_DIR = ".upload";
@@ -577,16 +583,30 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     private void ensureBuiltin() {
         File dir = new File(clientsDir, ClientVersion.BUILTIN_ID);
         File index = new File(dir, INDEX_FILE);
-        if (index.isFile()) {
-            return;
+        if (!index.isFile()) {
+            ensureDir(dir);
+            try {
+                plugin.saveResource(CLIENTS_DIR + "/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE, false);
+                LOG.info("已释放内置客户端到 " + index.getPath());
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "释放内置客户端失败（jar 内缺少 " + CLIENTS_DIR + "/"
+                        + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE + "）: " + t);
+            }
         }
-        ensureDir(dir);
-        try {
-            plugin.saveResource(CLIENTS_DIR + "/" + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE, false);
-            LOG.info("已释放内置客户端到 " + index.getPath());
-        } catch (Throwable t) {
-            LOG.log(Level.WARNING, "释放内置客户端失败（jar 内缺少 " + CLIENTS_DIR + "/"
-                    + ClientVersion.BUILTIN_ID + "/" + INDEX_FILE + "）: " + t);
+        // 旁挂资源单独判定：index.html 可能已存在（例如老版本只释放了它），旁挂仍要补齐
+        for (String name : BUILTIN_SIDECARS) {
+            File f = new File(dir, name);
+            if (f.isFile()) {
+                continue;
+            }
+            ensureDir(dir);
+            try {
+                plugin.saveResource(CLIENTS_DIR + "/" + ClientVersion.BUILTIN_ID + "/" + name, false);
+                LOG.info("已释放内置客户端资源到 " + f.getPath());
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "释放内置客户端资源失败（jar 内缺少 " + CLIENTS_DIR + "/"
+                        + ClientVersion.BUILTIN_ID + "/" + name + "）: " + t);
+            }
         }
     }
 

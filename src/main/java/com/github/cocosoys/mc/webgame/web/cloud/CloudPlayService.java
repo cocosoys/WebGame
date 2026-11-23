@@ -65,6 +65,16 @@ public final class CloudPlayService {
     private final Map<String, Long> lastUsed = new ConcurrentHashMap<>();
     /** 玩家名 → 最近一次上报的 MC|Brand（只用于日志审计，不参与判定）。 */
     private final Map<String, String> brands = new ConcurrentHashMap<>();
+    /**
+     * 「唯一入口」入场票据：ticket → 签发时刻。
+     *
+     * <p>价值不在"防伪造"（票据随页面下发，本身就是页面能力），而在于
+     * <b>把"选哪台机器"从浏览器手里收回服务端</b>：页面只带票据，不暴露任何客户端的
+     * cloud-key；服务层按序挑一台在线空闲的机器，用该机器自己的密钥去调代理。</p>
+     */
+    private final Map<String, Long> entryTickets = new ConcurrentHashMap<>();
+    /** 票据有效期（毫秒）：页面从加载到点"进入"通常几秒，留 3 分钟足够重试。 */
+    private static final long ENTRY_TICKET_TTL_MS = 180_000L;
     private volatile BukkitTask watchdog;
     /** 主线程巡检：玩家名在本服上线 = "连服务器"阶段真的过了。 */
     private volatile BukkitTask stageTask;
@@ -100,9 +110,38 @@ public final class CloudPlayService {
      * @param pool  池名（{@code /cloud/pool/<池>}）；非空时忽略 clientId，由服务端挑一台空闲机器
      */
     public AjaxResult start(String clientId, String player, String token, String alias, String pool) {
+        return start(clientId, player, token, alias, pool, "");
+    }
+
+    /**
+     * 开始一次会话（门牌别名 + 池 + 唯一入口票据）。
+     *
+     * @param alias  玩家进来的门牌（{@code /cloud/<alias>}）；空串 = 内部命名空间路径
+     * @param pool   池名（{@code /cloud/pool/<池>}）；非空时忽略 clientId，由服务端挑一台空闲机器
+     * @param ticket 唯一入口票据（{@code /cloud/auto/} 下发）；非空时忽略 clientId/alias/pool，
+     *               由服务端在"在线 + 空闲"的机器里按排序挑一台，并用该机自己的密钥调代理
+     */
+    public AjaxResult start(String clientId, String player, String token, String alias, String pool,
+                            String ticket) {
         String name = player == null ? "" : player.trim();
         if (!PLAYER_RE.matcher(name).matches()) {
             return AjaxResult.error("游戏名称不合法：3–16 位字母/数字/下划线");
+        }
+        String tk = ticket == null ? "" : ticket.trim();
+        boolean byTicket = !tk.isEmpty();
+        if (byTicket) {
+            if (!validEntryTicket(tk)) {
+                return AjaxResult.error("入场票据已过期，请刷新入口页重试");
+            }
+            CloudClient picked = pickAuto();
+            if (picked == null) {
+                return AjaxResult.error("当前没有在线且空闲的云主机，请稍后再试");
+            }
+            // 票据模式下"客户端"由服务端决定：下游所有校验以挑中的机器为准
+            clientId = picked.getId();
+            token = picked.getCloudKey();
+            alias = "";
+            pool = "";
         }
         String key = token == null ? "" : token.trim();
         if (key.isEmpty()) {
@@ -197,6 +236,7 @@ public final class CloudPlayService {
         s.state = Session.STATE_PREPARING;
         s.stage = Session.STAGE_WORKSPACE;
         s.pool = wantPool;
+        s.liveSeg = randomSeg();
         s.createdAt = System.currentTimeMillis();
         s.lastHeartbeatAt = s.createdAt;
         sessions.put(sessionId, s);
@@ -233,10 +273,11 @@ public final class CloudPlayService {
             // 启动兜底从 game/start 已发出开始计时：即使代理一直报 unknown，
             // 也不能让会话无限期占着机器（后来真的 running 时不会再覆盖它）
             s.armAt = s.lastPollAt;
-            // 开闸：直播前缀只在会话期存在；开不出来就别把玩家放进包装页
+            // 开闸：只注册本会话专属的随机前缀；开不出来就别把玩家放进包装页
             boolean opened = true;
             try {
-                opened = plugin.getCloudClientPages() != null && plugin.getCloudClientPages().openLive(c.getId());
+                opened = plugin.getCloudClientPages() != null
+                        && plugin.getCloudClientPages().openLive(c.getId(), s.liveSeg);
             } catch (Throwable t) {
                 LOG.log(Level.WARNING, "开闸失败 " + s.sessionId + ": " + t);
                 opened = false;
@@ -251,11 +292,11 @@ public final class CloudPlayService {
             data.put("clientName", c.getName());
             data.put("player", name);
             data.put("pool", wantPool);
-            // 池入口的包装页停在池名上：/cloud/pool/<池>/play/?s=…
-            data.put("playUrl", byPool
-                    ? poolPlayUrl(wantPool, sessionId)
-                    : playUrl(c.getId(), sessionId, gate));
-            data.put("liveUrl", liveUrl(c.getId(), key, gate));
+            // 唯一入口的包装页停在 /cloud/auto/play/ 上；池入口停在池名上
+            data.put("playUrl", byTicket
+                    ? autoPlayUrl(sessionId)
+                    : (byPool ? poolPlayUrl(wantPool, sessionId) : playUrl(c.getId(), sessionId, gate)));
+            data.put("liveUrl", liveUrlOf(s));
             return AjaxResult.success("云游戏会话已开始", data);
         } catch (Throwable t) {
             slots.remove(c.getId(), sessionId);
@@ -439,6 +480,11 @@ public final class CloudPlayService {
         data.put("revealInMs", s.joined
                 ? Math.max(0L, s.joinedAt + hold - System.currentTimeMillis())
                 : -1L);
+        // 画面地址只给"正在跑"的会话：页面拿到后才设 iframe src（地址含会话专属随机段，
+        // 令牌在片段里；拿不到就保持空白，不会退化成任何人都能打开的固定地址）
+        if (Session.STATE_RUNNING.equals(s.state)) {
+            data.put("liveUrl", liveUrlOf(s));
+        }
         return AjaxResult.success(msg, data);
     }
 
@@ -521,6 +567,16 @@ public final class CloudPlayService {
     /** 某客户端是否正被占用（ERP/选择页展示用）。 */
     public boolean isBusy(String clientId) {
         return slots.containsKey(clientId);
+    }
+
+    /**
+     * 当前会话快照（含已结束但还没被清理的记录）。
+     *
+     * <p>ERP 的「会话监控」直接合并这份数据，不再依赖页面心跳表：云游戏会话的真相
+     * 只有这里一处（槽位、阶段、进服判定都在本对象里）。</p>
+     */
+    public List<Session> snapshotSessions() {
+        return new ArrayList<>(sessions.values());
     }
 
     // ===== 内部 =====
@@ -628,6 +684,7 @@ public final class CloudPlayService {
                 s.stage = gameUp(gameState) ? Session.STAGE_JVM : Session.STAGE_WORKSPACE;
                 s.armAt = gameUp(gameState) ? System.currentTimeMillis() : 0L;
                 s.pool = c.getPool();
+                s.liveSeg = randomSeg();
                 s.createdAt = System.currentTimeMillis();
                 s.lastHeartbeatAt = s.createdAt;
                 s.heartbeatSeen = false; // 页面还没连上来，先不按心跳计时
@@ -636,7 +693,7 @@ public final class CloudPlayService {
                 slots.put(c.getId(), active);
                 if (plugin.getCloudClientPages() != null) {
                     try {
-                        plugin.getCloudClientPages().openLive(c.getId());
+                        plugin.getCloudClientPages().openLive(c.getId(), s.liveSeg);
                     } catch (Throwable t) {
                         LOG.log(Level.FINE, "启动对齐开闸失败 " + c.getId() + ": " + t.getMessage());
                     }
@@ -948,6 +1005,73 @@ public final class CloudPlayService {
         return sb.toString();
     }
 
+    /**
+     * 唯一入口选机：不限池、不限口令，在"启用 + 有地址 + 没离线/降级/密钥被拒 + 空闲 + 不在更新"
+     * 的机器里按 {@code cloud.pool.strategy} 挑一台。
+     *
+     * <p>与 {@link #pickPool} 的差别只有一条：池是"玩家已经声明了哪组机器"，唯一入口是
+     * "整个集群里随便给一台"。因此这里不比较令牌——挑中之后用该机自己的 cloud-key 调代理，
+     * 浏览器永远拿不到设备的密钥。</p>
+     */
+    private CloudClient pickAuto() {
+        List<CloudClient> candidates = new ArrayList<>();
+        for (CloudClient c : clients.versions()) {
+            if (!c.isEnabled() || c.isMissing() || !CloudClient.isUrl(c.getPath())) {
+                continue;
+            }
+            if (c.getIp().isEmpty() || c.getPort() <= 0 || c.getCloudKey().isEmpty()) {
+                continue;
+            }
+            String status = c.getStatus();
+            if (CloudClient.STATUS_OFFLINE.equals(status)
+                    || CloudClient.STATUS_DEGRADED.equals(status)
+                    || CloudClient.STATUS_UNAUTHORIZED.equals(status)) {
+                continue;
+            }
+            if (slots.containsKey(c.getId()) || updatingClients.containsKey(c.getId())) {
+                continue;
+            }
+            candidates.add(c);
+        }
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        if ("recent".equals(poolStrategy())) {
+            candidates.sort((a, b) -> {
+                int cmp = Long.compare(lastUsedOf(a.getId()), lastUsedOf(b.getId()));
+                return cmp != 0 ? cmp : orderOf(a, b);
+            });
+        } else if ("latency".equals(poolStrategy())) {
+            candidates.sort((a, b) -> {
+                int cmp = Long.compare(latencyOf(a), latencyOf(b));
+                return cmp != 0 ? cmp : orderOf(a, b);
+            });
+        } else {
+            candidates.sort(this::orderOf);
+        }
+        return candidates.get(0);
+    }
+
+    /** 签发一张唯一入口票据：180 秒有效、只可消费一次（重放无效）。 */
+    public String mintEntryTicket() {
+        pruneEntryTickets();
+        String t = "t-" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+        entryTickets.put(t, System.currentTimeMillis());
+        return t;
+    }
+
+    /** 校验并<b>消费</b>一张唯一入口票据：票据只能用一次（用掉即作废，重放无效）。 */
+    private boolean validEntryTicket(String ticket) {
+        pruneEntryTickets();
+        Long at = entryTickets.remove(ticket);
+        return at != null && System.currentTimeMillis() - at <= ENTRY_TICKET_TTL_MS;
+    }
+
+    private void pruneEntryTickets() {
+        long now = System.currentTimeMillis();
+        entryTickets.entrySet().removeIf(e -> now - e.getValue() > ENTRY_TICKET_TTL_MS);
+    }
+
     /** 未上报延迟的机器排最后（0 不是"最快"，是"不知道"）。 */
     private static long latencyOf(CloudClient c) {
         long v = c.getLatencyMs();
@@ -1161,14 +1285,54 @@ public final class CloudPlayService {
         return base + "/play/?s=" + sessionId;
     }
 
-    private String liveUrl(String clientId, String key, String alias) {
-        String base = alias == null || alias.isEmpty()
-                ? WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/" + clientId
-                : "/cloud/" + alias;
+    /** 唯一入口包装页地址：{@code /cloud/auto/play/?s=<会话>}（地址栏停在"自动匹配"上）。 */
+    private static String autoPlayUrl(String sessionId) {
+        return "/cloud/auto/play/?s=" + sessionId;
+    }
+
+    /** 会话专属随机段（直播前缀里的一段，猜测成本从"知道有会话"变成"知道这一次的 20 位随机值"）。 */
+    private static String randomSeg() {
+        return UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+    }
+
+    /**
+     * 会话的直播地址：{@code /web/plugins/WebGame/cloud/<id>/live/<seg>/#token=<t>}。
+     *
+     * <p>令牌放在 URL 片段里：片段不会被浏览器发到服务端，不进 SOYS 转播日志/访问日志，
+     * 也不随 Referer 外泄；selkies 前端本身就从 {@code location.hash} 读它。</p>
+     * <p>只在同端口转播可用、且会话带有随机段时返回；关掉转播则退回设备直连地址
+     * （直接连设备时片段同样有效）。</p>
+     */
+    private String liveUrlOf(Session s) {
+        CloudClient c = findClient(s.clientId);
+        if (c == null) {
+            return "";
+        }
+        String key = c.getCloudKey() == null ? "" : c.getCloudKey();
+        boolean relay = true;
         try {
-            return base + "/live/?token=" + URLEncoder.encode(key, "UTF-8");
+            relay = plugin.getConfig().getBoolean("cloud.same-port-relay", true);
+        } catch (Throwable ignored) {
+        }
+        if (relay && !s.liveSeg.isEmpty() && plugin.getCloudClientPages() != null) {
+            return appendToken(plugin.getCloudClientPages().livePathOf(s.clientId, s.liveSeg), key);
+        }
+        String base = c.getPath() == null ? "" : c.getPath().trim();
+        if (base.isEmpty() || !CloudClient.isUrl(base)) {
+            return "";
+        }
+        return appendToken(base, key);
+    }
+
+    /** 补 {@code #token=}；已经是带片段的地址就不重复追加。 */
+    private static String appendToken(String url, String token) {
+        if (url == null || url.isEmpty() || token == null || token.isEmpty() || url.contains("token=")) {
+            return url;
+        }
+        try {
+            return url + "#token=" + URLEncoder.encode(token, "UTF-8");
         } catch (Throwable t) {
-            return base + "/live/";
+            return url;
         }
     }
 
@@ -1290,6 +1454,8 @@ public final class CloudPlayService {
         private String stage = STAGE_WORKSPACE;
         /** 该会话是从哪个池挑出来的（空 = 直接指定机器）。 */
         private String pool = "";
+        /** 本会话专属的直播前缀随机段（{@code /cloud/<id>/live/<seg>/}）；空 = 未经同端口转播。 */
+        private String liveSeg = "";
         private String gameState = "";
         private String endReason = "";
         private long createdAt;
@@ -1337,6 +1503,21 @@ public final class CloudPlayService {
 
         public String getClientId() {
             return clientId;
+        }
+
+        /** 阶段（workspace/jvm/join/screen）；ERP 会话列表按它显示进度。 */
+        public String getStage() {
+            return stage;
+        }
+
+        /** 会话从哪个池挑出来的（空 = 直接指定机器）。 */
+        public String getPool() {
+            return pool == null ? "" : pool;
+        }
+
+        /** 是否已确认玩家真的进服（来源 IP 判定）。 */
+        public boolean isJoinedConfirmed() {
+            return joined;
         }
 
         public String getPlayer() {

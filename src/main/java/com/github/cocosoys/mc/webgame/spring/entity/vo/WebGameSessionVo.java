@@ -21,8 +21,10 @@ public class WebGameSessionVo {
     private String clientName;
     /** EaglerX 协商后的客户端协议版本（3/4，未协商为 0）。 */
     private int protocolVersion;
-    /** 是否已进入游戏（PLAY 阶段）。 */
+    /** 是否已进入游戏（PLAY 阶段 / 云游戏会话"已确认进服"）。 */
     private boolean playing;
+    /** 云游戏会话阶段（workspace/jvm/join/screen；eagler 会话为空）。 */
+    private String stage;
     /** 连接建立时间（epoch millis）。 */
     private long connectedAt;
     /** 已保持连接秒数。 */
@@ -98,6 +100,14 @@ public class WebGameSessionVo {
 
     public void setPlaying(boolean playing) {
         this.playing = playing;
+    }
+
+    public String getStage() {
+        return stage;
+    }
+
+    public void setStage(String stage) {
+        this.stage = stage;
     }
 
     public long getConnectedAt() {

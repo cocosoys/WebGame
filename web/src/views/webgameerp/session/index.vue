@@ -50,7 +50,16 @@
       <el-table-column label="状态" align="center" width="100">
         <template slot-scope="scope">
           <el-tag v-if="scope.row.playing" type="success" size="mini">游戏中</el-tag>
+          <el-tag v-else-if="scope.row.clientType === 'cloud'" type="warning" size="mini">启动中</el-tag>
           <el-tag v-else type="info" size="mini">握手中</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="阶段" align="center" width="110">
+        <template slot-scope="scope">
+          <span v-if="scope.row.clientType === 'cloud'">
+            {{ stageText(scope.row.stage, scope.row.playing) }}
+          </span>
+          <span v-else style="color: #909399">—</span>
         </template>
       </el-table-column>
       <el-table-column label="连接时间" align="center" width="170">
@@ -122,10 +131,15 @@ export default {
       const h = Math.floor(m / 60)
       return h + ' 小时 ' + (m % 60) + ' 分'
     },
+    stageText(stage, playing) {
+      if (playing) return '画面就绪'
+      const map = { workspace: '分配工作区', jvm: '起 JVM', join: '等待进服', screen: '画面就绪' }
+      return map[stage] || (stage || '—')
+    },
     handleKick(row) {
       const who = row.username || row.sessionId
       const tip = row.clientType === 'cloud'
-        ? '该操作会移除其云游戏会话记录。'
+        ? '该操作会结束云游戏会话：关闭直播通道、让云机收尾并释放槽位。'
         : '该操作会立即断开其游戏连接。'
       this.$confirm(
         `确认将 ${who} 强制踢出？${tip}`,

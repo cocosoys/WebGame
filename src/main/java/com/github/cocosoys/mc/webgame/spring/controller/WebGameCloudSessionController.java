@@ -20,11 +20,19 @@ import java.util.Map;
  * <p>{@code POST /cloud/session/start}、{@code GET /cloud/session/status}、
  * {@code POST /cloud/session/end}。与 {@code /cloud/report} 一样需要
  * {@code @Anonymous}（浏览器玩家没有 SOYS 登录态）+ {@code @ApiPublic}（走自带令牌校验，
- * 不用 Bukkit 权限镜像）。令牌与客户端的 cloud-stream {@code auth_token} 严格比对。</p>
+ * 不用 Bukkit 权限镜像）。</p>
+ *
+ * <p><b>鉴权口径（没有 identityMode）</b>：这三个端点只认两类凭证——</p>
+ * <ul>
+ *   <li><b>设备令牌</b>：与客户端 cloud-stream {@code auth_token} 严格比对（指定机器/池入口用）；</li>
+ *   <li><b>入场票据</b>：{@code /cloud/auto/} 页面签发的 180 秒<b>一次性</b>随机票据，由服务端自己挑机器，
+ *       浏览器拿不到任何设备的密钥（唯一入口用）。</li>
+ * </ul>
+ * <p>历史上这里有一个"identity=free/verified 透传占位"，但页面是匿名的，没有任何可验证的身份源，
+ * 占位只会让人误以为有实名开关。已移除：真正的实名/登录态要接 SOYS auth，接之前不做半套。</p>
  *
  * <p><b>为什么"未填游戏名"必须在服务端拒</b>：入口页的前端校验只是体验，绕过它成本极低
- * （改 URL、直接 POST）。服务端拒绝才是真正的门——同时这也是将来接"实名/登录身份"
- * 的唯一收口点（见 {@code identityMode} 预留）。</p>
+ * （改 URL、直接 POST）。服务端拒绝才是真正的门。</p>
  */
 @Anonymous
 @ApiPublic
@@ -37,7 +45,7 @@ public class WebGameCloudSessionController {
         this.playService = playService;
     }
 
-    /** 开始会话：需要 clientId + 玩家名 + 令牌。 */
+    /** 开始会话：指定机器（clientId+token）/ 门牌（alias）/ 池（pool）/ 唯一入口（ticket），四种入口四选一。 */
     @ApiName("开始云游戏会话")
     @PostMapping("/start")
     public AjaxResult start(@RequestBody Map<String, Object> body) {
@@ -49,8 +57,9 @@ public class WebGameCloudSessionController {
         String alias = str(payload.get("alias"));
         // pool：玩家从 /cloud/pool/<池> 进来时只报池名，具体挑哪台机器由服务端决定
         String pool = str(payload.get("pool"));
-        // identity 目前只做透传占位（free / verified），P0 一律按 free 处理
-        return playService.start(clientId, player, token, alias, pool);
+        // ticket：玩家从 /cloud/auto/（唯一入口）进来时带票据；此时 clientId/alias/pool 都被忽略
+        String ticket = str(payload.get("ticket"));
+        return playService.start(clientId, player, token, alias, pool, ticket);
     }
 
     /** 会话状态：包装页靠它判断何时跳回选择页。 */

@@ -50,9 +50,15 @@ public final class CloudClientPages {
     private static final int ALIAS_MAX_LEN = 24;
     /** 别名保留字：与我们的固定子路径/常用入口冲突。 */
     private static final java.util.Set<String> ALIAS_RESERVED = new java.util.HashSet<>(java.util.Arrays.asList(
-            "session", "live", "play", "index", "index.html", "favicon.ico", "pool", ".", ".."));
+            "session", "live", "play", "index", "index.html", "favicon.ico", "pool", "auto", ".", ".."));
     /** 池入口前缀：{@code /cloud/pool/<池名>}。<code>pool</code> 因此被列为别名保留字。 */
     private static final String POOL_SEGMENT = "pool";
+    /**
+     * 唯一入口前缀：{@code /cloud/auto/}（{@code /cloud/} 根目录顶部也会给一张入口卡）。
+     * <p>与池入口的区别：池是管理员已经分好的一组机器，唯一入口是"整个集群里给我一台空闲的"，
+     * 且浏览器不带任何设备密钥（服务端用票据挑机）。<code>auto</code> 因此也是别名保留字。</p>
+     */
+    private static final String AUTO_SEGMENT = "auto";
 
     private final WebGame plugin;
     private final CloudClientService cloudClientService;
@@ -61,8 +67,11 @@ public final class CloudClientPages {
     private volatile SoysHttpOverMcApi api;
 
     /**
-     * 已生效的同端口转播前缀（id → {@code /web/plugins/WebGame/cloud/&lt;id&gt;/live}）。
-     * ERP 列表用它展示"同端口接入"状态；未登记成功（老 jar / 关闭开关）的条目不在其中。
+     * 已生效的同端口转播基址（id → {@code /web/plugins/WebGame/cloud/&lt;id&gt;/live}）。
+     *
+     * <p>注意这不是"能直接打开的直播地址"：真正的直播前缀是<b>每会话</b>的
+     * {@code <基址>/<seg>/}（见 {@link #livePathOf(String, String)}），没有会话时
+     * 基址上只有一张门禁页。ERP 列表用它展示"这台机器走同端口接入"，不是给玩家点的链接。</p>
      */
     private volatile java.util.Map<String, String> livePrefixes = java.util.Collections.emptyMap();
 
@@ -211,7 +220,7 @@ public final class CloudClientPages {
 
         // 默认客户端缺失时仍展示选择页（空状态），避免跳转到无效地址
         String entryHtml = (!allowSelect && !defaultId.isEmpty())
-                ? buildRedirectPage(withToken(defaultEntry(defaultId), keyOf(defaultId)))
+                ? buildRedirectPage(defaultEntry(defaultId))
                 : buildSelectionPage();
         registerPage(pages, PAGE_PATH, entryHtml);
         // 根路径门牌目录：/cloud 与 /cloud/ 都登记（浏览器只发其一，另一边 404 会让人以为服务坏了）
@@ -221,6 +230,9 @@ public final class CloudClientPages {
         registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), dirBytes);
         // 池入口：/cloud/pool/<池名> —— 一个名字对应多台机器，点进去由服务端挑一台空闲的
         registerPoolPages(pages, allowSelect);
+        // 唯一入口：/cloud/auto/ —— 整张短地址，玩家只填游戏名，机器由服务端挑，
+        // 浏览器手里没有（也不需要）任何设备的 cloud-key
+        registerAutoPages(pages);
         livePrefixes = live;
         aliasToClient = aliasMap;
         // 客户端更新包：目录登记 + manifest（代理按 version/sha256 决定要不要下载）
@@ -390,15 +402,22 @@ public final class CloudClientPages {
     }
 
     /**
-     * 会话开始时"开闸"：把该客户端的直播前缀注册给 SOYS upstream。
+     * 开一次会话的直播通道：只注册<b>该会话专属</b>的随机前缀
+     * {@code /web/plugins/WebGame/cloud/<id>/live/<seg>/}。
      *
-     * <p>这是防"绕开入口页"的关键一环——页面只是体验，真正的门在这里：
-     * 没有进行中的会话，前缀根本不存在，{@code /cloud/<id>/live/} 就是 404，
-     * 谁也没法凭地址直接看到（更别说操作）云主机的桌面。</p>
+     * <p>这是防"绕开入口页"的关键一环——页面只是体验，真正的门在这里：</p>
+     * <ul>
+     *   <li>没有进行中的会话，这个随机前缀根本不存在，猜测 {@code /cloud/<id>/live/} 只会拿到 403 门禁页；</li>
+     *   <li>前缀里带每会话随机的 {@code seg}，别人无法从"已知有会话"推出别人的画面地址；</li>
+     *   <li>即使拿到地址，selkies 仍要求令牌（由包装页从会话状态里取，放 URL 片段 {@code #token=}，
+     *       不进请求行、不进代理日志）。</li>
+     * </ul>
      *
+     * @param clientId 目标云机
+     * @param seg      会话专属随机段（由 {@code CloudPlayService} 生成并随会话保存）
      * @return true 表示已开闸；false 表示同端口转播不可用（老 jar / 关闭开关）
      */
-    public synchronized boolean openLive(String clientId) {
+    public synchronized boolean openLive(String clientId, String seg) {
         SoysHttpOverMcApi a = api;
         if (a == null || !relayEnabled()) {
             return false;
@@ -407,23 +426,20 @@ public final class CloudClientPages {
         if (c == null || !CloudClient.isUrl(c.getPath())) {
             return false;
         }
-        // 命名空间前缀 + 全部别名前缀一起开闸：玩家从哪块门牌进来，画面就从哪条前缀流
-        boolean ok = registerLiveUpstream(a, WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT,
-                c, clientId, liveTag(clientId));
-        for (String alias : normalizedAliases(c)) {
-            if (!isAliasOwner(alias, clientId)) {
-                continue;
-            }
-            for (String v : aliasVariants(alias)) {
-                try {
-                    registerLiveUpstream(a, ROOT_CLOUD_PATH + v + LIVE_SEGMENT, c, clientId, liveTag(clientId));
-                    ok = true;
-                } catch (Throwable t) {
-                    LOG.log(Level.FINE, "别名直播前缀注册失败 " + v + ": " + t);
-                }
-            }
+        String livePrefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT
+                + "/" + seg;
+        boolean ok = false;
+        try {
+            ok = registerLiveUpstream(a, livePrefix, c, clientId, liveTag(clientId));
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "会话直播前缀注册失败 " + livePrefix + ": " + t);
         }
         return ok;
+    }
+
+    /** 会话专属直播前缀（供会话状态里的 {@code liveUrl} 拼装）。 */
+    public String livePathOf(String clientId, String seg) {
+        return WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + clientId + LIVE_SEGMENT + "/" + seg + "/";
     }
 
     /** 会话结束时"关闸"：撤销该客户端所有前缀（命名空间 + 各别名，共用同一 tag）。 */
@@ -890,6 +906,140 @@ public final class CloudClientPages {
                 + "</script>\n</body>\n</html>\n";
     }
 
+    /**
+     * 唯一入口页登记：{@code /cloud/auto/} 与 {@code /cloud/auto/play/}。
+     *
+     * <p>根路径登记（无 {@code /plugins} 前缀），与门牌目录同一层：玩家只需要记住
+     * {@code https://<服务器>:<端口>/cloud/auto/} 一个地址。</p>
+     */
+    private void registerAutoPages(WebPageApi pages) {
+        byte[] entry = buildAutoEntryPage().getBytes(StandardCharsets.UTF_8);
+        byte[] play = buildAutoPlayPage().getBytes(StandardCharsets.UTF_8);
+        String base = ROOT_CLOUD_PATH + AUTO_SEGMENT;
+        registerProxyPage(pages, base, entry);
+        registerProxyPage(pages, base + "/", entry);
+        registerProxyPage(pages, base + PLAY_SEGMENT.substring(0, PLAY_SEGMENT.length() - 1), play);
+        registerProxyPage(pages, base + PLAY_SEGMENT, play);
+    }
+
+    /**
+     * 唯一入口页：{@code /cloud/auto/}。
+     *
+     * <p>玩家只填游戏名，机器由服务端挑（{@code pickAuto()}）。页面本身<b>不持有任何设备密钥</b>：
+     * 提交前向 {@code /cloud/entry-ticket} 要一张 180 秒票据，服务端认票挑机，再用挑中那台机器
+     * 自己的 cloud-key 去调它的代理。这样"唯一入口"不会把集群里所有机器的密钥发到浏览器。</p>
+     *
+     * <p>票据每次提交都重新取（重试更新客户端包时可能已过去几十秒），过期只会让这一次提交被拒，
+     * 玩家看到的仍是可重试的提示，不会卡死。</p>
+     */
+    private String buildAutoEntryPage() {
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>进入云游戏 · 自动匹配</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
+                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
+                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
+                + ".sub{margin:0 0 18px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
+                + ".pill{display:inline-block;margin:0 6px 6px 0;padding:2px 8px;border-radius:6px;"
+                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
+                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
+                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
+                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
+                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
+                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
+                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
+                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
+                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
+                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
+                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
+                + ".wait{margin-top:16px;display:none}\n"
+                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
+                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
+                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
+                + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
+                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
+                + ".back:hover{color:#4f8cff}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"wrap\">\n"
+                + "<h1>进入云游戏</h1>\n"
+                + "<p class=\"sub\">不用选机器：提交后在<strong>全部在线且空闲</strong>的云主机里给你挑一台。"
+                + "全部占用时会被拒，不会排队、也不会抢别人的机器。</p>\n"
+                + "<form id=\"f\" autocomplete=\"off\">\n"
+                + "<div class=\"field\">游戏名称</div>\n"
+                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
+                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
+                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
+                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
+                + "<div class=\"msg\" id=\"m\"></div>\n"
+                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配工作区…</span></p></div>\n"
+                + "</form>\n"
+                + "<a class=\"back\" href=\"" + escape(ROOT_CLOUD_PATH) + "\">← 返回门牌目录</a>\n"
+                + "</div>\n"
+                + "<script>\n"
+                + "var API=" + js(API_PREFIX) + ";\n"
+                + "var P=" + progressConfig() + ";\n"
+                + progressJs()
+                + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
+                + "var f=document.getElementById('f'),p=document.getElementById('p'),b=document.getElementById('b'),"
+                + "m=document.getElementById('m'),wait=document.getElementById('wait'),fill=document.getElementById('fill'),"
+                + "pc=document.getElementById('pc'),st=document.getElementById('st');\n"
+                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
+                + "var pr=null,attempts=0;\n"
+                + "function attempt(v){\n"
+                + "  if(!pr){pr=startProgress(fill,pc);}\n"
+                + "  // 每次都重新签票：重试可能已过去几十秒，拿旧票会被服务端当过期拒掉\n"
+                + "  fetch(API+'/cloud/entry-ticket')\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(t){\n"
+                + "    var td=(t&&t.data)||{};\n"
+                + "    if(!(t&&t.code===200&&td.ticket)){throw new Error((t&&t.msg)||'无法获取入场票据');}\n"
+                + "    return fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({player:v,ticket:td.ticket})});\n"
+                + "  })\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){\n"
+                + "    var d=(j&&j.data)||{};\n"
+                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配 '+(d.clientName||'云主机')+'，正在连接画面…';"
+                + "location.replace(d.playUrl);return;}\n"
+                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
+                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
+                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
+                + "    pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say((j&&j.msg)||'暂时没有可用的机器，请稍后重试',true);\n"
+                + "  })\n"
+                + "  .catch(function(e){pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say((e&&e.message)||'网络异常，请稍后重试',true);});\n"
+                + "}\n"
+                + "f.addEventListener('submit',function(e){\n"
+                + "  e.preventDefault();\n"
+                + "  var v=(p.value||'').trim();\n"
+                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
+                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
+                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
+                + "st.textContent='正在挑选空闲云主机…';attempt(v);\n"
+                + "});\n"
+                + "</script>\n</body>\n</html>\n";
+    }
+
+    /**
+     * 唯一入口包装页：{@code /cloud/auto/play/?s=<会话>}。
+     *
+     * <p>与池包装页同一套逻辑（{@code /cloud/pool/<池>/play/?s=}）：地址栏停在入口名上，
+     * iframe 的画面地址由会话状态下发 —— 里面带的是<b>会话专属随机段</b>，别人拿到页面地址
+     * 也猜不出直播前缀。结束/超时一律 {@code location.replace} 回入口页，不留一个可操作的桌面。</p>
+     */
+    private String buildAutoPlayPage() {
+        return buildPlayPage("自动匹配", "", "", ROOT_CLOUD_PATH,
+                "<span class=\"pill\">/cloud/auto</span>", true);
+    }
+
     /** 根路径登记（无 /plugins 前缀）；返回的 Entry 手工打 tag 以便随发布整体撤销。 */
     private WebRegistry.Entry registerProxyPage(WebPageApi pages, String path, byte[] content) {
         try {
@@ -968,11 +1118,12 @@ public final class CloudClientPages {
     }
 
     /**
-     * 给远程客户端地址补 {@code ?token=}。
+     * 给远程客户端地址补令牌，<b>放在 URL 片段</b>（{@code #token=}）而不是查询串。
      *
-     * <p>selkies 的页面与 WebSocket 会话共用同一个 token：静态资源虽然开放，但
-     * {@code /api/*}（含 {@code /api/<mode>/signaling/}）默认要求它，缺 token 时
-     * 握手直接 401，前端表现就是无限重连。地址里已经带了 token 的不重复追加。</p>
+     * <p>selkies 前端（{@code selkies-core.js}）优先从 {@code location.hash} 读 token，
+     * 读不到才看查询串；WebSocket 走 {@code selkies.token.<b64url>} 子协议。片段有三个好处：
+     * 不会被浏览器发到服务端、不进 SOYS 转播日志与访问日志、不随 Referer 泄露给第三方。
+     * （查询串形态 {@code ?token=} 会同时出现在这三个地方，是之前"令牌进 URL"问题的来源。）</p>
      */
     private static String withToken(String url, String token) {
         if (url == null || url.isEmpty() || token == null || token.isEmpty()) {
@@ -985,7 +1136,7 @@ public final class CloudClientPages {
     }
 
     /**
-     * 无条件给目标补 {@code ?token=}（不区分绝对/相对地址）。
+     * 无条件补 {@code #token=}（不区分绝对/相对地址）。
      * <p>同端口转播的跳转目标是本地相对前缀，{@link #withToken} 会因"不是 URL"而跳过它，
      * 所以此处单列一条路径。</p>
      */
@@ -994,8 +1145,7 @@ public final class CloudClientPages {
             return url;
         }
         try {
-            return url + (url.contains("?") ? "&" : "?")
-                    + "token=" + java.net.URLEncoder.encode(token, "UTF-8");
+            return url + "#token=" + java.net.URLEncoder.encode(token, "UTF-8");
         } catch (Throwable t) {
             return url;
         }
@@ -1007,8 +1157,10 @@ public final class CloudClientPages {
      * 把一条远程客户端的 {@code <livePrefix>} 前缀注册给 SOYS 的 upstream 转播。
      *
      * <p>换算规则只有一条：上游路径 = 请求路径 − 本地前缀，前缀只做剥离、不参与上游拼接。
-     * 因此浏览器在 {@code <livePrefix>/api/websockets?token=X} 上发起的 WS，
-     * 到上游就是 {@code /api/websockets?token=X}，这正是 selkies 的原始路径。</p>
+     * 因此浏览器在 {@code <livePrefix>/api/websockets} 上发起的 WS，到上游就是
+     * {@code /api/websockets}，这正是 selkies 的原始路径；令牌走 URL 片段
+     * {@code #token=}（前端自己发起请求时放 {@code Authorization} 头或
+     * {@code selkies.token.*} 子协议）。</p>
      *
      * @return true 表示注册成功（调用方应把跳转页指向本地前缀）；false 表示该 SOYS 版本
      *         不支持 upstream（老 jar），调用方退回绝对地址跳转
@@ -1098,6 +1250,12 @@ public final class CloudClientPages {
 
         StringBuilder cards = new StringBuilder(1024);
         int count = 0;
+        // 唯一入口置顶（/cloud/auto）：玩家可以不选机器，直接让服务端挑一台空闲的
+        count++;
+        cards.append("<a class=\"card card-default\" href=\"").append(ROOT_CLOUD_PATH).append(AUTO_SEGMENT).append("\">")
+                .append("<div class=\"card-head\"><span class=\"card-name\">直接进入</span>")
+                .append("<span class=\"badge\">自动匹配</span></div>")
+                .append("<div class=\"card-meta\"><span>不用选机器</span><span>/cloud/auto</span></div></a>");
         for (CloudClient c : ordered) {
             count++;
             String id = escape(c.getId());
@@ -1183,6 +1341,13 @@ public final class CloudClientPages {
     private String buildRootDirectoryPage(java.util.Map<String, String> aliasMap) {
         StringBuilder cards = new StringBuilder(1024);
         int count = 0;
+        // 唯一入口置顶：玩家只填游戏名，机器由服务端挑（不需要知道任何门牌/池名）
+        count++;
+        cards.append("<a class=\"card card-main\" href=\"").append(ROOT_CLOUD_PATH).append(AUTO_SEGMENT).append("\">")
+                .append("<div class=\"card-head\"><span class=\"card-name\">直接进入</span>")
+                .append("<span class=\"badge\">自动匹配</span></div>")
+                .append("<div class=\"card-url\">/cloud/auto</div>")
+                .append("<div class=\"card-meta\"><span>不用选机器</span><span>挑一台空闲的</span></div></a>");
         for (java.util.Map.Entry<String, String> e : aliasMap.entrySet()) {
             CloudClient c = clientOf(e.getValue());
             if (c == null || !c.isEnabled() || c.isMissing()) {
@@ -1261,6 +1426,8 @@ public final class CloudClientPages {
                 + "background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);"
                 + "transition:transform .15s ease,border-color .15s ease,background .15s ease}\n"
                 + ".card:hover{transform:translateY(-3px);border-color:#4f8cff;background:rgba(79,140,255,.12)}\n"
+                + ".card-main{border-color:rgba(79,140,255,.55);background:rgba(79,140,255,.10)}\n"
+                + ".badge{font-size:12px;padding:2px 8px;border-radius:999px;background:#4f8cff;color:#08122a}\n"
                 + ".card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}\n"
                 + ".card-name{font-size:17px;font-weight:600}\n"
                 + ".dot{width:8px;height:8px;border-radius:50%;background:#67c23a}\n"
@@ -1415,8 +1582,8 @@ public final class CloudClientPages {
     private String buildPlayPage(String rawName, String liveUrl, String token, String homeUrl,
                                  String aliasTag, boolean dynamicLive) {
         String name = escape(rawName);
-        String live = js(liveUrl);
-        String tok = js(token);
+        // liveUrl/token/dynamicLive 保留在签名里是为了兼容既有调用点；
+        // 实际画面地址一律由会话状态下发（见下方 poll() 的 d.liveUrl），页面不再持有令牌。
         String home = homeUrl;
         int hbSec = 10;
         int hbKeep = 30;
@@ -1468,8 +1635,7 @@ public final class CloudClientPages {
                 + "<span id=\"pl\" class=\"grow\"></span>\n"
                 + "<button class=\"btn\" id=\"end\" type=\"button\">结束游戏</button>\n"
                 + "</div>\n"
-                + "<iframe id=\"v\" src=\"" + (dynamicLive ? "" : escape(liveUrl))
-                + "\" allow=\"autoplay; fullscreen; microphone; camera;"
+                + "<iframe id=\"v\" src=\"\" allow=\"autoplay; fullscreen; microphone; camera;"
                 + " clipboard-read; clipboard-write; gamepad\" allowfullscreen></iframe>\n"
                 + "<div class=\"mask\" id=\"mask\"><div class=\"mw\">\n"
                 + "<p class=\"mt\" id=\"mt\">正在连接云主机…</p>\n"
@@ -1487,11 +1653,8 @@ public final class CloudClientPages {
                 + "</div></div>\n"
                 + "<script>\n"
                 + "var API=" + js(API_PREFIX) + ";\n"
-                + "var TOKEN=" + tok + ";\n"
                 + "var HOME=" + js(home) + ";\n"
                 + "var HB=" + hbSec + ";\n"
-                + "var DYN=" + (dynamicLive ? "true" : "false") + ";\n"
-                + "var LIVEBASE=" + js(WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH) + ";\n"
                 + "var P=" + progressConfig() + ";\n"
                 + progressJs()
                 + "var q=new URLSearchParams(location.search),S=q.get('s')||'';\n"
@@ -1546,12 +1709,10 @@ public final class CloudClientPages {
                 + "    var d=(j&&j.data)||{};\n"
                 + "    if(d.player){pl.textContent='玩家 '+d.player+' · '+(d.gameState||'');}\n"
                 + "    paintStage(d.stage);\n"
+                + "    // 画面地址由服务端在会话状态里下发：会话专属随机前缀 + 令牌放在 URL 片段里\n"
+                + "    // （片段不会出现在请求行/代理日志/Referer）。拿不到 liveUrl 就不设 src。\n"
+                + "    if(!liveSet&&d.state==='running'&&d.liveUrl){liveSet=true;v.src=d.liveUrl;}\n"
                 + "    if(d.joined===true){onJoined(d);}\n"
-                + "    // 池入口：会话起来后才知道挑中了哪台机器，iframe 地址此时才拼（地址栏仍是池名）\n"
-                + "    if(DYN&&!liveSet&&d.state==='running'&&d.clientId){\n"
-                + "      liveSet=true;\n"
-                + "      v.src=LIVEBASE+d.clientId+'/live/?token='+encodeURIComponent(TOKEN);\n"
-                + "    }\n"
                 + "    if(!S||d.state==='ended'||d.reason==='not-found'){goHome();}\n"
                 + "  }).catch(function(){});\n"
                 + "}\n"

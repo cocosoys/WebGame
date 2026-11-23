@@ -1,7 +1,8 @@
 # WebGame 配置（前端统一托管在 /web/plugins/WebGame/）
 page:
   # 游戏页所在目录（相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾）。
-  # 页面文件：dist/eagler/index.html（构建期静态资源，运行时不做地址注入）。
+  # 页面文件：src/main/resources/eagler-clients/1.12.2/（构建期打进 jar），
+  # 运行时不再拷贝/改写；磁盘目录 plugins/WebGame/dist（若存在）会覆盖 jar 内的页面。
   # 打开 http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom 直接进入服务器。
   path: "/eagler/"
   # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
@@ -28,9 +29,13 @@ tunnel:
   # 用于防止单台设备开过多浏览器标签占满服务器名额
   max-connections-per-device: 2
 auto-join:
-  # 打开页面后自动进入服务器（设置用户名 + 自动连接，无需手动点击）
+  # 自动进服（服务端口径，页面通过 GET /api/plugins/WebGame/cloud/page-config 读取）：
+  #   enabled=true 且本机记住过用户名 → 打开页面直接用记住的名字进服，不再弹框；
+  #   enabled=false → 每次都弹框让玩家填名字。
+  # default-username 只作为"弹框里的默认值"（以及首次访问的预填），
+  # 不会把所有人强制登录成同一个名字（离线模式下同名会互踢）。
   enabled: true
-  # 默认用户名；可用 URL 参数覆盖：http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom
+  # 弹框默认用户名，可被 URL 参数覆盖：.../eagler/?user=Tom
   default-username: "WebPlayer"
 cloud:
   # 云游戏客户端（cloud-stream）运行态探测周期（秒）。
@@ -41,6 +46,12 @@ cloud:
   ttl-seconds: 270
   # 单次探测的连接/读取超时（毫秒）；范围 500–15000。
   probe-timeout-ms: 3000
+  # 探测的证书校验（默认严格）：
+  #   false = 走 JVM 信任库（服务端以 -Djavax.net.ssl.trustStore 指向 trust-cloud.jks），
+  #           证书链/主机名照常校验；证书不受信时状态为离线，原因里写明"TLS 证书校验失败"。
+  #   true  = 跳过证书链与主机名校验（仅用于无法导入证书的老内网机器；等于放弃探测侧的身份保证）。
+  probe:
+    trust-all: false
   # 同端口转播：URL 客户端的页面/资源/WebSocket 全部经 MC 端口（SOYS upstream 前缀转播），
   # 玩家只访问 /web/plugins/WebGame/cloud/<id>/live/，不必为云主机单独做端口映射。
   # 关闭后回退为跳转设备地址（需要玩家能直连设备端口）。

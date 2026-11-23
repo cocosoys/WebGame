@@ -76,6 +76,8 @@ public class CloudClientServiceImpl implements CloudClientService {
     private volatile ExecutorService probePool;
     /** 一轮全量探测未结束时不再叠加新的一轮。 */
     private final AtomicBoolean probing = new AtomicBoolean(false);
+    /** 当前轮次开始时刻（毫秒）；0 = 没有在跑的轮次。 */
+    private volatile long roundStartedAt;
     /** 有运行态变化待落盘。 */
     private volatile boolean dirty;
     /** 上一次落盘时刻（毫秒）。 */
@@ -569,11 +571,25 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
     }
 
-    /** 一轮全量探测（异步线程内执行；同一时刻只允许一轮）。 */
+    /**
+     * 一轮全量探测（异步线程内执行；同一时刻只允许一轮）。
+     *
+     * <p>三条硬要求（来自实测事故：12:56–13:34 连续 22 次 connect timeout 直接把机器判离线，
+     * 而同一时刻同机复刻探测 200/4–294ms，日志里没有任何痕迹）：</p>
+     * <ul>
+     *   <li><b>可解释</b>：每一轮只要有失败就走一条 WARN 汇总（哪台、什么原因、耗时），不再只留 yml 里最后一条；</li>
+     *   <li><b>可自愈</b>：{@code probing} 只由本方法的 finally 释放；万一某轮被卡住超过 2 个周期，
+     *       下一次触发会强制释放并继续，而不是永久静默停摆；</li>
+     *   <li><b>不拖死</b>：单台设备的等待预算按"探测本身可能走 http+https 两条路"给足（2×超时+2s），
+     *       超时按失败计，但不会阻塞后续设备。</li>
+     * </ul>
+     */
     private void runHeartbeatRound() {
-        if (!probing.compareAndSet(false, true)) {
-            return;
-        }
+        squelchRounds();
+        roundStartedAt = System.currentTimeMillis();
+        int total = 0;
+        int okCount = 0;
+        List<String> failures = new ArrayList<>();
         try {
             List<CloudClient> targets = new ArrayList<>();
             for (CloudClient c : clients.values()) {
@@ -584,37 +600,99 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (targets.isEmpty()) {
                 return;
             }
+            total = targets.size();
             ExecutorService pool = ensurePool();
             List<java.util.concurrent.Future<CloudClientProbe.Result>> futures = new ArrayList<>();
             for (CloudClient c : targets) {
                 futures.add(pool.submit(() -> probeClient(c, c.getCloudKey())));
             }
+            long budget = probeTimeoutMs() * 2L + 2000L;
             for (int i = 0; i < futures.size(); i++) {
                 CloudClient c = targets.get(i);
                 CloudClientProbe.Result r;
                 try {
-                    r = futures.get(i).get(probeTimeoutMs() + 1000L, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    r = futures.get(i).get(budget, java.util.concurrent.TimeUnit.MILLISECONDS);
                 } catch (Throwable t) {
                     r = null;
                 }
                 if (r == null) {
+                    String why = "探测超时（" + budget + "ms 内未返回）";
                     c.setLastCheck(now());
                     c.setFailCount(c.getFailCount() + 1);
-                    c.setHealthReason("探测超时（" + probeTimeoutMs() + "ms 内无响应）");
+                    c.setHealthReason(why);
                     if (shouldMarkOffline(c)) {
                         c.setStatus(CloudClient.STATUS_OFFLINE);
                     }
+                    failures.add(c.getId() + "(" + c.getName() + "): " + why);
                 } else {
                     applyResult(c, r);
+                    if (r.reachable && r.authorized && r.error.isEmpty()) {
+                        okCount++;
+                    } else {
+                        failures.add(c.getId() + "(" + c.getName() + "): " + reasonOf(r));
+                    }
                 }
             }
             dirty = true;
             persistIfDue(false);
+            if (!failures.isEmpty()) {
+                LOG.warning("云游戏客户端探测：共 " + total + " 台，成功 " + okCount
+                        + "，失败 " + failures.size() + " → " + join(failures));
+            } else {
+                LOG.fine("云游戏客户端探测：共 " + total + " 台全部在线");
+            }
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "云游戏客户端心跳失败: " + t);
+            LOG.log(Level.WARNING, "云游戏客户端心跳失败: " + t, t);
         } finally {
+            roundStartedAt = 0;
             probing.set(false);
         }
+    }
+
+    /**
+     * 处理"上一轮还没结束就又触发"的情况：正常跳过，卡死则强制释放。
+     * <p>阈值取 2 个心跳周期（最少 60 秒）：轮内每台设备都有明确等待预算，真超过这个时间
+     * 只可能是任务被挂住（例如 DNS/代理层不返回），继续静默等于健康监测停摆。</p>
+     */
+    private void squelchRounds() {
+        long started = roundStartedAt;
+        long now = System.currentTimeMillis();
+        if (probing.compareAndSet(false, true)) {
+            return;
+        }
+        long limit = Math.max(60_000L, heartbeatSeconds() * 2000L);
+        if (started > 0 && now - started > limit) {
+            LOG.warning("上一轮云游戏探测已运行 " + ((now - started) / 1000)
+                    + " 秒仍未结束（疑似单轮卡死），强制释放锁并开始新一轮");
+            probing.set(false);
+            if (probing.compareAndSet(false, true)) {
+                return;
+            }
+        }
+        // 常规并发：上一轮还没完，本轮跳过（下一轮会再试）
+        LOG.fine("上一轮云游戏探测仍在执行，跳过本轮");
+    }
+
+    /** 失败原因归一：可达但密钥错 / 健康异常 / 不可达 三类。 */
+    private static String reasonOf(CloudClientProbe.Result r) {
+        if (!r.reachable) {
+            return "不可达：" + r.error;
+        }
+        if (!r.authorized) {
+            return "密钥被拒（HTTP " + r.httpStatus + "）";
+        }
+        return "健康异常：" + r.error;
+    }
+
+    private static String join(List<String> parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append(p);
+        }
+        return sb.toString();
     }
 
     /** 单独的异步探测（上报后立即验证密钥用）。 */
@@ -641,22 +719,33 @@ public class CloudClientServiceImpl implements CloudClientService {
      * 按条目记录的 scheme 探测；明文失败时自动回退试一次 HTTPS。
      *
      * <p>回退是必要的：设备一开证书，明文请求会直接断（同一端口先嗅探后握手），
-     * 而管理员的既有条目里记的还是 {@code tls=false}。一次成功即把条目翻成 tls
-     * （见 {@link #applyResult}），之后就走对的那条路。</p>
+     * 而管理员的既有条目里记的还是 {@code tls=false}。回退只影响"这次探测怎么连"，
+     * <b>不</b>会改写条目（曾经的实现会在失败路径上翻转 scheme，运维看不到是谁改的）。</p>
      */
     private CloudClientProbe.Result probeClient(CloudClient c, String key) {
+        boolean trustAll = trustAllCerts();
         CloudClientProbe.Result r = CloudClientProbe.probe(
-                c.getIp(), c.getPort(), key, probeTimeoutMs(), c.isTls());
+                c.getIp(), c.getPort(), key, probeTimeoutMs(), c.isTls(), trustAll);
         if (r.reachable || c.isTls()) {
             return r;
         }
         CloudClientProbe.Result tls = CloudClientProbe.probe(
-                c.getIp(), c.getPort(), key, probeTimeoutMs(), true);
+                c.getIp(), c.getPort(), key, probeTimeoutMs(), true, trustAll);
         return tls.reachable ? tls : r;
+    }
+
+    /** 是否跳过证书校验（{@code cloud.probe.trust-all}，默认 false，只对自签内网机器开）。 */
+    private boolean trustAllCerts() {
+        try {
+            return plugin.getConfig().getBoolean("cloud.probe.trust-all", false);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /** 把一次探测结果落到条目上（online / degraded / unauthorized / offline + TTL 判定）。 */
     private void applyResult(CloudClient c, CloudClientProbe.Result r) {
+        String before = c.getStatus();
         c.setLastCheck(now());
         c.setLatencyMs(r.latencyMs);
         if (!r.reachable) {
@@ -665,18 +754,14 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (shouldMarkOffline(c)) {
                 c.setStatus(CloudClient.STATUS_OFFLINE);
             }
+            logTransition(c, before, r);
             return;
-        }
-        // 探测发现的 scheme 与记录不一致（刚开证书 / 刚撤证书）：以能通的那个为准，
-        // 入口地址同步换 scheme，玩家点"打开页面"不会被带到错协议上。
-        if (r.tls != c.isTls()) {
-            c.setTls(r.tls);
-            c.setPath(rewriteScheme(c.getPath(), r.tls));
         }
         if (!r.authorized) {
             c.setStatus(CloudClient.STATUS_UNAUTHORIZED);
             c.setFailCount(c.getFailCount() + 1);
             c.setHealthReason("共享密钥被拒（HTTP " + r.httpStatus + "）");
+            logTransition(c, before, r);
             return;
         }
         // 端口通、密钥也对，但健康端点自己报错（典型是 8080 在听、画面子系统返回 503）：
@@ -686,7 +771,14 @@ public class CloudClientServiceImpl implements CloudClientService {
             c.setFailCount(c.getFailCount() + 1);
             // r.error 自己就带 HTTP 状态码（HTTP 503 / health.ok=false），别再重复一遍
             c.setHealthReason("健康检查异常：" + r.error);
+            logTransition(c, before, r);
             return;
+        }
+        // 只有"完整成功"（200 + 密钥通过 + health.ok）才认探测到的那条 scheme：
+        // 失败路径一律不改条目，避免静默翻配置
+        if (r.tls != c.isTls()) {
+            c.setTls(r.tls);
+            c.setPath(rewriteScheme(c.getPath(), r.tls));
         }
         c.setStatus(CloudClient.STATUS_ONLINE);
         c.setHealthReason("");
@@ -697,6 +789,23 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
         if (r.uptimeSeconds > 0) {
             c.setUptimeSeconds(r.uptimeSeconds);
+        }
+        logTransition(c, before, r);
+    }
+
+    /** 状态变化才打日志：掉线/恢复必须留痕，其余不刷屏。 */
+    private void logTransition(CloudClient c, String before, CloudClientProbe.Result r) {
+        String after = c.getStatus();
+        if (after.equals(before)) {
+            return;
+        }
+        if (CloudClient.STATUS_OFFLINE.equals(after)) {
+            LOG.warning("云游戏客户端 " + c.getId() + "(" + c.getName() + ") 判定离线（此前 "
+                    + (before == null || before.isEmpty() ? "未知" : before) + "）：" + c.getHealthReason()
+                    + "；连续失败 " + c.getFailCount() + " 次");
+        } else if (CloudClient.STATUS_ONLINE.equals(after)) {
+            LOG.info("云游戏客户端 " + c.getId() + "(" + c.getName() + ") 恢复在线："
+                    + r.latencyMs + "ms，版本 " + (r.version.isEmpty() ? "未知" : r.version));
         }
     }
 

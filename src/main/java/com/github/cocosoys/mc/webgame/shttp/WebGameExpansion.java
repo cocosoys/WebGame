@@ -51,7 +51,7 @@ public class WebGameExpansion extends SoysExpansion {
         }
         return java.util.Arrays.asList(
                 new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudReportController(
-                        plugin.getCloudClientService()),
+                        plugin, plugin.getCloudClientService()),
                 // 玩家"点一下就能玩"的会话端点（入口页/包装页都打这里）
                 new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudSessionController(
                         plugin.getCloudPlayService()));

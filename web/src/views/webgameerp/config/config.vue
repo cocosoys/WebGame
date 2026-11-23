@@ -72,11 +72,14 @@
         <el-form label-width="170px" size="small">
           <el-form-item label="启用自动进服">
             <el-switch v-model="model['auto-join'].enabled" />
-            <div class="hint">打开页面后自动设置用户名并连接服务器，无需手动点击。</div>
+            <div class="hint">开启后：本机浏览器<b>记过游戏名</b>时，打开页面直接用它进服（不再弹框、不用再点）；
+              没记过则弹框预填「默认用户名」。服务端与页面共用这一份开关（入口页读
+              <code>/api/plugins/WebGame/cloud/page-config</code>，改完刷新生效）。</div>
           </el-form-item>
           <el-form-item label="默认用户名">
             <el-input v-model="model['auto-join']['default-username']" placeholder="WebPlayer" style="width: 320px" />
-            <div class="hint">可用 URL 参数覆盖：…/web/plugins/WebGame/eagler/?user=Tom。</div>
+            <div class="hint">仅在<b>没有记住游戏名</b>时用来预填输入框；<b>不是</b>所有人共用的登录名——
+              离线模式下同名会把彼此踢下线。也可用 URL 参数强制指定：…/web/plugins/WebGame/eagler/?user=Tom。</div>
           </el-form-item>
         </el-form>
       </el-card>
@@ -111,8 +114,8 @@ export default {
         '服务器品牌': 'tunnel.server-brand：SERVER_VERSION 帧中的服务器品牌，供客户端显示。',
         '服务器版本': 'tunnel.server-version：SERVER_VERSION 帧中的服务器版本，供客户端显示。',
         '每设备并发上限': 'tunnel.max-connections-per-device：同一来源 IP 最多同时进入游戏的浏览器会话数。',
-        '启用自动进服': 'auto-join.enabled：打开页面后自动设置用户名并连接服务器。',
-        '默认用户名': 'auto-join.default-username：自动进服使用的默认用户名，可用 URL 参数 ?user=Tom 覆盖。'
+        '启用自动进服': 'auto-join.enabled：记住过游戏名的浏览器打开页面即自动进服；没记过则弹框预填默认用户名。',
+        '默认用户名': 'auto-join.default-username：只在没有记住游戏名时预填输入框，不是公共登录名（离线模式同名互踢）。'
       }
     }
   },

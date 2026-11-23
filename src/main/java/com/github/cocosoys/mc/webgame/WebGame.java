@@ -10,7 +10,6 @@ import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
-import com.github.cocosoys.mc.webgame.web.cloud.CloudSessionRegistry;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
 import org.bukkit.Bukkit;
@@ -33,15 +32,14 @@ import java.io.File;
  *
  * <p>M2：同端口 WS 隧道（WebGame 自装嗅探器首包分流 → 101 升级 → EaglerX 握手 → MC 回环登录）。</p>
  *
- * <p>云游戏能力已从插件内移除，后续以 cloud-stream 方式接入。</p>
+ * <p>M3：云游戏（cloud-stream）接入——页面托管、<b>按会话开闸</b>的同端口转播、
+ * 会话代理编排（槽位/阶段/进服判定/看门狗）与 ERP 管理面。云游戏能力<b>就在本插件内</b>，
+ * 串流本体在 {@code cloud-stream}，两边通过 {@code /cloud/*} 端点与 8090 会话代理对接。</p>
  */
 public final class WebGame extends JavaPlugin implements Listener {
 
     private WebGameConfig webGameConfig;
     private WsGateway wsGateway;
-
-    /** 云游戏会话心跳注册表（cloud-stream 页面通过 /erp/session/heartbeat 上报）。 */
-    private final CloudSessionRegistry cloudSessionRegistry = new CloudSessionRegistry();
 
     /** 页面托管扩展（/web/plugins/WebGame；网关未就绪时为 null）。 */
     private WebGameExpansion pageExpansion;
@@ -255,18 +253,32 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     /**
      * 注册 MCERP 管理面扩展（已注册则跳过）。
+     *
+     * <p>MCERP 在 plugin.yml 里是 {@code softdepend}：没装它时本插件照常提供页面托管、云游戏会话端点，
+     * 只是没有「网页游戏」这棵 ERP 菜单树。所以这里必须先看插件在不在，再做装配——
+     * {@code WebGameErpExpansion} 直接 import 了 MCERP 的菜单类，缺插件时"先构造再判断"会死在
+     * {@code NoClassDefFoundError}，连累整个 onEnable。</p>
      */
     private void registerErpExpansion() {
         if (erpExpansion != null) {
             return;
         }
-        WebGameErpExpansion expansion = new WebGameErpExpansion(this);
-        if (expansion.register()) {
-            erpExpansion = expansion;
-            getLogger().info("MCERP 管理面已接入：菜单「网页游戏」+ /api/plugins/WebGame/erp/*。");
-        } else {
-            getLogger().warning("MCERP 管理面注册失败（网关/ERP 未就绪或 identifier 冲突），"
-                    + "可由 /mcerp reload 或 /soyshttp reload 兜底重试。");
+        if (!getServer().getPluginManager().isPluginEnabled("MCERP")) {
+            getLogger().info("未检测到 MCERP：跳过 ERP 菜单装配；页面（/cloud/*）与会话端点仍然可用。");
+            return;
+        }
+        try {
+            WebGameErpExpansion expansion = new WebGameErpExpansion(this);
+            if (expansion.register()) {
+                erpExpansion = expansion;
+                getLogger().info("MCERP 管理面已接入：菜单「网页游戏」+ /api/plugins/WebGame/erp/*。");
+            } else {
+                getLogger().warning("MCERP 管理面注册失败（网关/ERP 未就绪或 identifier 冲突），"
+                        + "可由 /mcerp reload 或 /soyshttp reload 兜底重试。");
+            }
+        } catch (Throwable t) {
+            // 装的是不兼容的 MCERP（缺类/签名变了）：退化成"无菜单"，但不要炸掉启动
+            getLogger().warning("MCERP 管理面装配失败，已跳过（页面与会话端点不受影响）：" + t);
         }
     }
 
@@ -346,10 +358,6 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     public WsGateway getWsGateway() {
         return wsGateway;
-    }
-
-    public CloudSessionRegistry getCloudSessionRegistry() {
-        return cloudSessionRegistry;
     }
 
     public WebGameClientService getClientService() {

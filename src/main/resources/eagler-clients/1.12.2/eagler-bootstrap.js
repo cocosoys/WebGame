@@ -85,6 +85,25 @@
         var pending = localStorage.getItem(PENDING_KEY);
         var params = new URLSearchParams(window.location.search);
         var urlUser = cleanName(params.get("user") || "");
+        // 服务端口径（auto-join.enabled / default-username）：由 WebGame 的匿名端点下发，
+        // 每次会话只问一次（sessionStorage 标记），避免刷新页面时反复请求。
+        var CFG_URL = "/api/plugins/WebGame/cloud/page-config";
+        var CFG_FLAG = "wg_auto_cfg";
+        var cfg = { ready: false, enabled: false, name: "", note: "" };
+        function loadCfg(cb) {
+            var settled = false;
+            function fin(v) { if (settled) return; settled = true; cb(v); }
+            var timer = setTimeout(function () { fin(null); }, 2000);
+            try {
+                fetch(CFG_URL, { credentials: "same-origin", cache: "no-store" })
+                    .then(function (r) { return r.json(); })
+                    .then(function (j) {
+                        clearTimeout(timer);
+                        fin((j && j.data && j.data.autoJoin) || null);
+                    })
+                    .catch(function () { clearTimeout(timer); fin(null); });
+            } catch (e) { clearTimeout(timer); fin(null); }
+        }
         if (!pending) {
             if (urlUser && urlUser.length >= 3) {
                 applyProfile(urlUser).then(function () { window.location.reload(); });
@@ -107,8 +126,16 @@
                     + "</div>";
                 document.body.appendChild(ov);
                 var inp = document.getElementById("wg_name");
-                var last = localStorage.getItem(LAST_KEY) || "";
+                var last = cleanName(localStorage.getItem(LAST_KEY) || "");
                 if (last) inp.value = last;
+                else if (cfg.name) inp.value = cfg.name;
+                var btn = document.getElementById("wg_btn");
+                var err = document.getElementById("wg_err");
+                if (!cfg.ready) {
+                    // 配置还没回来：先锁住按钮，别让人填完名进到一个"开关已关"的页面
+                    btn.disabled = true;
+                    err.textContent = "正在读取服务器配置…";
+                }
                 inp.focus();
                 function submit() {
                     var u = cleanName(inp.value);
@@ -141,6 +168,30 @@
                 setInterval(buildOverlay, 1000);
             }
             guardOverlay();
+            loadCfg(function (aj) {
+                cfg.ready = true;
+                cfg.enabled = !!(aj && aj.enabled);
+                cfg.name = cleanName((aj && aj.username) || "");
+                cfg.note = (aj && aj.note) || "";
+                var remembered = cleanName(localStorage.getItem(LAST_KEY) || "");
+                // 自动进服的两层含义（服务端口径）：
+                //   ①enabled=true 且本机记住过名字 → 直接用记住的名字进，不再弹框；
+                //   ②否则弹框，输入框预填 记住的名字 → default-username。
+                // 不把 default-username 当"所有人的名字"直接登录：同名玩家在离线模式下会互踢。
+                if (cfg.enabled && remembered.length >= 3 && !sessionStorage.getItem(CFG_FLAG)) {
+                    sessionStorage.setItem(CFG_FLAG, "1");
+                    applyProfile(remembered).then(function () { window.location.reload(); });
+                    return;
+                }
+                var inp = document.getElementById("wg_name");
+                var btn = document.getElementById("wg_btn");
+                var err = document.getElementById("wg_err");
+                if (inp && !inp.value) inp.value = remembered || cfg.name || "";
+                if (btn) btn.disabled = false;
+                if (err) err.textContent = cfg.note || "";
+                if (inp) inp.focus();
+                sessionStorage.setItem(CFG_FLAG, "1");
+            });
             return;
         }
         var username = pending;

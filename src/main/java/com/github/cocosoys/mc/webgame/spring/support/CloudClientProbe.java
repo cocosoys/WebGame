@@ -35,11 +35,12 @@ public final class CloudClientProbe {
     private static final String HEALTH_PATH = "/api/v1/health";
 
     /**
-     * 内网自签证书的信任策略：全部放行。
+     * 显式放行的信任策略（仅当 {@code cloud.probe.trust-all=true} 时使用）。
      *
-     * <p>云游戏客户端是我方资产、地址由管理员填，证书按 IP 自签（没有公信 CA 能签
-     * 192.168.x.x）。这里校验"能不能连上、凭据对不对"，不校验证书链 —— 否则每换一台
-     * 机器就得往 JVM 里装一份信任库。风险边界因此落在"只有管理员能填地址"上。</p>
+     * <p>默认<b>不</b>放行：插件走 JVM 的信任库（服务端已用 {@code -Djavax.net.ssl.trustStore}
+     * 指向 trust-cloud.jks），证书链与主机名照常校验。全部放行意味着任何能劫持内网流量的人
+     * 都可以伪造一台"健康"的云机（探针只读版本号，不校验身份），所以它必须是显式开关，
+     * 而不是默认行为。</p>
      */
     private static final SSLSocketFactory TRUST_ALL = buildTrustAll();
 
@@ -93,7 +94,11 @@ public final class CloudClientProbe {
     }
 
     public static Result probe(String host, int port, String key, int timeoutMs) {
-        return probe(host, port, key, timeoutMs, false);
+        return probe(host, port, key, timeoutMs, false, false);
+    }
+
+    public static Result probe(String host, int port, String key, int timeoutMs, boolean tls) {
+        return probe(host, port, key, timeoutMs, tls, false);
     }
 
     /**
@@ -103,9 +108,10 @@ public final class CloudClientProbe {
      * @param port      端口（同一端口先嗅探后握手，http/https 只是 scheme 不同）
      * @param key       共享密钥（空=不带凭证；空密钥只在客户端未配置 auth_token 时才会 200）
      * @param timeoutMs 连接/读取超时（毫秒）
-     * @param tls       true = 走 HTTPS（自签证书按 {@link #TRUST_ALL} 放行）
+     * @param tls       true = 走 HTTPS
+     * @param trustAll  true = 跳过证书链与主机名校验（仅 {@code cloud.probe.trust-all=true}）
      */
-    public static Result probe(String host, int port, String key, int timeoutMs, boolean tls) {
+    public static Result probe(String host, int port, String key, int timeoutMs, boolean tls, boolean trustAll) {
         long start = System.nanoTime();
         HttpURLConnection conn = null;
         try {
@@ -113,17 +119,19 @@ public final class CloudClientProbe {
             conn = (HttpURLConnection) url.openConnection();
             if (tls && conn instanceof HttpsURLConnection) {
                 HttpsURLConnection https = (HttpsURLConnection) conn;
-                if (TRUST_ALL != null) {
-                    https.setSSLSocketFactory(TRUST_ALL);
-                }
-                // 自签证书的 CN/SAN 未必等于管理员填的那个字符串（DNS 名/别名都常见），
-                // 主机名校验在这里只会制造假阴性。
-                https.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
-                    @Override
-                    public boolean verify(String hostname, javax.net.ssl.SSLSession session) {
-                        return true;
+                if (trustAll) {
+                    if (TRUST_ALL != null) {
+                        https.setSSLSocketFactory(TRUST_ALL);
                     }
-                });
+                    // 自签证书的 CN/SAN 未必等于管理员填的那个字符串（DNS 名/别名都常见）。
+                    https.setHostnameVerifier(new javax.net.ssl.HostnameVerifier() {
+                        @Override
+                        public boolean verify(String hostname, javax.net.ssl.SSLSession session) {
+                            return true;
+                        }
+                    });
+                }
+                // trustAll=false：不覆盖任何 SSL 设置 —— 交给 JVM 信任库与默认主机名校验
             }
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(timeoutMs);
@@ -163,6 +171,13 @@ public final class CloudClientProbe {
             String msg = t.getClass().getSimpleName();
             if (t.getMessage() != null && !t.getMessage().isEmpty()) {
                 msg = msg + ": " + t.getMessage();
+            }
+            // 证书问题与"网络不通"必须能分辨：前者要导证书/改信任库，后者查网线/防火墙
+            if (t instanceof javax.net.ssl.SSLHandshakeException
+                    || t instanceof java.security.cert.CertificateException
+                    || msg.contains("PKIX")
+                    || msg.toLowerCase(java.util.Locale.ROOT).contains("certificate")) {
+                msg = "TLS 证书校验失败：" + msg;
             }
             closeQuietly(conn);
             return new Result(false, false, 0, "", 0, "", elapsed, msg, tls);

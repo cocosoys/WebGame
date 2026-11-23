@@ -1,7 +1,11 @@
 name: WebGame
 version: '${project.version}'
 main: com.github.cocosoys.mc.webgame.WebGame
-depend: [SOYSHTTPOverMC, MCERP]
+# SOYSHTTPOverMC 是硬依赖：没有它就没有 /erp/* 网关、没有同端口转播，插件的核心能力直接不存在。
+# MCERP 只是"有就多一菜单"：ERP 菜单扩展按需装配（见 WebGame#registerErpExpansion），
+# 未安装时页面与会话端点照常工作 —— 所以这里是 softdepend，不是 depend。
+depend: [SOYSHTTPOverMC]
+softdepend: [MCERP]
 author: cocosoys
 description: Serve Eaglercraft 1.12.2 web client on the MC port, letting browsers join the server.
 
