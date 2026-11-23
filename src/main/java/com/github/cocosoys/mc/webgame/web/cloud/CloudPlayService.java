@@ -5,6 +5,8 @@ import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
 import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.ByteArrayOutputStream;
@@ -14,7 +16,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,7 +61,11 @@ public final class CloudPlayService {
     private final Map<String, Long> updatingClients = new ConcurrentHashMap<>();
     /** clientId → 最近一次更新失败原因（失败后要停下，不然每次点击都重下一遍 200MB）。 */
     private final Map<String, String> updateErrors = new ConcurrentHashMap<>();
+    /** clientId → 最近一次被池挑中/起会话的时刻（"最久未用"策略用）。 */
+    private final Map<String, Long> lastUsed = new ConcurrentHashMap<>();
     private volatile BukkitTask watchdog;
+    /** 主线程巡检：玩家名在本服上线 = "连服务器"阶段真的过了。 */
+    private volatile BukkitTask stageTask;
 
     /** 一次包更新最多等多久（毫秒）；超时就允许下一次点击重新发起。 */
     private static final long UPDATE_MAX_MS = 15 * 60 * 1000L;
@@ -71,7 +79,7 @@ public final class CloudPlayService {
 
     /** 开始一次会话：校验玩家名 → 找槽位 → 让代理准备客户端并启动游戏。 */
     public AjaxResult start(String clientId, String player, String token) {
-        return start(clientId, player, token, "");
+        return start(clientId, player, token, "", "");
     }
 
     /**
@@ -80,38 +88,81 @@ public final class CloudPlayService {
      * @param alias 玩家进来的门牌（{@code /cloud/<alias>}）；空串表示走内部命名空间路径
      */
     public AjaxResult start(String clientId, String player, String token, String alias) {
+        return start(clientId, player, token, alias, "");
+    }
+
+    /**
+     * 开始一次会话（门牌别名 + 池）。
+     *
+     * @param alias 玩家进来的门牌（{@code /cloud/<alias>}）；空串 = 内部命名空间路径
+     * @param pool  池名（{@code /cloud/pool/<池>}）；非空时忽略 clientId，由服务端挑一台空闲机器
+     */
+    public AjaxResult start(String clientId, String player, String token, String alias, String pool) {
         String name = player == null ? "" : player.trim();
         if (!PLAYER_RE.matcher(name).matches()) {
             return AjaxResult.error("游戏名称不合法：3–16 位字母/数字/下划线");
         }
-        CloudClient c = findClient(clientId);
-        if (c == null) {
-            return AjaxResult.error("云游戏客户端不存在");
+        String key = token == null ? "" : token.trim();
+        if (key.isEmpty()) {
+            return AjaxResult.error("令牌不正确");
         }
+        String wantPool = pool == null ? "" : com.github.cocosoys.mc.webgame.shttp.CloudClientPages
+                .normalizeAlias(pool);
+        boolean byPool = !wantPool.isEmpty();
+        // 别名校验：门牌必须真的属于这台机器，否则玩家能借 A 的名字进 B 的机器
+        String gate = com.github.cocosoys.mc.webgame.shttp.CloudClientPages.normalizeAlias(alias);
+
+        CloudClient c;
+        if (byPool) {
+            if (!gate.isEmpty()) {
+                return AjaxResult.error("池入口不能同时指定门牌");
+            }
+            Pick pick = pickPool(wantPool, key);
+            if (pick.client == null) {
+                return AjaxResult.error(pick.reason);
+            }
+            c = pick.client;
+        } else {
+            c = findClient(clientId);
+            if (c == null && !gate.isEmpty() && plugin.getCloudClientPages() != null) {
+                // 玩家是从 /cloud/<门牌> 点进来的：clientId 为空时用门牌反查机器
+                c = plugin.getCloudClientPages().resolveAlias(gate);
+            }
+            if (c == null) {
+                return AjaxResult.error("云游戏客户端不存在");
+            }
+            if (!c.isEnabled() || c.isMissing()) {
+                return AjaxResult.error("该云游戏客户端当前不可用");
+            }
+            if (!CloudClient.isUrl(c.getPath())) {
+                return AjaxResult.error("该客户端不是云游戏设备（本地页面不起会话）");
+            }
+            if (!key.equals(c.getCloudKey())) {
+                return AjaxResult.error("令牌不正确");
+            }
+            if (!gate.isEmpty()) {
+                CloudClient owner = plugin.getCloudClientPages() == null
+                        ? null : plugin.getCloudClientPages().resolveAlias(gate);
+                if (owner == null) {
+                    return AjaxResult.error("入口 /cloud/" + gate + " 不存在");
+                }
+                if (!owner.getId().equals(c.getId())) {
+                    return AjaxResult.error("入口 /cloud/" + gate + " 与客户端不匹配");
+                }
+            }
+        }
+        // 公共兜底：池挑出来的机器也要再验一次（可能在挑选与起会话之间被管理员关了）
         if (!c.isEnabled() || c.isMissing()) {
             return AjaxResult.error("该云游戏客户端当前不可用");
         }
         if (!CloudClient.isUrl(c.getPath())) {
             return AjaxResult.error("该客户端不是云游戏设备（本地页面不起会话）");
         }
-        String key = token == null ? "" : token.trim();
-        if (key.isEmpty() || !key.equals(c.getCloudKey())) {
+        if (!key.equals(c.getCloudKey())) {
             return AjaxResult.error("令牌不正确");
         }
         if (c.getIp().isEmpty() || c.getPort() <= 0) {
             return AjaxResult.error("该客户端尚未上报设备地址");
-        }
-        // 别名校验：门牌必须真的属于这台机器，否则玩家能借 A 的名字进 B 的机器
-        String gate = com.github.cocosoys.mc.webgame.shttp.CloudClientPages.normalizeAlias(alias);
-        if (!gate.isEmpty()) {
-            CloudClient owner = plugin.getCloudClientPages() == null
-                    ? null : plugin.getCloudClientPages().resolveAlias(gate);
-            if (owner == null) {
-                return AjaxResult.error("入口 /cloud/" + gate + " 不存在");
-            }
-            if (!owner.getId().equals(c.getId())) {
-                return AjaxResult.error("入口 /cloud/" + gate + " 与客户端不匹配");
-            }
         }
 
         String busySession = slots.get(c.getId());
@@ -142,9 +193,12 @@ public final class CloudPlayService {
         s.token = key;
         s.agentBase = agentBase(c);
         s.state = Session.STATE_PREPARING;
+        s.stage = Session.STAGE_WORKSPACE;
+        s.pool = wantPool;
         s.createdAt = System.currentTimeMillis();
         s.lastHeartbeatAt = s.createdAt;
         sessions.put(sessionId, s);
+        lastUsed.put(c.getId(), s.createdAt);
 
         try {
             // 客户端版本是唯一的更新触发器：代理只在"我这儿版本不对"时才去下载解包，
@@ -171,6 +225,8 @@ public final class CloudPlayService {
             }
             s.state = Session.STATE_RUNNING;
             s.gameState = "running";
+            // prepare 返回 = 工作区已分配、game/start 已发出；下一步等进程真的起来
+            s.stage = Session.STAGE_JVM;
             s.lastPollAt = System.currentTimeMillis();
             // 开闸：直播前缀只在会话期存在；开不出来就别把玩家放进包装页
             boolean opened = true;
@@ -187,8 +243,13 @@ public final class CloudPlayService {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("sessionId", sessionId);
             data.put("clientId", c.getId());
+            data.put("clientName", c.getName());
             data.put("player", name);
-            data.put("playUrl", playUrl(c.getId(), sessionId, gate));
+            data.put("pool", wantPool);
+            // 池入口的包装页停在池名上：/cloud/pool/<池>/play/?s=…
+            data.put("playUrl", byPool
+                    ? poolPlayUrl(wantPool, sessionId)
+                    : playUrl(c.getId(), sessionId, gate));
             data.put("liveUrl", liveUrl(c.getId(), key, gate));
             return AjaxResult.success("云游戏会话已开始", data);
         } catch (Throwable t) {
@@ -289,6 +350,57 @@ public final class CloudPlayService {
         return updatingClients.containsKey(clientId);
     }
 
+    /** 最近一次更新失败原因（空 = 没有失败记录）。 */
+    public String updateErrorOf(String clientId) {
+        String err = clientId == null ? null : updateErrors.get(clientId);
+        return err == null ? "" : err;
+    }
+
+    /**
+     * ERP「下发更新」：不等会话、立刻把版本号推给指定机器。
+     *
+     * <p>与玩家点击触发的更新是同一条链路（verify → 下载 → sha256 → 解包 → 换目录），
+     * 区别只在于发起者。三件事必须在这里挡住：机器正被占用（换目录会把正在跑的游戏拽掉）、
+     * 已经在更新、以及没配包地址。</p>
+     */
+    public AjaxResult pushUpdate(String clientId) {
+        CloudClient c = findClient(clientId);
+        if (c == null) {
+            return AjaxResult.error("云游戏客户端不存在: " + clientId);
+        }
+        if (!CloudClient.isUrl(c.getPath())) {
+            return AjaxResult.error("本地页面条目没有客户端包，不需要下发更新");
+        }
+        if (c.getIp().isEmpty() || c.getPort() <= 0 || c.getCloudKey().isEmpty()) {
+            return AjaxResult.error("该机器尚未上报设备地址/密钥，无法下发");
+        }
+        if (isBusy(clientId)) {
+            return AjaxResult.error("该机器正被会话占用，请先结束会话再下发更新");
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        if (updatingClients.containsKey(clientId)) {
+            data.put("updating", true);
+            return AjaxResult.success("该机器正在更新中，请稍候", data);
+        }
+        String want = plugin.getCloudClientPages() == null
+                ? "" : plugin.getCloudClientPages().clientPackageVersion();
+        String url = plugin.getCloudClientPages() == null
+                ? "" : plugin.getCloudClientPages().clientPackageUrl();
+        if (want.isEmpty()) {
+            return AjaxResult.error("config.yml 未配置 cloud.client-update.version");
+        }
+        if (url.isEmpty()) {
+            return AjaxResult.error("config.yml 未配置 cloud.client-update.base-url（代理拿不到包地址）");
+        }
+        // 手动下发是"我就是要现在更新"：先清掉上次的失败记录，否则 ensureClientVersion 会一直拦着
+        updateErrors.remove(clientId);
+        startAsyncUpdate(c, want, url);
+        data.put("updating", true);
+        data.put("version", want);
+        data.put("url", url);
+        return AjaxResult.success("已开始向 " + c.getName() + " 下发版本 " + want, data);
+    }
+
     /** 会话状态：浏览器侧的包装页靠它决定"什么时候跳回选择页"。 */
     public AjaxResult status(String sessionId) {
         Session s = sessionId == null ? null : sessions.get(sessionId);
@@ -299,12 +411,37 @@ public final class CloudPlayService {
             return AjaxResult.success("会话不存在", data);
         }
         refresh(s, false);
+        return statusData(s, "ok");
+    }
+
+    /** 会话状态载荷（状态/心跳共用一个形状，页面只写一套解析）。 */
+    private AjaxResult statusData(Session s, String msg) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("state", s.state);
         data.put("gameState", s.gameState);
         data.put("player", s.player);
         data.put("clientId", s.clientId);
-        return AjaxResult.success("ok", data);
+        data.put("pool", s.pool);
+        data.put("stage", s.stage);
+        data.put("stageIndex", stageIndex(s.stage));
+        return AjaxResult.success(msg, data);
+    }
+
+    /** 阶段序号：1 工作区 / 2 JVM / 3 连服 / 4 画面（页面用它画四步清单）。 */
+    private static int stageIndex(String stage) {
+        if (Session.STAGE_WORKSPACE.equals(stage)) {
+            return 1;
+        }
+        if (Session.STAGE_JVM.equals(stage)) {
+            return 2;
+        }
+        if (Session.STAGE_JOIN.equals(stage)) {
+            return 3;
+        }
+        if (Session.STAGE_SCREEN.equals(stage)) {
+            return 4;
+        }
+        return 0;
     }
 
     /** 主动结束会话（玩家点“结束”或看门狗判定游戏已退出）。 */
@@ -333,11 +470,7 @@ public final class CloudPlayService {
         }
         s.lastHeartbeatAt = System.currentTimeMillis();
         s.heartbeatSeen = true;
-        data.put("state", s.state);
-        data.put("gameState", s.gameState);
-        data.put("player", s.player);
-        data.put("clientId", s.clientId);
-        return AjaxResult.success("ok", data);
+        return statusData(s, "ok");
     }
 
     public void startWatchdog() {
@@ -346,6 +479,9 @@ public final class CloudPlayService {
         }
         watchdog = plugin.getServer().getScheduler().runTaskTimerAsynchronously(
                 plugin, this::watch, 100L, 100L);
+        // 玩家上线事件读的是 Bukkit 状态，必须留在主线程：每 2 秒扫一遍"连服务器"阶段
+        stageTask = plugin.getServer().getScheduler().runTaskTimer(
+                plugin, this::scanJoins, 40L, 40L);
     }
 
     public void stopWatchdog() {
@@ -354,6 +490,14 @@ public final class CloudPlayService {
         if (t != null) {
             try {
                 t.cancel();
+            } catch (Throwable ignored) {
+            }
+        }
+        BukkitTask st = stageTask;
+        stageTask = null;
+        if (st != null) {
+            try {
+                st.cancel();
             } catch (Throwable ignored) {
             }
         }
@@ -448,6 +592,9 @@ public final class CloudPlayService {
                 s.agentBase = base;
                 s.state = Session.STATE_RUNNING;
                 s.gameState = gameState;
+                // 恢复出来的会话：工作区与进程都已经在了，直接站到"连服务器"这一步
+                s.stage = Session.STAGE_JOIN;
+                s.pool = c.getPool();
                 s.createdAt = System.currentTimeMillis();
                 s.lastHeartbeatAt = s.createdAt;
                 s.heartbeatSeen = false; // 页面还没连上来，先不按心跳计时
@@ -469,6 +616,187 @@ public final class CloudPlayService {
         }
     }
 
+    /**
+     * 主线程巡检：会话玩家在本服上线 = "连服务器"阶段真的过了。
+     *
+     * <p>为什么不查 {@code Bukkit.getPlayerExact} 于异步线程：Bukkit 的在线玩家表不是并发
+     * 容器，异步读属于"能跑但迟早出事"的那类。这里每 2 秒在主线程扫一遍（会话数量是常数级），
+     * 顺带也覆盖"插件重启后会话被恢复、玩家其实早就进来了"的情况。</p>
+     */
+    private void scanJoins() {
+        for (Session s : sessions.values()) {
+            if (Session.STATE_ENDED.equals(s.state) || s.player == null || s.player.isEmpty()) {
+                continue;
+            }
+            if (Session.STAGE_SCREEN.equals(s.stage)) {
+                continue;
+            }
+            Player p = Bukkit.getPlayerExact(s.player);
+            if (p != null) {
+                s.stage = Session.STAGE_SCREEN;
+            }
+        }
+    }
+
+    /**
+     * 池选机：同池里挑一台"在线、健康、空闲、不在更新、密钥对得上"的机器。
+     *
+     * <p>策略来自 {@code cloud.pool.strategy}：{@code order}（默认，按 ERP 排序取第一台）、
+     * {@code latency}（延迟最低）、{@code recent}（最久没被用过的先上，做轮转）。
+     * 无论哪种策略，"在线/空闲"都是硬门槛——宁可拒绝，也不把玩家塞进一台正在被别人用的机器。</p>
+     */
+    private Pick pickPool(String pool, String key) {
+        List<CloudClient> candidates = new ArrayList<>();
+        int offline = 0;
+        int degraded = 0;
+        int busy = 0;
+        int keyMismatch = 0;
+        int noAddr = 0;
+        int updating = 0;
+        int unauthorized = 0;
+        for (CloudClient c : clients.versions()) {
+            if (!c.isEnabled() || c.isMissing() || !CloudClient.isUrl(c.getPath())) {
+                continue;
+            }
+            if (!pool.equals(c.getPool())) {
+                continue;
+            }
+            if (!key.equals(c.getCloudKey())) {
+                keyMismatch++;
+                continue;
+            }
+            if (c.getIp().isEmpty() || c.getPort() <= 0) {
+                noAddr++;
+                continue;
+            }
+            String status = c.getStatus();
+            if (CloudClient.STATUS_OFFLINE.equals(status)) {
+                offline++;
+                continue;
+            }
+            if (CloudClient.STATUS_DEGRADED.equals(status)) {
+                degraded++;
+                continue;
+            }
+            if (CloudClient.STATUS_UNAUTHORIZED.equals(status)) {
+                unauthorized++;
+                continue;
+            }
+            if (slots.containsKey(c.getId())) {
+                busy++;
+                continue;
+            }
+            if (updatingClients.containsKey(c.getId())) {
+                updating++;
+                continue;
+            }
+            candidates.add(c);
+        }
+        if (candidates.isEmpty()) {
+            List<String> why = new ArrayList<>();
+            if (busy > 0) {
+                why.add(busy + " 台占用中");
+            }
+            if (offline > 0) {
+                why.add(offline + " 台离线");
+            }
+            if (degraded > 0) {
+                why.add(degraded + " 台健康检查不通过");
+            }
+            if (updating > 0) {
+                why.add(updating + " 台正在更新客户端");
+            }
+            if (unauthorized > 0) {
+                why.add(unauthorized + " 台密钥被拒");
+            }
+            if (keyMismatch > 0) {
+                why.add(keyMismatch + " 台口令与当前入口不一致");
+            }
+            if (noAddr > 0) {
+                why.add(noAddr + " 台未上报地址");
+            }
+            return new Pick(null, "池 " + pool + " 暂时没有可用机器"
+                    + (why.isEmpty() ? "" : "（" + join(why) + "）"));
+        }
+        String strategy = poolStrategy();
+        if ("latency".equals(strategy)) {
+            candidates.sort((a, b) -> {
+                int cmp = Long.compare(latencyOf(a), latencyOf(b));
+                return cmp != 0 ? cmp : orderOf(a, b);
+            });
+        } else if ("recent".equals(strategy)) {
+            candidates.sort((a, b) -> {
+                int cmp = Long.compare(lastUsedOf(a.getId()), lastUsedOf(b.getId()));
+                return cmp != 0 ? cmp : orderOf(a, b);
+            });
+        } else {
+            candidates.sort(this::orderOf);
+        }
+        return new Pick(candidates.get(0), "");
+    }
+
+    private static String join(List<String> parts) {
+        StringBuilder sb = new StringBuilder();
+        for (String p : parts) {
+            if (sb.length() > 0) {
+                sb.append("，");
+            }
+            sb.append(p);
+        }
+        return sb.toString();
+    }
+
+    /** 未上报延迟的机器排最后（0 不是"最快"，是"不知道"）。 */
+    private static long latencyOf(CloudClient c) {
+        long v = c.getLatencyMs();
+        return v <= 0 ? Long.MAX_VALUE : v;
+    }
+
+    private long lastUsedOf(String clientId) {
+        Long v = lastUsed.get(clientId);
+        return v == null ? 0L : v;
+    }
+
+    private int orderOf(CloudClient a, CloudClient b) {
+        int cmp = Integer.compare(a.getOrder(), b.getOrder());
+        if (cmp != 0) {
+            return cmp;
+        }
+        try {
+            return Integer.compare(Integer.parseInt(a.getId()), Integer.parseInt(b.getId()));
+        } catch (Throwable ignored) {
+            return a.getId().compareTo(b.getId());
+        }
+    }
+
+    /** 池策略：order（默认）/ latency / recent。 */
+    private String poolStrategy() {
+        String v = "order";
+        try {
+            v = plugin.getConfig().getString("cloud.pool.strategy", "order");
+        } catch (Throwable ignored) {
+        }
+        v = v == null ? "" : v.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!"latency".equals(v) && !"recent".equals(v)) {
+            v = "order";
+        }
+        return v;
+    }
+
+    /** 池包装页地址：地址栏停在池名上，具体机器只在 iframe 里出现。 */
+    private String poolPlayUrl(String pool, String sessionId) {
+        return "/cloud/pool/" + pool + "/play/?s=" + sessionId;
+    }
+
+    /** 进程是否真的起来了（cloud-stream 的 game.state）。 */
+    private static boolean gameUp(String state) {
+        if (state == null) {
+            return false;
+        }
+        String s = state.toLowerCase(java.util.Locale.ROOT);
+        return s.contains("running") || s.contains("starting");
+    }
+
     private void refresh(Session s, boolean force) {
         long now = System.currentTimeMillis();
         if (!force && now - s.lastPollAt < STATUS_MIN_INTERVAL_MS) {
@@ -480,6 +808,11 @@ public final class CloudPlayService {
             String st = stateOf(resp);
             if (st != null && !st.isEmpty()) {
                 s.gameState = st;
+            }
+            // 进程起来了（starting/running）才算"起 JVM"过了；unknown/stopped 继续等，不谎报
+            if (gameUp(s.gameState)
+                    && (Session.STAGE_WORKSPACE.equals(s.stage) || Session.STAGE_JVM.equals(s.stage))) {
+                s.stage = Session.STAGE_JOIN;
             }
         } catch (Throwable t) {
             LOG.log(Level.FINE, "会话状态查询失败 " + s.sessionId + ": " + t.getMessage());
@@ -680,11 +1013,31 @@ public final class CloudPlayService {
         }
     }
 
+    /** 池选机结果：{@code client == null} 时 {@code reason} 一定非空。 */
+    private static final class Pick {
+        final CloudClient client;
+        final String reason;
+
+        Pick(CloudClient client, String reason) {
+            this.client = client;
+            this.reason = reason == null ? "" : reason;
+        }
+    }
+
     /** 一条会话。 */
     public static final class Session {
         public static final String STATE_PREPARING = "preparing";
         public static final String STATE_RUNNING = "running";
         public static final String STATE_ENDED = "ended";
+
+        /** 阶段：分配工作区（prepare 进行中）。 */
+        public static final String STAGE_WORKSPACE = "workspace";
+        /** 阶段：工作区就绪，等游戏进程起来。 */
+        public static final String STAGE_JVM = "jvm";
+        /** 阶段：进程已起，等玩家登录本服。 */
+        public static final String STAGE_JOIN = "join";
+        /** 阶段：玩家已进服（画面由包装页自己确认）。 */
+        public static final String STAGE_SCREEN = "screen";
 
         private String sessionId;
         private String clientId;
@@ -692,6 +1045,10 @@ public final class CloudPlayService {
         private String token;
         private String agentBase;
         private String state = STATE_PREPARING;
+        /** 阶段（见 STAGE_*）；只前进不后退。 */
+        private String stage = STAGE_WORKSPACE;
+        /** 该会话是从哪个池挑出来的（空 = 直接指定机器）。 */
+        private String pool = "";
         private String gameState = "";
         private String endReason = "";
         private long createdAt;

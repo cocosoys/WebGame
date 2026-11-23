@@ -59,10 +59,65 @@
       <el-table-column label="运行状态" align="center" width="130">
         <template slot-scope="scope">
           <el-tag size="mini" :type="runtimeTagType(scope.row.status)">{{ runtimeLabel(scope.row.status) }}</el-tag>
+          <el-tag v-if="scope.row.busy" size="mini" type="warning" style="margin-left: 4px">占用</el-tag>
           <div class="runtime-hint">
             <span v-if="scope.row.latencyMs">延迟 {{ scope.row.latencyMs }}ms</span>
             <span v-else-if="scope.row.version">v{{ scope.row.version }}</span>
             <span v-else>—</span>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="健康原因" align="center" min-width="200">
+        <template slot-scope="scope">
+          <el-tooltip v-if="scope.row.healthReason" :content="scope.row.healthReason" placement="top">
+            <span class="reason">{{ scope.row.healthReason }}</span>
+          </el-tooltip>
+          <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="别名（门牌）" align="center" min-width="180">
+        <template slot-scope="scope">
+          <template v-if="scope.row.aliases && scope.row.aliases.length">
+            <a
+              v-for="a in scope.row.aliases"
+              :key="a"
+              class="alias-link"
+              :href="rootEntry(a)"
+              target="_blank"
+            >/{{ a }}</a>
+          </template>
+          <span v-else style="color: #909399">未配置</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="池" align="center" width="110">
+        <template slot-scope="scope">
+          <span v-if="scope.row.pool">{{ scope.row.pool }}</span>
+          <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="客户端版本" align="center" min-width="210">
+        <template slot-scope="scope">
+          <div class="ver-line">
+            <span>实际：</span>
+            <span v-if="scope.row.version">{{ scope.row.version }}</span>
+            <span v-else style="color: #909399">未上报</span>
+          </div>
+          <div class="ver-line">
+            <span>期望：</span>
+            <span v-if="scope.row.expectedVersion">{{ scope.row.expectedVersion }}</span>
+            <span v-else style="color: #909399">未配置</span>
+            <el-tag
+              v-if="scope.row.expectedVersion"
+              size="mini"
+              :type="scope.row.versionMatch ? 'success' : 'warning'"
+              style="margin-left: 4px"
+            >{{ scope.row.versionMatch ? '一致' : '不一致' }}</el-tag>
+          </div>
+          <div v-if="scope.row.updateState" class="runtime-hint">
+            <span v-if="scope.row.updateState === 'updating'" style="color: #e6a23c">正在更新…</span>
+            <el-tooltip v-else :content="scope.row.updateError || '更新失败'" placement="top">
+              <span style="color: #f56c6c">更新失败</span>
+            </el-tooltip>
           </div>
         </template>
       </el-table-column>
@@ -119,7 +174,7 @@
           <el-tag v-if="scope.row.missing" size="mini" type="danger" style="margin-left: 6px">缺失</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" width="330">
+      <el-table-column label="操作" align="center" width="400">
         <template slot-scope="scope">
           <el-button
             type="text"
@@ -128,6 +183,13 @@
             :disabled="!scope.row.address"
             @click="handleRefresh(scope.row)"
           >刷新</el-button>
+          <el-button
+            type="text"
+            size="mini"
+            :loading="pushingId === scope.row.id"
+            :disabled="scope.row.source !== 'url' || !scope.row.address || scope.row.busy"
+            @click="handlePushUpdate(scope.row)"
+          >下发更新</el-button>
           <el-button type="text" size="mini" @click="openEdit(scope.row)">编辑</el-button>
           <el-button
             type="text"
@@ -173,6 +235,22 @@
         <el-form-item label="MC 版本">
           <el-input v-model="editForm.mcVersion" maxlength="32" placeholder="自由填写，如 1.12.2 / 1.8.9" />
         </el-form-item>
+        <el-form-item label="别名">
+          <el-input
+            v-model="editForm.aliasesText"
+            maxlength="200"
+            placeholder="如 测试服务器, test（逗号分隔；ASCII 不区分大小写）"
+          />
+          <div class="form-hint">
+            每个别名就是一个短地址 /cloud/&lt;别名&gt;，玩家不用记 ID；全局唯一，不能与保留字冲突。
+          </div>
+        </el-form-item>
+        <el-form-item label="池">
+          <el-input v-model="editForm.pool" maxlength="24" placeholder="留空 = 不参与池匹配" />
+          <div class="form-hint">
+            同池的机器会共享入口 /cloud/pool/&lt;池名&gt;，玩家点进去自动挑一台空闲的。
+          </div>
+        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="editForm.enabled" />
         </el-form-item>
@@ -197,7 +275,8 @@ import {
   updateCloudClient,
   refreshCloudClient,
   refreshAllCloudClients,
-  updateCloudClientKey
+  updateCloudClientKey,
+  pushCloudClientUpdate
 } from '@/api/erp'
 import Sortable from 'sortablejs'
 
@@ -206,7 +285,9 @@ const emptyEditForm = () => ({
   name: '',
   path: '',
   mcVersion: '',
-  enabled: true
+  enabled: true,
+  aliasesText: '',
+  pool: ''
 })
 
 export default {
@@ -220,6 +301,7 @@ export default {
       allowSelectSaving: false,
       refreshingAll: false,
       refreshingId: '',
+      pushingId: '',
       sortable: null,
       editVisible: false,
       editEditing: false,
@@ -322,7 +404,9 @@ export default {
         name: row.name,
         path: row.path,
         mcVersion: row.mcVersion,
-        enabled: row.enabled
+        enabled: row.enabled,
+        aliasesText: (row.aliases || []).join(', '),
+        pool: row.pool || ''
       }
       this.editVisible = true
     },
@@ -339,7 +423,12 @@ export default {
         name: this.editForm.name,
         path: this.editForm.path,
         mcVersion: this.editForm.mcVersion,
-        enabled: this.editForm.enabled
+        enabled: this.editForm.enabled,
+        aliases: (this.editForm.aliasesText || '')
+          .split(/[,，\s]+/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0),
+        pool: (this.editForm.pool || '').trim()
       }
       this.editSaving = true
       try {
@@ -363,6 +452,7 @@ export default {
       return {
         online: '在线',
         offline: '离线',
+        degraded: '健康异常',
         unauthorized: '密钥不符',
         unknown: '未探测'
       }[status] || '未探测'
@@ -371,9 +461,30 @@ export default {
       return {
         online: 'success',
         offline: 'danger',
+        degraded: 'warning',
         unauthorized: 'warning',
         unknown: 'info'
       }[status] || 'info'
+    },
+    /** 别名对应的根路径短地址（服务端已把别名规范化成小写 ASCII / 中文原样）。 */
+    rootEntry(alias) {
+      return window.location.origin + '/cloud/' + alias
+    },
+    handlePushUpdate(row) {
+      this.$confirm(
+        `把 config.yml 里的期望版本推送给 ${row.id}（${row.name}）？` +
+          '机器会后台下载并解包，期间该机器不可起新会话。',
+        '下发客户端更新',
+        { type: 'warning', confirmButtonText: '下发', cancelButtonText: '取消' }
+      ).then(() => {
+        this.pushingId = String(row.id)
+        pushCloudClientUpdate(row.id).then(res => {
+          this.$modal.msgSuccess(res.msg || '已开始下发')
+          setTimeout(this.getList, 3000)
+        }).catch(() => {}).finally(() => {
+          this.pushingId = ''
+        })
+      }).catch(() => {})
     },
     handleRefresh(row) {
       if (!row.address) {
@@ -518,5 +629,31 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   color: #909399;
+}
+.reason {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  font-size: 12px;
+  color: #e6a23c;
+}
+.alias-link {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  font-size: 12px;
+  color: #409eff;
+  text-decoration: none;
+}
+.alias-link:hover {
+  text-decoration: underline;
+}
+.ver-line {
+  font-size: 12px;
+  color: #606266;
+  line-height: 20px;
+  text-align: left;
 }
 </style>

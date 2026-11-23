@@ -19,6 +19,15 @@ public class CloudClient {
     public static final String STATUS_OFFLINE = "offline";
     /** 运行态：探测返回 401/403（共享密钥不匹配或未配置）。 */
     public static final String STATUS_UNAUTHORIZED = "unauthorized";
+    /**
+     * 运行态：端口通、密钥也对，但健康端点自己说"不健康"。
+     *
+     * <p>这是比 offline 更精确的一档：8080 还在监听、TCP 也连得上，但
+     * {@code /api/v1/health} 返回 503（内部子系统/桌面会话/编码器没起来）。
+     * 以前这种情况会被判成 online，玩家点进去才失败；现在单独标出来，
+     * 既不让玩家进，也不误导运维以为"机器离线"。</p>
+     */
+    public static final String STATUS_DEGRADED = "degraded";
 
     /** 自增数字 id，同时是页面子路径 /cloud/&lt;id&gt;/。 */
     private String id = "";
@@ -86,6 +95,11 @@ public class CloudClient {
     private String cloudKey = "";
     /** 最近一次探测的 HTTP 往返耗时（毫秒）。 */
     private long latencyMs;
+    /**
+     * 最近一次探测的"人话原因"：不可达时的异常摘要、HTTP 状态码、或 {@code health.ok=false}。
+     * <p>ERP 直接展示这一列——比只有一个 offline 标签有用得多。</p>
+     */
+    private String healthReason = "";
 
     public String getId() {
         return id;
@@ -261,6 +275,22 @@ public class CloudClient {
 
     public void setLatencyMs(long latencyMs) {
         this.latencyMs = Math.max(0L, latencyMs);
+    }
+
+    public String getHealthReason() {
+        return healthReason == null ? "" : healthReason;
+    }
+
+    public void setHealthReason(String healthReason) {
+        String s = healthReason == null ? "" : healthReason.trim();
+        // 原因文本只做展示，截断防脏数据把 ERP 表格撑爆
+        this.healthReason = s.length() > 120 ? s.substring(0, 120) : s;
+    }
+
+    /** 健康端点是否健康：degraded / offline / unauthorized 都不算。 */
+    public boolean isHealthy() {
+        String s = getStatus();
+        return !STATUS_DEGRADED.equals(s) && !STATUS_OFFLINE.equals(s) && !STATUS_UNAUTHORIZED.equals(s);
     }
 
     /** 设备地址 {@code ip:port}；未配置返回空串（刷新时据此报“未配置设备地址”）。 */

@@ -69,7 +69,7 @@ cloud:
     cap-percent: 99
   # 云游戏客户端包更新：zip 放 plugins/WebGame/packages/ 下，由 WebGame 托管下载；
   # WebGame 只在 prepare 时把 version 发给云主机代理，代理比对本地版本，不一致才去下载解包。
-  # 代理从不主动更新——版本号是唯一的触发器。
+  # 代理从不主动更新——版本号是唯一的触发器；ERP 的「下发更新」是同一链路的主动版。
   client-update:
     enabled: true
     # 期望版本号（空 = 不做版本比对，等价于关闭）
@@ -78,3 +78,10 @@ cloud:
     package: "cloud-client.zip"
     # 代理把 zip 解开后落到 games/clients/ 下的目录名
     target-dir: "1.12.2-Forge_14.23.5.2864"
+  # 池（一组同配置的机器，玩家只认池名 /cloud/pool/<池名>，由服务端挑一台空闲的）。
+  # 选机前提永远是"在线 + 健康 + 空闲 + 口令一致"，策略只决定在合格机器里挑哪一台：
+  #   order   = 按 ERP 里的排序取第一台（默认，行为最可预期）
+  #   latency = 延迟最低的优先（未上报延迟的排最后）
+  #   recent  = 最久没被用过的优先（轮转，避免总压着一台机器）
+  pool:
+    strategy: "order"

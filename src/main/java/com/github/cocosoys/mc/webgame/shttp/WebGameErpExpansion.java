@@ -145,7 +145,8 @@ public final class WebGameErpExpansion extends McerpExpansion {
                 controllers.add(new WebGameClientController(plugin.getClientService()));
             }
             if (plugin.getCloudClientService() != null) {
-                controllers.add(new WebGameCloudClientController(plugin.getCloudClientService()));
+                controllers.add(new WebGameCloudClientController(plugin.getCloudClientService(),
+                        plugin.getCloudPlayService()));
             }
         }
         return controllers;

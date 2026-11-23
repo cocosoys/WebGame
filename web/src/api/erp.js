@@ -139,3 +139,8 @@ export function updateCloudClientKey(id, key) {
 export function updateCloudClient(id, payload) {
   return request({ url: '/erp/cloud-clients/update', method: 'post', params: { id }, data: payload })
 }
+
+// 下发客户端包更新：后台下载/解包，立刻返回 updating
+export function pushCloudClientUpdate(id) {
+  return request({ url: '/erp/cloud-clients/push-update', method: 'post', params: { id } })
+}

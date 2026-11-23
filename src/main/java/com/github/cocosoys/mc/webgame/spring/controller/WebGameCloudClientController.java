@@ -9,6 +9,7 @@ import com.github.cocosoys.mc.soyshttpovermc.annotations.RequestMapping;
 import com.github.cocosoys.mc.soyshttpovermc.annotations.RequestParam;
 import com.github.cocosoys.mc.soyshttpovermc.util.AjaxResult;
 import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
+import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,9 +24,11 @@ import java.util.Map;
 public class WebGameCloudClientController {
 
     private final CloudClientService cloudClientService;
+    private final CloudPlayService playService;
 
-    public WebGameCloudClientController(CloudClientService cloudClientService) {
+    public WebGameCloudClientController(CloudClientService cloudClientService, CloudPlayService playService) {
         this.cloudClientService = cloudClientService;
+        this.playService = playService;
     }
 
     @ApiName("云游戏客户端列表")
@@ -116,5 +119,19 @@ public class WebGameCloudClientController {
     public AjaxResult key(@RequestParam(name = "id", required = true) String id,
                           @RequestParam(name = "key", required = true) String key) {
         return cloudClientService.applyKey(id, key);
+    }
+
+    /**
+     * 下发客户端包更新：把 config.yml 里的期望版本推给指定机器（后台下载/解包，立刻返回）。
+     * <p>与玩家点击触发的更新是同一条链路，只是发起者从玩家换成了管理员。</p>
+     */
+    @ApiName("下发云游戏客户端更新")
+    @ApiPermission("webgame.erp.cloudclients.edit")
+    @PostMapping("/push-update")
+    public AjaxResult pushUpdate(@RequestParam(name = "id", required = true) String id) {
+        if (playService == null) {
+            return AjaxResult.error("云游戏会话服务未就绪");
+        }
+        return playService.pushUpdate(id);
     }
 }

@@ -118,7 +118,21 @@ public class CloudClientServiceImpl implements CloudClientService {
             String id = String.valueOf(nextId++);
             CloudClient c = new CloudClient();
             c.setId(id);
+            List<String> aliasOut = new ArrayList<>();
+            if (body != null && body.containsKey("aliases")) {
+                String err = validateAliases(body.get("aliases"), id, aliasOut);
+                if (err != null) {
+                    return AjaxResult.error(err);
+                }
+            }
+            String poolErr = validatePool(body == null ? null : body.get("pool"));
+            if (poolErr != null) {
+                return AjaxResult.error(poolErr);
+            }
             applyBody(c, body);
+            if (body != null && body.containsKey("aliases")) {
+                c.setAliases(aliasOut);
+            }
             c.setOrder(maxOrder() + 1);
             c.setSource(deriveSource(c));
             c.setMissing(!entryExists(c));
@@ -145,7 +159,22 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (Boolean.FALSE.equals(enabled) && id.equals(defaultId)) {
                 return AjaxResult.error("默认客户端不可关闭，请先将其它客户端设为默认");
             }
+            List<String> aliasOut = new ArrayList<>();
+            boolean hasAliases = body != null && body.containsKey("aliases");
+            if (hasAliases) {
+                String err = validateAliases(body.get("aliases"), id, aliasOut);
+                if (err != null) {
+                    return AjaxResult.error(err);
+                }
+            }
+            String poolErr = validatePool(body == null ? null : body.get("pool"));
+            if (poolErr != null) {
+                return AjaxResult.error(poolErr);
+            }
             applyBody(c, body);
+            if (hasAliases) {
+                c.setAliases(aliasOut);
+            }
             if (c.getPath().isEmpty()) {
                 return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
             }
@@ -457,6 +486,7 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (r == null) {
                 c.setLastCheck(now());
                 c.setFailCount(c.getFailCount() + 1);
+                c.setHealthReason("探测超时（" + probeTimeoutMs() + "ms 内无响应）");
                 if (shouldMarkOffline(c)) {
                     c.setStatus(CloudClient.STATUS_OFFLINE);
                 }
@@ -570,6 +600,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 if (r == null) {
                     c.setLastCheck(now());
                     c.setFailCount(c.getFailCount() + 1);
+                    c.setHealthReason("探测超时（" + probeTimeoutMs() + "ms 内无响应）");
                     if (shouldMarkOffline(c)) {
                         c.setStatus(CloudClient.STATUS_OFFLINE);
                     }
@@ -624,12 +655,13 @@ public class CloudClientServiceImpl implements CloudClientService {
         return tls.reachable ? tls : r;
     }
 
-    /** 把一次探测结果落到条目上（online / unauthorized / offline + TTL 判定）。 */
+    /** 把一次探测结果落到条目上（online / degraded / unauthorized / offline + TTL 判定）。 */
     private void applyResult(CloudClient c, CloudClientProbe.Result r) {
         c.setLastCheck(now());
         c.setLatencyMs(r.latencyMs);
         if (!r.reachable) {
             c.setFailCount(c.getFailCount() + 1);
+            c.setHealthReason("不可达：" + r.error);
             if (shouldMarkOffline(c)) {
                 c.setStatus(CloudClient.STATUS_OFFLINE);
             }
@@ -644,9 +676,20 @@ public class CloudClientServiceImpl implements CloudClientService {
         if (!r.authorized) {
             c.setStatus(CloudClient.STATUS_UNAUTHORIZED);
             c.setFailCount(c.getFailCount() + 1);
+            c.setHealthReason("共享密钥被拒（HTTP " + r.httpStatus + "）");
+            return;
+        }
+        // 端口通、密钥也对，但健康端点自己报错（典型是 8080 在听、画面子系统返回 503）：
+        // 单独记 degraded，既不让玩家进，也不假装"离线"
+        if (!r.error.isEmpty()) {
+            c.setStatus(CloudClient.STATUS_DEGRADED);
+            c.setFailCount(c.getFailCount() + 1);
+            // r.error 自己就带 HTTP 状态码（HTTP 503 / health.ok=false），别再重复一遍
+            c.setHealthReason("健康检查异常：" + r.error);
             return;
         }
         c.setStatus(CloudClient.STATUS_ONLINE);
+        c.setHealthReason("");
         c.setLastOk(now());
         c.setFailCount(0);
         if (!r.version.isEmpty()) {
@@ -693,6 +736,9 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
         if (!r.authorized) {
             return "密钥被拒绝（HTTP " + r.httpStatus + "）";
+        }
+        if (!r.error.isEmpty()) {
+            return "健康检查异常（HTTP " + r.httpStatus + "）：" + r.error;
         }
         return "在线，版本 " + (r.version.isEmpty() ? "未知" : r.version)
                 + "，耗时 " + r.latencyMs + "ms";
@@ -832,6 +878,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                         client.setFailCount(c.getInt("fail-count", 0));
                         client.setCloudKey(c.getString("cloud-key", ""));
                         client.setLatencyMs(c.getLong("latency-ms", 0));
+                        client.setHealthReason(c.getString("health-reason", ""));
                         loaded.put(key, client);
                     }
                 }
@@ -904,6 +951,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 m.put("fail-count", c.getFailCount());
                 m.put("cloud-key", c.getCloudKey());
                 m.put("latency-ms", c.getLatencyMs());
+                m.put("health-reason", c.getHealthReason());
                 items.put(c.getId(), m);
             }
             root.put("clients", items);
@@ -963,6 +1011,24 @@ public class CloudClientServiceImpl implements CloudClientService {
             vo.setFailCount(c.getFailCount());
             vo.setLatencyMs(c.getLatencyMs());
             vo.setCloudKeyMasked(maskKey(c.getCloudKey()));
+            vo.setAliases(new ArrayList<>(c.getAliases()));
+            vo.setPool(c.getPool());
+            vo.setHealthReason(c.getHealthReason());
+            String expected = pages == null ? "" : pages.clientPackageVersion();
+            vo.setExpectedVersion(expected);
+            vo.setVersionMatch(expected.isEmpty() || expected.equals(c.getVersion()));
+            com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService play = plugin.getCloudPlayService();
+            if (play != null) {
+                vo.setBusy(play.isBusy(c.getId()));
+                if (play.isUpdating(c.getId())) {
+                    vo.setUpdateState("updating");
+                }
+                String updErr = play.updateErrorOf(c.getId());
+                if (!updErr.isEmpty()) {
+                    vo.setUpdateState("error");
+                    vo.setUpdateError(updErr);
+                }
+            }
             rows.add(vo);
         }
         return rows;
@@ -993,7 +1059,8 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
         String status = c.getStatus();
         return !CloudClient.STATUS_OFFLINE.equals(status)
-                && !CloudClient.STATUS_UNAUTHORIZED.equals(status);
+                && !CloudClient.STATUS_UNAUTHORIZED.equals(status)
+                && !CloudClient.STATUS_DEGRADED.equals(status);
     }
 
     /** URL → url；其余 → local。 */
@@ -1008,6 +1075,10 @@ public class CloudClientServiceImpl implements CloudClientService {
     private void applyBody(CloudClient c, Map<String, Object> body) {
         if (body == null) {
             return;
+        }
+        if (body.containsKey("pool")) {
+            String raw = str(body.get("pool")).trim();
+            c.setPool(raw.isEmpty() ? "" : CloudClientPages.normalizeAlias(raw));
         }
         String name = str(body.get("name")).trim();
         c.setName(name);
@@ -1050,6 +1121,70 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
     }
 
+    /**
+     * 校验别名输入：规范化 → 拒非法/保留字/被别的客户端占用 → 去重。
+     *
+     * @param out 校验通过后的规范形（直接写进条目）
+     * @return 错误文本；null 表示通过
+     */
+    private String validateAliases(Object raw, String selfId, List<String> out) {
+        List<String> list = new ArrayList<>();
+        if (raw instanceof List) {
+            for (Object o : (List<?>) raw) {
+                if (o != null) {
+                    list.add(String.valueOf(o));
+                }
+            }
+        } else if (raw != null) {
+            // 兼容 ERP 用逗号分隔的单字符串
+            for (String part : String.valueOf(raw).split("[,，\\s]+")) {
+                if (!part.trim().isEmpty()) {
+                    list.add(part.trim());
+                }
+            }
+        }
+        for (String a : list) {
+            String n = CloudClientPages.normalizeAlias(a);
+            if (n.isEmpty()) {
+                return "别名「" + a + "」不合法：1–24 个字符，不能含 / ? # % \\ 或空格";
+            }
+            if (CloudClientPages.isReservedAlias(n)) {
+                return "别名「" + n + "」是系统保留字（session/live/play/pool 等），请换一个";
+            }
+            if (out.contains(n)) {
+                continue;
+            }
+            for (CloudClient c : clients.values()) {
+                if (c.getId().equals(selfId)) {
+                    continue;
+                }
+                for (String other : c.getAliases()) {
+                    if (n.equals(CloudClientPages.normalizeAlias(other))) {
+                        return "别名「" + n + "」已被客户端 " + c.getId()
+                                + "（" + c.getName() + "）占用，请换一个";
+                    }
+                }
+            }
+            out.add(n);
+        }
+        return null;
+    }
+
+    /** 池名校验（与别名同一套规范化规则，但不占用 /cloud/<名字> 的命名空间）。 */
+    private String validatePool(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String s = str(raw).trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        if (CloudClientPages.normalizeAlias(s).isEmpty()) {
+            return "池名「" + s + "」不合法：1–24 个字符，不能含 / ? # % \\ 或空格";
+        }
+        return null;
+    }
+
     private int maxOrder() {
         int max = -1;
         for (CloudClient c : clients.values()) {
@@ -1072,7 +1207,8 @@ public class CloudClientServiceImpl implements CloudClientService {
             }
             String status = c.getStatus();
             if (CloudClient.STATUS_OFFLINE.equals(status)
-                    || CloudClient.STATUS_UNAUTHORIZED.equals(status)) {
+                    || CloudClient.STATUS_UNAUTHORIZED.equals(status)
+                    || CloudClient.STATUS_DEGRADED.equals(status)) {
                 continue;
             }
             if (best == null || c.getOrder() < best.getOrder()

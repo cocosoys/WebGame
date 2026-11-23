@@ -47,6 +47,89 @@ public class CloudClientVo {
     /** 密钥掩码，如 ab12****89ef；未配置为空串。 */
     private String cloudKeyMasked;
 
+    // ===== 别名 / 池 / 版本 / 更新 / 会话（ERP 列表展示与编辑用） =====
+
+    /** 根路径门牌别名列表（规范化后；空 = 只能按 id 进入）。 */
+    private java.util.List<String> aliases = new java.util.ArrayList<>();
+    /** 逻辑池名（空 = 该机器自成一池，不参与池匹配）。 */
+    private String pool = "";
+    /** 最近一次探测的原因（不可达异常 / HTTP 状态 / health.ok=false）。 */
+    private String healthReason = "";
+    /** WebGame 期望的客户端包版本（config.yml 的 cloud.client-update.version）。 */
+    private String expectedVersion = "";
+    /** 实际版本与期望版本是否一致（期望为空时视为一致）。 */
+    private boolean versionMatch = true;
+    /** 该机器当前是否被会话占用。 */
+    private boolean busy;
+    /** 包更新状态：{@code updating} / {@code error} / 空。 */
+    private String updateState = "";
+    /** 包更新失败的最近一次原因。 */
+    private String updateError = "";
+
+    public java.util.List<String> getAliases() {
+        return aliases;
+    }
+
+    public void setAliases(java.util.List<String> aliases) {
+        this.aliases = aliases == null ? new java.util.ArrayList<>() : aliases;
+    }
+
+    public String getPool() {
+        return pool;
+    }
+
+    public void setPool(String pool) {
+        this.pool = pool == null ? "" : pool;
+    }
+
+    public String getHealthReason() {
+        return healthReason;
+    }
+
+    public void setHealthReason(String healthReason) {
+        this.healthReason = healthReason == null ? "" : healthReason;
+    }
+
+    public String getExpectedVersion() {
+        return expectedVersion;
+    }
+
+    public void setExpectedVersion(String expectedVersion) {
+        this.expectedVersion = expectedVersion == null ? "" : expectedVersion;
+    }
+
+    public boolean isVersionMatch() {
+        return versionMatch;
+    }
+
+    public void setVersionMatch(boolean versionMatch) {
+        this.versionMatch = versionMatch;
+    }
+
+    public boolean isBusy() {
+        return busy;
+    }
+
+    public void setBusy(boolean busy) {
+        this.busy = busy;
+    }
+
+    public String getUpdateState() {
+        return updateState;
+    }
+
+    public void setUpdateState(String updateState) {
+        this.updateState = updateState == null ? "" : updateState;
+    }
+
+    public String getUpdateError() {
+        return updateError;
+    }
+
+    public void setUpdateError(String updateError) {
+        this.updateError = updateError == null ? "" : updateError;
+    }
+
     public String getId() {
         return id;
     }

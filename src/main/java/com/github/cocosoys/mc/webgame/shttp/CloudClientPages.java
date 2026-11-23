@@ -50,7 +50,9 @@ public final class CloudClientPages {
     private static final int ALIAS_MAX_LEN = 24;
     /** 别名保留字：与我们的固定子路径/常用入口冲突。 */
     private static final java.util.Set<String> ALIAS_RESERVED = new java.util.HashSet<>(java.util.Arrays.asList(
-            "session", "live", "play", "index", "index.html", "favicon.ico", ".", ".."));
+            "session", "live", "play", "index", "index.html", "favicon.ico", "pool", ".", ".."));
+    /** 池入口前缀：{@code /cloud/pool/<池名>}。<code>pool</code> 因此被列为别名保留字。 */
+    private static final String POOL_SEGMENT = "pool";
 
     private final WebGame plugin;
     private final CloudClientService cloudClientService;
@@ -217,6 +219,8 @@ public final class CloudClientPages {
         byte[] dirBytes = dirHtml.getBytes(StandardCharsets.UTF_8);
         registerProxyPage(pages, ROOT_CLOUD_PATH, dirBytes);
         registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), dirBytes);
+        // 池入口：/cloud/pool/<池名> —— 一个名字对应多台机器，点进去由服务端挑一台空闲的
+        registerPoolPages(pages, allowSelect);
         livePrefixes = live;
         aliasToClient = aliasMap;
         // 客户端更新包：目录登记 + manifest（代理按 version/sha256 决定要不要下载）
@@ -522,6 +526,10 @@ public final class CloudClientPages {
      * <p>ASCII 不区分大小写是为了"Test / test / TEST 都是同一块门牌"；
      * 中文没有大小写，不做额外变换，避免 NFC/NFD 之类反而制造两个 key。</p>
      */
+    public static boolean isReservedAlias(String normalized) {
+        return normalized != null && ALIAS_RESERVED.contains(normalized);
+    }
+
     public static String normalizeAlias(String alias) {
         if (alias == null) {
             return "";
@@ -703,6 +711,183 @@ public final class CloudClientPages {
             out.add(cap);
         }
         return out;
+    }
+
+    /**
+     * 池成员：{@code pool} 非空的远程客户端按池名分组（只有启用且入口是 URL 的才算）。
+     * <p>池名在写入时已规范化（小写 ASCII / 中文原样），这里不再重复处理。</p>
+     */
+    private java.util.Map<String, List<CloudClient>> poolMembers() {
+        java.util.Map<String, List<CloudClient>> pools = new java.util.LinkedHashMap<>();
+        for (CloudClient c : cloudClientService.versions()) {
+            if (!c.isEnabled() || c.isMissing() || !CloudClient.isUrl(c.getPath())) {
+                continue;
+            }
+            String pool = c.getPool();
+            if (pool == null || pool.isEmpty()) {
+                continue;
+            }
+            List<CloudClient> list = pools.get(pool);
+            if (list == null) {
+                list = new ArrayList<>();
+                pools.put(pool, list);
+            }
+            list.add(c);
+        }
+        return pools;
+    }
+
+    /**
+     * 池的入口令牌：取池内出现次数最多的非空密钥。
+     *
+     * <p>池是"一组共享同一份 cloud-stream 口令的机器"；令牌写在页面里只是为了让浏览器能
+     * 通过服务端的鉴权，真正的门在会话层（只挑密钥等于这个令牌的机器）。密钥各不相同的池
+     * 能用的机器就只剩一半——与其偷偷降级，不如让 ERP 的池列一眼看出来配错了。</p>
+     */
+    private String poolKey(List<CloudClient> members) {
+        java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
+        for (CloudClient c : members) {
+            String k = c.getCloudKey();
+            if (k.isEmpty()) {
+                continue;
+            }
+            Integer n = counts.get(k);
+            counts.put(k, n == null ? 1 : n + 1);
+        }
+        String best = "";
+        int bestCount = 0;
+        for (java.util.Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getValue() > bestCount) {
+                bestCount = e.getValue();
+                best = e.getKey();
+            }
+        }
+        return best;
+    }
+
+    /** 登记每个池的入口页与包装页（{@code /cloud/pool/<池名>}）。 */
+    private void registerPoolPages(WebPageApi pages, boolean allowSelect) {
+        if (!allowSelect || !relayEnabled()) {
+            return;
+        }
+        for (java.util.Map.Entry<String, List<CloudClient>> e : poolMembers().entrySet()) {
+            String pool = e.getKey();
+            String token = poolKey(e.getValue());
+            if (token.isEmpty()) {
+                LOG.warning("池 " + pool + " 内没有可用的共享密钥，跳过入口登记");
+                continue;
+            }
+            byte[] entry = buildPoolEntryPage(pool, e.getValue(), token).getBytes(StandardCharsets.UTF_8);
+            byte[] play = buildPoolPlayPage(pool, token).getBytes(StandardCharsets.UTF_8);
+            for (String v : aliasVariants(pool)) {
+                String base = ROOT_CLOUD_PATH + POOL_SEGMENT + "/" + v;
+                registerProxyPage(pages, base, entry);
+                registerProxyPage(pages, base + "/", entry);
+                registerProxyPage(pages, base + "/play", play);
+                registerProxyPage(pages, base + "/play/", play);
+            }
+        }
+    }
+
+    /**
+     * 池入口页：玩家看到的是一组机器（只读），提交时只报池名——
+     * 具体挑哪台由服务端按策略决定，玩家不需要也不应该关心。
+     */
+    private String buildPoolEntryPage(String pool, List<CloudClient> members, String token) {
+        StringBuilder list = new StringBuilder(256);
+        for (CloudClient c : members) {
+            list.append("<span class=\"pill\">").append(escape(c.getName())).append("</span>");
+        }
+        String tok = js(token);
+        return "<!DOCTYPE html>\n"
+                + "<html lang=\"zh-CN\">\n<head>\n"
+                + "<meta charset=\"utf-8\">\n"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                + "<title>池 " + escape(pool) + " · 进入云游戏</title>\n"
+                + "<style>\n"
+                + "*{box-sizing:border-box}\n"
+                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
+                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
+                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
+                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
+                + ".sub{margin:0 0 18px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
+                + ".pill{display:inline-block;margin:0 6px 6px 0;padding:2px 8px;border-radius:6px;"
+                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
+                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
+                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
+                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
+                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
+                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
+                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
+                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
+                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
+                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
+                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
+                + ".wait{margin-top:16px;display:none}\n"
+                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
+                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
+                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
+                + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
+                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
+                + ".back:hover{color:#4f8cff}\n"
+                + "</style>\n</head>\n<body>\n"
+                + "<div class=\"wrap\">\n"
+                + "<h1>池 " + escape(pool) + "</h1>\n"
+                + "<p class=\"sub\">这组机器共 " + members.size() + " 台，点进入后自动挑一台<strong>空闲且在线</strong>的；"
+                + "全部占用时会被拒，不会排队也不会抢别人的机器。</p>\n"
+                + "<div class=\"sub\">" + list + "</div>\n"
+                + "<form id=\"f\" autocomplete=\"off\">\n"
+                + "<div class=\"field\">游戏名称</div>\n"
+                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
+                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
+                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
+                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
+                + "<div class=\"msg\" id=\"m\"></div>\n"
+                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配工作区…</span></p></div>\n"
+                + "</form>\n"
+                + "<a class=\"back\" href=\"" + escape(ROOT_CLOUD_PATH) + "\">← 返回门牌目录</a>\n"
+                + "</div>\n"
+                + "<script>\n"
+                + "var API=" + js(API_PREFIX) + ";\n"
+                + "var POOL=" + js(pool) + ";\n"
+                + "var TOKEN=" + tok + ";\n"
+                + "var P=" + progressConfig() + ";\n"
+                + progressJs()
+                + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
+                + "var f=document.getElementById('f'),p=document.getElementById('p'),b=document.getElementById('b'),"
+                + "m=document.getElementById('m'),wait=document.getElementById('wait'),fill=document.getElementById('fill'),"
+                + "pc=document.getElementById('pc'),st=document.getElementById('st');\n"
+                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
+                + "var pr=null,attempts=0;\n"
+                + "function attempt(v){\n"
+                + "  if(!pr){pr=startProgress(fill,pc);}\n"
+                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
+                + "body:JSON.stringify({pool:POOL,player:v,token:TOKEN})})\n"
+                + "  .then(function(r){return r.json();})\n"
+                + "  .then(function(j){\n"
+                + "    var d=(j&&j.data)||{};\n"
+                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配 '+(d.clientName||'云主机')+'，正在连接画面…';"
+                + "location.replace(d.playUrl);return;}\n"
+                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
+                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
+                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
+                + "    pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say((j&&j.msg)||'暂时没有可用的机器，请稍后重试',true);\n"
+                + "  })\n"
+                + "  .catch(function(){pr.stop();b.disabled=false;wait.style.display='none';"
+                + "say('网络异常，请稍后重试',true);});\n"
+                + "}\n"
+                + "f.addEventListener('submit',function(e){\n"
+                + "  e.preventDefault();\n"
+                + "  var v=(p.value||'').trim();\n"
+                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
+                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
+                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
+                + "st.textContent='正在分配工作区…';attempt(v);\n"
+                + "});\n"
+                + "</script>\n</body>\n</html>\n";
     }
 
     /** 根路径登记（无 /plugins 前缀）；返回的 Entry 手工打 tag 以便随发布整体撤销。 */
@@ -1020,6 +1205,25 @@ public final class CloudClientPages {
             cards.append("<span>").append(online ? "在线" : escape(c.getStatus())).append("</span>")
                     .append("</div></a>");
         }
+        // 池卡片：一个名字后面可能有好几台机器，玩家只认名字
+        for (java.util.Map.Entry<String, List<CloudClient>> pe : poolMembers().entrySet()) {
+            count++;
+            String pool = pe.getKey();
+            int members = pe.getValue().size();
+            int healthy = 0;
+            for (CloudClient m : pe.getValue()) {
+                if (m.isHealthy()) {
+                    healthy++;
+                }
+            }
+            cards.append("<a class=\"card\" href=\"").append(ROOT_CLOUD_PATH).append(POOL_SEGMENT)
+                    .append("/").append(escape(pool)).append("\">")
+                    .append("<div class=\"card-head\"><span class=\"card-name\">池 ").append(escape(pool))
+                    .append("</span><span class=\"dot").append(healthy > 0 ? "" : " off").append("\"></span></div>")
+                    .append("<div class=\"card-url\">/cloud/pool/").append(escape(pool)).append("</div>")
+                    .append("<div class=\"card-meta\"><span>").append(members).append(" 台</span>")
+                    .append("<span>在线 ").append(healthy).append("</span></div></a>");
+        }
         if (count == 0) {
             // 没配别名时退化成"按 id 进入"，避免页面空白让人以为服务坏了
             for (CloudClient c : cloudClientService.versions()) {
@@ -1178,7 +1382,7 @@ public final class CloudClientPages {
                 + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
                 + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
                 + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
-                + "st.textContent='正在分配云主机并启动客户端…';attempt(v);\n"
+                + "st.textContent='正在分配工作区…';attempt(v);\n"
                 + "});\n"
                 + "</script>\n</body>\n</html>\n";
     }
@@ -1191,12 +1395,29 @@ public final class CloudClientPages {
      * 这样即使桌面被解锁，玩家也不会直面一个可操作的 Windows 桌面。</p>
      */
     private String buildPlayPage(CloudClient c, String liveUrl, String token, String homeUrl, String alias) {
-        String name = escape(c.getName());
+        String aliasTag = alias == null || alias.isEmpty()
+                ? "" : "<span class=\"pill\">/cloud/" + escape(alias) + "</span>";
+        return buildPlayPage(c.getName(), liveUrl, token, homeUrl, aliasTag, false);
+    }
+
+    /**
+     * 池包装页：{@code /cloud/pool/<池名>/play/?s=<会话>}。
+     *
+     * <p>地址栏停在池名上，iframe 的画面地址在拿到会话状态后才由前端拼出来
+     * （{@code /web/plugins/WebGame/cloud/<实际机器 id>/live/}）——池是"自动挑一台"，
+     * 挑中谁在起会话时才知道。</p>
+     */
+    private String buildPoolPlayPage(String pool, String token) {
+        return buildPlayPage("池 " + pool, "", token, ROOT_CLOUD_PATH,
+                "<span class=\"pill\">/cloud/pool/" + escape(pool) + "</span>", true);
+    }
+
+    private String buildPlayPage(String rawName, String liveUrl, String token, String homeUrl,
+                                 String aliasTag, boolean dynamicLive) {
+        String name = escape(rawName);
         String live = js(liveUrl);
         String tok = js(token);
         String home = homeUrl;
-        String aliasTag = alias == null || alias.isEmpty()
-                ? "" : "<span class=\"pill\">/cloud/" + escape(alias) + "</span>";
         int hbSec = 10;
         int hbKeep = 30;
         try {
@@ -1233,6 +1454,13 @@ public final class CloudClientPages {
                 + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
                 + ".mp{margin:10px 0 0;font-size:12px;color:#9aa6bd}\n"
                 + ".mp b{color:#e8edf7;font-weight:600}\n"
+                + ".steps{display:flex;gap:6px;margin:14px 0 6px}\n"
+                + ".step{flex:1;padding:6px 4px;border-radius:9px;background:rgba(255,255,255,.04);"
+                + "border:1px solid transparent;color:#6f7a90;font-size:11px;line-height:1.5;transition:all .2s}\n"
+                + ".step b{display:block;font-size:10px;opacity:.75}\n"
+                + ".step.active{border-color:#4f8cff;color:#dbe6ff;background:rgba(79,140,255,.12)}\n"
+                + ".step.done{color:#a7dd85}\n"
+                + ".now{margin:0;font-size:12px;color:#9aa6bd}\n"
                 + ".note{margin:10px 0 0;font-size:12px;color:#6f7a90}\n"
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"bar\">\n"
@@ -1240,11 +1468,19 @@ public final class CloudClientPages {
                 + "<span id=\"pl\" class=\"grow\"></span>\n"
                 + "<button class=\"btn\" id=\"end\" type=\"button\">结束游戏</button>\n"
                 + "</div>\n"
-                + "<iframe id=\"v\" src=\"" + escape(liveUrl) + "\" allow=\"autoplay; fullscreen; microphone; camera;"
+                + "<iframe id=\"v\" src=\"" + (dynamicLive ? "" : escape(liveUrl))
+                + "\" allow=\"autoplay; fullscreen; microphone; camera;"
                 + " clipboard-read; clipboard-write; gamepad\" allowfullscreen></iframe>\n"
                 + "<div class=\"mask\" id=\"mask\"><div class=\"mw\">\n"
                 + "<p class=\"mt\" id=\"mt\">正在连接云主机…</p>\n"
-                + "<div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<div class=\"steps\">\n"
+                + "<div class=\"step\" id=\"st1\"><b>1</b>分配工作区</div>\n"
+                + "<div class=\"step\" id=\"st2\"><b>2</b>起 JVM</div>\n"
+                + "<div class=\"step\" id=\"st3\"><b>3</b>连服务器</div>\n"
+                + "<div class=\"step\" id=\"st4\"><b>4</b>画面就绪</div>\n"
+                + "</div>\n"
+                + "<p class=\"now\" id=\"now\">当前：正在分配工作区…</p>\n"
+                + "<div class=\"track\" style=\"margin-top:10px\"><i id=\"fill\"></i></div>\n"
                 + "<p class=\"mp\"><b><span id=\"pc\">0</span>%</b> · <span id=\"st\">首次启动客户端是冷启动，约需 10 分钟</span></p>\n"
                 + "<p class=\"note\">关掉本页不会立刻释放机器：服务端约 " + hbKeep + " 秒收不到心跳才会收尾；"
                 + "正常离开请点右上角「结束游戏」。</p>\n"
@@ -1254,20 +1490,40 @@ public final class CloudClientPages {
                 + "var TOKEN=" + tok + ";\n"
                 + "var HOME=" + js(home) + ";\n"
                 + "var HB=" + hbSec + ";\n"
+                + "var DYN=" + (dynamicLive ? "true" : "false") + ";\n"
+                + "var LIVEBASE=" + js(WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH) + ";\n"
                 + "var P=" + progressConfig() + ";\n"
                 + progressJs()
                 + "var q=new URLSearchParams(location.search),S=q.get('s')||'';\n"
                 + "var mask=document.getElementById('mask'),pl=document.getElementById('pl'),"
                 + "v=document.getElementById('v'),endBtn=document.getElementById('end'),"
                 + "fill=document.getElementById('fill'),pc=document.getElementById('pc'),st=document.getElementById('st'),"
-                + "mt=document.getElementById('mt');\n"
+                + "mt=document.getElementById('mt'),nowEl=document.getElementById('now'),"
+                + "steps=[document.getElementById('st1'),document.getElementById('st2'),"
+                + "document.getElementById('st3'),document.getElementById('st4')];\n"
+                + "var STAGE_TEXT={workspace:'正在分配工作区（拷贝客户端与可写区）…',"
+                + "jvm:'正在启动游戏进程（JVM）…',join:'正在连接服务器…',"
+                + "screen:'画面通道已接通，等待游戏进服…'};\n"
+                + "var STAGE_ORDER=['workspace','jvm','join','screen'];var lastStage='';\n"
+                + "// 阶段由服务端按真实信号推进：prepare 返回=工作区已分配，游戏进程 running=JVM 起来了，"
+                + "玩家登录本服=连上了；第 4 格是本页 iframe 真的载入过。\n"
+                + "function paintStage(stage){\n"
+                + "  if(stage){lastStage=stage;}\n"
+                + "  var idx=STAGE_ORDER.indexOf(lastStage)+1;\n"
+                + "  for(var i=0;i<4;i++){\n"
+                + "    var el=steps[i];if(!el)continue;\n"
+                + "    var n=i+1,done=(idx>n)||(n===4&&loaded);\n"
+                + "    el.className='step'+(done?' done':'')+((!done&&n===idx)?' active':'');\n"
+                + "  }\n"
+                + "  if(stage&&STAGE_TEXT[stage]){nowEl.textContent='当前：'+STAGE_TEXT[stage];}\n"
+                + "}\n"
                 + "function goHome(){location.replace(HOME);}\n"
                 + "function busy(on){mask.style.display=on?'flex':'none';}\n"
-                + "var pr=startProgress(fill,pc),loaded=false,inited=false,shown=false;\n"
+                + "var pr=startProgress(fill,pc),loaded=false,inited=false,shown=false,liveSet=false;\n"
                 + "function reveal(){if(shown)return;shown=true;busy(false);}\n"
                 + "// 画面连上了也要等进度条走到 90% 再揭开遮罩：15 秒的等待是写在规则里的，不跳步\n"
                 + "function tryReveal(){if(loaded&&inited){reveal();return;}setTimeout(tryReveal,200);}\n"
-                + "v.addEventListener('load',function(){loaded=true;pr.finish();"
+                + "v.addEventListener('load',function(){loaded=true;pr.finish();paintStage();"
                 + "mt.textContent='正在启动游戏客户端…';st.textContent='画面通道已连通，等待游戏进程就绪';});\n"
                 + "(function watchInit(){if(pr.atInit()){inited=true;if(loaded)reveal();return;}setTimeout(watchInit,200);})();\n"
                 + "tryReveal();\n"
@@ -1277,6 +1533,12 @@ public final class CloudClientPages {
                 + "  .then(function(j){\n"
                 + "    var d=(j&&j.data)||{};\n"
                 + "    if(d.player){pl.textContent='玩家 '+d.player+' · '+(d.gameState||'');}\n"
+                + "    paintStage(d.stage);\n"
+                + "    // 池入口：会话起来后才知道挑中了哪台机器，iframe 地址此时才拼（地址栏仍是池名）\n"
+                + "    if(DYN&&!liveSet&&d.state==='running'&&d.clientId){\n"
+                + "      liveSet=true;\n"
+                + "      v.src=LIVEBASE+d.clientId+'/live/?token='+encodeURIComponent(TOKEN);\n"
+                + "    }\n"
                 + "    if(!S||d.state==='ended'||d.reason==='not-found'){goHome();}\n"
                 + "  }).catch(function(){});\n"
                 + "}\n"
