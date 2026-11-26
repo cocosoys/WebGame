@@ -26,7 +26,13 @@ export default {
     load() {
       this.loading = true
       loadConfigFile(this.fileId).then(res => {
-        this.model = res.data || {}
+        const data = res.data || {}
+        // 允许页面在渲染前补齐缺失键：保证表单覆盖的每个参数都真实存在于 model，
+        // 且 original 快照包含补齐后的值，不会一加载就被判成“已修改”。
+        if (typeof this.ensureConfigDefaults === 'function') {
+          this.ensureConfigDefaults(data)
+        }
+        this.model = data
         this.original = JSON.stringify(this.model)
         this.loading = false
       }).catch(() => { this.loading = false })
