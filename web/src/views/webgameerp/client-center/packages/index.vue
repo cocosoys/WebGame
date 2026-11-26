@@ -36,30 +36,11 @@
       </el-table-column>
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
       <el-table-column label="版本" align="center" prop="version" min-width="130" show-overflow-tooltip />
-      <el-table-column label="入口 / 解包目录" align="center" prop="displayPath" min-width="230" show-overflow-tooltip />
-      <el-table-column label="大小" align="center" width="95">
-        <template slot-scope="scope">{{ formatSize(scope.row.size) }}</template>
-      </el-table-column>
-      <el-table-column label="SHA-256" align="center" min-width="160" show-overflow-tooltip>
-        <template slot-scope="scope">{{ shortSha(scope.row.sha256) }}</template>
-      </el-table-column>
-      <el-table-column label="引用" align="center" width="65">
-        <template slot-scope="scope">
-          <span v-if="scope.row.type === 'eagler'">{{ scope.row.referenceCount || 0 }}</span>
-          <span v-else style="color: #c0c4cc">—</span>
-        </template>
-      </el-table-column>
       <el-table-column label="状态" align="center" width="75">
         <template slot-scope="scope">
           <el-tag :type="scope.row.enabled ? 'success' : 'info'" size="mini">
             {{ scope.row.enabled ? '启用' : '停用' }}
           </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="下发预选" align="center" width="85">
-        <template slot-scope="scope">
-          <el-tag v-if="scope.row.type === 'cloud' && scope.row.preselect" type="success" size="mini">预选</el-tag>
-          <span v-else style="color: #c0c4cc">—</span>
         </template>
       </el-table-column>
       <el-table-column label="操作" align="center" width="285">
@@ -266,17 +247,6 @@ export default {
       }).finally(() => {
         this.loading = false
       })
-    },
-    formatSize(n) {
-      if (!n) return '0 B'
-      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
-      if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
-      if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
-      return n + ' B'
-    },
-    shortSha(sha) {
-      if (!sha) return '—'
-      return sha.length > 18 ? sha.substring(0, 8) + '…' + sha.substring(sha.length - 8) : sha
     },
     openUpload() {
       this.form = this.emptyForm()

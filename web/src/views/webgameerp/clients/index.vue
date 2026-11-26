@@ -35,23 +35,7 @@
           <i class="el-icon-rank drag-handle" title="拖拽调整顺序" />
         </template>
       </el-table-column>
-      <el-table-column label="默认" align="center" width="70">
-        <template slot-scope="scope">
-          <el-tag v-if="scope.row.defaultVersion" type="success" size="mini">默认</el-tag>
-          <span v-else style="color: #c0c4cc">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="客户端 id" align="center" prop="id" width="120" />
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
-      <el-table-column label="客户端包" align="center" min-width="180" show-overflow-tooltip>
-        <template slot-scope="scope">
-          <div>{{ scope.row.packageName || '—' }}</div>
-          <div class="form-hint">{{ scope.row.packageId || '' }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="入口 / 路径" align="center" min-width="240" show-overflow-tooltip>
-        <template slot-scope="scope">{{ scope.row.path }}</template>
-      </el-table-column>
       <el-table-column label="MC 版本" align="center" min-width="160">
         <template slot-scope="scope">
           <template v-if="scope.row.mcVersions && scope.row.mcVersions.length">
@@ -64,17 +48,6 @@
             >{{ v.version }}</el-tag>
           </template>
           <span v-else style="color: #909399">未指定</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="Eagler 协议" align="center" width="100">
-        <template slot-scope="scope">
-          <span v-if="scope.row.eaglerProtocol">V{{ scope.row.eaglerProtocol }}</span>
-          <span v-else style="color: #909399">自适应</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="来源" align="center" width="80">
-        <template slot-scope="scope">
-          <el-tag size="mini" :type="sourceTagType(scope.row.source)">{{ sourceLabel(scope.row.source) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="状态" align="center" width="110">
@@ -333,12 +306,6 @@ export default {
       } finally {
         this.editSaving = false
       }
-    },
-    sourceLabel(source) {
-      return { builtin: '内置', uploaded: '上传', external: '外链', local: '本地' }[source] || source || '—'
-    },
-    sourceTagType(source) {
-      return { builtin: 'info', uploaded: '', external: 'warning', local: 'success' }[source] || ''
     },
     onToggle(row, val) {
       if (val) {

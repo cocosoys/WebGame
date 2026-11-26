@@ -172,7 +172,7 @@
               <el-button type="text" size="mini" @click="handleMore('openPage', scope.row)">打开页面</el-button>
               <el-button type="text" size="mini" @click="handleMore('copyEntry', scope.row)">复制入口</el-button>
             </div>
-            <el-button slot="reference" type="text" size="mini">更多操作<i class="el-icon-arrow-down el-icon--right" /></el-button>
+            <el-button slot="reference" type="text" size="mini" style="margin-left: 10px">更多操作<i class="el-icon-arrow-down el-icon--right" /></el-button>
           </el-popover>
         </template>
       </el-table-column>
