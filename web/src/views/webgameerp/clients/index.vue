@@ -141,31 +141,6 @@
             <router-link to="/webgameerp/client-center/packages">去客户端管理上传</router-link>
           </div>
         </el-form-item>
-        <el-form-item label="MC 版本">
-          <el-select
-            v-model="editForm.mcVersions"
-            multiple
-            filterable
-            clearable
-            placeholder="选择该客户端支持的 Minecraft 版本（可多选）"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="opt in mcVersionOptions"
-              :key="opt.version"
-              :label="opt.version + ' (' + opt.protocol + ')'"
-              :value="opt.version"
-            />
-          </el-select>
-          <div class="form-hint">协议号由版本自动带出，仅作记录，不参与联机协商</div>
-        </el-form-item>
-        <el-form-item label="Eagler 协议">
-          <el-select v-model="editForm.eaglerProtocol" style="width: 100%">
-            <el-option label="自适应（推荐）" :value="0" />
-            <el-option label="V3（旧版 eagler）" :value="3" />
-            <el-option label="V4（新版 eagler）" :value="4" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="editForm.enabled" />
         </el-form-item>
@@ -181,7 +156,6 @@
 <script>
 import {
   listClients,
-  listMcVersions,
   clientImpact,
   setClientEnabled,
   setDefaultClient,
@@ -198,8 +172,6 @@ const emptyEditForm = () => ({
   id: '',
   name: '',
   packageId: '',
-  mcVersions: [],
-  eaglerProtocol: 0,
   enabled: true,
   source: ''
 })
@@ -210,7 +182,6 @@ export default {
     return {
       loading: false,
       rows: [],
-      mcVersionOptions: [],
       eaglerPackages: [],
       defaultId: '',
       allowPlayerSelect: true,
@@ -229,7 +200,6 @@ export default {
   },
   created() {
     this.getList()
-    this.getMcVersions()
     this.getPackages()
   },
   beforeDestroy() {
@@ -247,11 +217,6 @@ export default {
         this.$nextTick(this.initSortable)
       }).finally(() => {
         this.loading = false
-      })
-    },
-    getMcVersions() {
-      listMcVersions().then(res => {
-        this.mcVersionOptions = res.data || []
       })
     },
     getPackages() {
@@ -336,8 +301,6 @@ export default {
         id: row.id,
         name: row.name,
         packageId: row.packageId || '',
-        mcVersions: (row.mcVersions || []).map(v => v.version),
-        eaglerProtocol: row.eaglerProtocol,
         enabled: row.enabled,
         source: row.source
       }
@@ -359,8 +322,6 @@ export default {
           id: this.editForm.id,
           name: this.editForm.name,
           packageId: this.editForm.packageId,
-          mcVersions: this.editForm.mcVersions,
-          eaglerProtocol: this.editForm.eaglerProtocol,
           enabled: this.editForm.enabled
         }
         const res = creating

@@ -707,8 +707,12 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         if (!packageId.isEmpty()) {
             v.setPackageId(packageId);
         }
-        v.setMcVersions(parseMcVersions(body.get("mcVersions")));
-        v.setEaglerProtocol(toInt(body.get("eaglerProtocol"), 0));
+        if (body.containsKey("mcVersions")) {
+            v.setMcVersions(parseMcVersions(body.get("mcVersions")));
+        }
+        if (body.containsKey("eaglerProtocol")) {
+            v.setEaglerProtocol(toInt(body.get("eaglerProtocol"), 0));
+        }
         Boolean enabled = toBool(body.get("enabled"));
         if (enabled != null) {
             v.setEnabled(enabled);
@@ -743,6 +747,12 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         v.setSource(deriveSource(v));
         v.setSha256(p.getSha256());
         v.setSize(p.getSize());
+        // 弹窗不再让管理员手填 MC 版本：新条目从制品版本推导，编辑时保留原值。
+        if (v.getMcVersions().isEmpty()) {
+            List<McVersionOption> derived = new ArrayList<>();
+            addMcVersion(derived, resolveMcVersion(p.getVersion(), 0));
+            v.setMcVersions(derived);
+        }
         return "";
     }
 

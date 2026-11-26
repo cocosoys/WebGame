@@ -1476,7 +1476,9 @@ public class CloudClientServiceImpl implements CloudClientService {
         if (!path.isEmpty()) {
             c.setPath(path);
         }
-        c.setMcVersion(str(body.get("mcVersion")).trim());
+        if (body.containsKey("mcVersion")) {
+            c.setMcVersion(str(body.get("mcVersion")).trim());
+        }
         Boolean enabled = toBool(body.get("enabled"));
         if (enabled != null) {
             c.setEnabled(enabled);

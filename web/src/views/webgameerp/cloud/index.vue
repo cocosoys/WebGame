@@ -103,37 +103,6 @@
           <span v-else style="color: #909399">未配置</span>
         </template>
       </el-table-column>
-      <el-table-column label="最近成功" align="center" width="150">
-        <template slot-scope="scope">
-          <span v-if="scope.row.lastOk">{{ scope.row.lastOk }}</span>
-          <span v-else style="color: #909399">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="接入方式" align="center" min-width="260">
-        <template slot-scope="scope">
-          <template v-if="scope.row.source === 'url'">
-            <el-tooltip
-              v-if="scope.row.livePath"
-              :content="'同端口转播：' + scope.row.livePath"
-              placement="top"
-            >
-              <el-tag size="mini" type="success">同端口</el-tag>
-            </el-tooltip>
-            <el-tooltip v-else content="未走同端口转播，跳转到设备地址" placement="top">
-              <el-tag size="mini" type="warning">直连</el-tag>
-            </el-tooltip>
-            <span class="live-path">{{ scope.row.livePath || '—' }}</span>
-            <el-button
-              v-if="scope.row.livePath"
-              type="text"
-              size="mini"
-              icon="el-icon-document-copy"
-              @click="copyText(liveUrl(scope.row))"
-            >复制</el-button>
-          </template>
-          <el-tag v-else size="mini" type="info">本地页面</el-tag>
-        </template>
-      </el-table-column>
       <el-table-column label="MC 版本" align="center" min-width="120">
         <template slot-scope="scope">
           <span v-if="scope.row.mcVersion">{{ scope.row.mcVersion }}</span>
@@ -150,21 +119,7 @@
           <el-tag v-if="scope.row.missing" size="mini" type="danger" style="margin-left: 6px">缺失</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="期望客户端包" align="center" min-width="200">
-        <template slot-scope="scope">
-          <div v-if="scope.row.packageName">{{ scope.row.packageName }}</div>
-          <div v-else style="color: #909399">未指定</div>
-          <div v-if="scope.row.expectedVersion" class="runtime-hint">
-            版本 {{ scope.row.expectedVersion }}
-            <el-tag v-if="scope.row.versionMatch === false" size="mini" type="danger" style="margin-left: 4px">不一致</el-tag>
-          </div>
-          <el-tag v-if="scope.row.updateState === 'updating'" size="mini" type="warning" style="margin-top: 2px">更新中</el-tag>
-          <el-tooltip v-if="scope.row.updateError" :content="scope.row.updateError" placement="top">
-            <el-tag size="mini" type="danger" style="margin-top: 2px">更新失败</el-tag>
-          </el-tooltip>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" align="center" width="300">
+      <el-table-column label="操作" align="center" width="320">
         <template slot-scope="scope">
           <el-button
             type="text"
@@ -174,30 +129,6 @@
             @click="handleRefresh(scope.row)"
           >刷新</el-button>
           <el-button type="text" size="mini" @click="openEdit(scope.row)">编辑</el-button>
-          <el-dropdown trigger="click" size="mini" style="margin: 0 8px" @command="cmd => handleMore(cmd, scope.row)">
-            <el-button type="text" size="mini">更多操作<i class="el-icon-arrow-down el-icon--right" /></el-button>
-            <el-dropdown-menu slot="dropdown">
-              <el-dropdown-item
-                command="push"
-                :disabled="scope.row.source !== 'url' || !scope.row.address || scope.row.busy"
-              >下发更新</el-dropdown-item>
-              <el-dropdown-item
-                command="default"
-                :disabled="scope.row.defaultVersion || !scope.row.enabled || scope.row.missing"
-              >设为默认设备</el-dropdown-item>
-              <el-dropdown-item command="key">密钥</el-dropdown-item>
-              <el-dropdown-item
-                command="forceEnd"
-                :disabled="!scope.row.busy && !scope.row.endUnconfirmed"
-              >强制结束</el-dropdown-item>
-              <el-dropdown-item
-                command="restart"
-                :disabled="scope.row.busy || scope.row.endUnconfirmed || !scope.row.address"
-              >重启游戏</el-dropdown-item>
-              <el-dropdown-item command="openPage">打开页面</el-dropdown-item>
-              <el-dropdown-item command="copyEntry">复制入口</el-dropdown-item>
-            </el-dropdown-menu>
-          </el-dropdown>
           <el-button
             type="text"
             size="mini"
@@ -205,6 +136,44 @@
             :disabled="scope.row.busy || scope.row.endUnconfirmed"
             @click="handleDelete(scope.row)"
           >删除</el-button>
+          <el-popover
+            placement="bottom-end"
+            width="160"
+            trigger="click"
+            :append-to-body="true"
+            popper-class="cloud-more-popover"
+          >
+            <div class="more-actions">
+              <el-button
+                type="text"
+                size="mini"
+                :disabled="scope.row.source !== 'url' || !scope.row.address || scope.row.busy"
+                @click="handleMore('push', scope.row)"
+              >下发更新</el-button>
+              <el-button
+                type="text"
+                size="mini"
+                :disabled="scope.row.defaultVersion || !scope.row.enabled || scope.row.missing"
+                @click="handleMore('default', scope.row)"
+              >设为默认设备</el-button>
+              <el-button type="text" size="mini" @click="handleMore('key', scope.row)">密钥</el-button>
+              <el-button
+                type="text"
+                size="mini"
+                :disabled="!scope.row.busy && !scope.row.endUnconfirmed"
+                @click="handleMore('forceEnd', scope.row)"
+              >强制结束</el-button>
+              <el-button
+                type="text"
+                size="mini"
+                :disabled="scope.row.busy || scope.row.endUnconfirmed || !scope.row.address"
+                @click="handleMore('restart', scope.row)"
+              >重启游戏</el-button>
+              <el-button type="text" size="mini" @click="handleMore('openPage', scope.row)">打开页面</el-button>
+              <el-button type="text" size="mini" @click="handleMore('copyEntry', scope.row)">复制入口</el-button>
+            </div>
+            <el-button slot="reference" type="text" size="mini">更多操作<i class="el-icon-arrow-down el-icon--right" /></el-button>
+          </el-popover>
         </template>
       </el-table-column>
     </el-table>
@@ -227,9 +196,6 @@
           <div class="form-hint">
             URL 客户端填云机基础地址即可，结尾是否带 / 都可以；本地页面才必须写到具体入口文件（如 index.html）。
           </div>
-        </el-form-item>
-        <el-form-item label="MC 版本">
-          <el-input v-model="editForm.mcVersion" maxlength="32" placeholder="自由填写，如 1.12.2 / 1.8.9" />
         </el-form-item>
         <el-form-item label="别名">
           <el-input
@@ -350,7 +316,6 @@ const emptyEditForm = () => ({
   id: '',
   name: '',
   path: '',
-  mcVersion: '',
   enabled: true,
   aliasesText: '',
   pool: '',
@@ -527,7 +492,6 @@ export default {
         id: row.id,
         name: row.name,
         path: row.path,
-        mcVersion: row.mcVersion,
         enabled: row.enabled,
         aliasesText: (row.aliases || []).join(', '),
         pool: row.pool || '',
@@ -550,7 +514,6 @@ export default {
       const payload = {
         name: this.editForm.name,
         path,
-        mcVersion: this.editForm.mcVersion,
         enabled: this.editForm.enabled,
         aliases: (this.editForm.aliasesText || '')
           .split(/[,，\s]+/)
@@ -866,5 +829,14 @@ export default {
   line-height: 20px;
   color: #606266;
   word-break: break-all;
+}
+.more-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.more-actions .el-button {
+  margin: 0;
+  padding: 4px 0;
 }
 </style>
