@@ -1,30 +1,27 @@
 package com.github.cocosoys.mc.webgame.spring.impl;
 
-import com.github.cocosoys.mc.soyshttpovermc.platform.PlatformYaml;
 import com.github.cocosoys.mc.soyshttpovermc.util.AjaxResult;
-import com.github.cocosoys.mc.soyshttpovermc.util.ConfigUtil;
 import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.data.WebGameDataStore;
 import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
 import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.CloudClientVo;
 import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
 import com.github.cocosoys.mc.webgame.spring.support.CloudClientProbe;
+import com.github.cocosoys.mc.webgame.spring.support.CloudPinnedCert;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
+import java.security.cert.X509Certificate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -45,16 +42,21 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     private static final Logger LOG = Logger.getLogger(CloudClientServiceImpl.class.getName());
 
-    private static final String META_FILE = "cloud-clients.yml";
     private static final String PAGE_PATH = "/cloud/";
 
     private final WebGame plugin;
+    private final WebGameDataStore store;
 
     /** 按数字 id 排序、并发安全。 */
     private volatile Map<String, CloudClient> clients = new ConcurrentSkipListMap<>();
     private volatile String defaultId = "";
     private volatile boolean allowPlayerSelect = true;
     private volatile int nextId = 1;
+    /**
+     * 客户端包下载的“外部基址”，由 cloud-stream 上报的 {@code report_base} 学习而来。
+     * 例：{@code http://192.168.59.129:25574}。空 = 还没收到过新上报，包地址不可用。
+     */
+    private volatile String packageBase = "";
 
     // ===== 运行态调度（90s 心跳 / TTL 判离线 / 写盘节流） =====
 
@@ -90,6 +92,10 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     public CloudClientServiceImpl(WebGame plugin) {
         this.plugin = plugin;
+        this.store = plugin.getDataStore();
+        if (this.store == null) {
+            throw new IllegalStateException("WebGameDataStore 未初始化，无法加载云客户端数据");
+        }
         load();
     }
 
@@ -97,14 +103,73 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     @Override
     public AjaxResult list() {
+        return list("all");
+    }
+
+    @Override
+    public AjaxResult list(String scope) {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("defaultId", defaultId);
             data.put("allowPlayerSelect", allowPlayerSelect);
-            data.put("rows", toVos());
+            data.put("scope", normalizeScopeValue(scope));
+            data.put("rows", toVos(scope));
             return AjaxResult.success(data);
         } catch (Throwable t) {
             return AjaxResult.error("云游戏客户端查询失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult scopes() {
+        try {
+            int total = 0;
+            int unassigned = 0;
+            Map<String, Integer> counts = new java.util.TreeMap<>();
+            for (CloudClient c : clients.values()) {
+                total++;
+                String s = c.getAdminScope();
+                if (s.isEmpty()) {
+                    unassigned++;
+                } else {
+                    Integer old = counts.get(s);
+                    counts.put(s, old == null ? 1 : old + 1);
+                }
+            }
+            List<Map<String, Object>> list = new ArrayList<>();
+            Map<String, Object> un = new HashMap<>();
+            un.put("value", "__unassigned__");
+            un.put("label", "未分配");
+            un.put("count", unassigned);
+            list.add(un);
+            for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("value", e.getKey());
+                item.put("label", e.getKey());
+                item.put("count", e.getValue());
+                list.add(item);
+            }
+            Map<String, Object> data = new HashMap<>();
+            data.put("total", total);
+            data.put("scopes", list);
+            return AjaxResult.success(data);
+        } catch (Throwable t) {
+            return AjaxResult.error("管理范围统计失败：" + t.getMessage());
+        }
+    }
+
+    @Override
+    public AjaxResult setAdminScope(String id, String adminScope) {
+        try {
+            CloudClient c = id == null ? null : clients.get(id);
+            if (c == null) {
+                return AjaxResult.error("客户端不存在: " + id);
+            }
+            c.setAdminScope(normalizeScopeValue(adminScope));
+            save();
+            return AjaxResult.success("管理范围已更新", findVo(id));
+        } catch (Throwable t) {
+            return AjaxResult.error("管理范围更新失败：" + t.getMessage());
         }
     }
 
@@ -142,6 +207,7 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (!isServableQuiet(defaultId)) {
                 defaultId = id;
             }
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success("已新增云游戏客户端 " + id, findVo(id));
@@ -223,6 +289,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 return AjaxResult.error("该客户端已关闭，无法设为默认");
             }
             defaultId = id;
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success("默认客户端已设为 " + id, null);
@@ -233,18 +300,48 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     @Override
     public AjaxResult delete(String id) {
+        return delete(id, "");
+    }
+
+    @Override
+    public AjaxResult delete(String id, String reason) {
         try {
-            CloudClient c = clients.get(id);
+            CloudClient c = id == null ? null : clients.get(id);
             if (c == null) {
                 return AjaxResult.error("客户端不存在: " + id);
             }
+            com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService play = plugin.getCloudPlayService();
+            if (play != null) {
+                if (play.isBusy(id)) {
+                    return AjaxResult.error("云机占用中，请先强制结束会话再删除");
+                }
+                if (play.hasActiveSessions(id)) {
+                    return AjaxResult.error("云机仍有未结束会话，请先强制结束会话再删除");
+                }
+                if (play.hasUnconfirmedEnd(id)) {
+                    return AjaxResult.error("上一轮强制结束未确认，请重试强制结束后再删除");
+                }
+            }
+            // 先撤销该客户端的直播前缀；publish() 只会遍历仍存在的客户端，
+            // 已删除条目的 liveTag 不会被自动清理。
+            try {
+                if (plugin.getCloudClientPages() != null) {
+                    plugin.getCloudClientPages().closeLive(id);
+                }
+            } catch (Throwable t) {
+                LOG.log(Level.FINE, "删除前关闭直播前缀失败 " + id + ": " + t);
+            }
             clients.remove(id);
+            store.delete(CloudClient.class, id);
             if (id.equals(defaultId)) {
                 defaultId = pickFallbackDefault();
             }
-            save();
+            persistSettings();
             publishPages();
-            return AjaxResult.success("已删除 " + id, null);
+            com.github.cocosoys.mc.webgame.web.cloud.CloudAdminAudit.log(
+                    plugin, "delete", id, c.getName(), "", "success",
+                    reason == null ? "" : reason);
+            return AjaxResult.success("已删除 " + id + "；云机重新上报后会生成新 ID", null);
         } catch (Throwable t) {
             return AjaxResult.error("删除失败：" + t.getMessage());
         }
@@ -288,6 +385,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 return AjaxResult.error("默认客户端不可用（已关闭或入口缺失），请先切换默认客户端");
             }
             allowPlayerSelect = allow;
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success(allow
@@ -313,6 +411,11 @@ public class CloudClientServiceImpl implements CloudClientService {
     @Override
     public String defaultId() {
         return defaultId;
+    }
+
+    @Override
+    public String publicBase() {
+        return packageBase;
     }
 
     @Override
@@ -349,6 +452,36 @@ public class CloudClientServiceImpl implements CloudClientService {
     }
 
     @Override
+    public void setPackageReference(String id, String packageId) {
+        CloudClient c = id == null ? null : clients.get(id);
+        if (c == null) {
+            return;
+        }
+        c.setPackageId(packageId == null ? "" : packageId.trim());
+        save();
+        publishPages();
+    }
+
+    @Override
+    public int clearPackageReference(String packageId) {
+        if (packageId == null || packageId.trim().isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (CloudClient c : clients.values()) {
+            if (packageId.equals(c.getPackageId())) {
+                c.setPackageId("");
+                count++;
+            }
+        }
+        if (count > 0) {
+            save();
+            publishPages();
+        }
+        return count;
+    }
+
+    @Override
     public void publishPages() {
         CloudClientPages pages = plugin.getCloudClientPages();
         if (pages == null) {
@@ -377,6 +510,23 @@ public class CloudClientServiceImpl implements CloudClientService {
             String mcVersion = str(firstNonNull(body.get("mcVersion"), body.get("mc-version"))).trim();
             // 客户端自报 scheme：配了证书就是 https。缺省沿用条目原值，别把已有判断抹掉。
             Boolean reportedTls = toBool(firstNonNull(body.get("tls"), body.get("https")));
+            // 每设备证书：客户端只发公钥 PEM + DER 指纹，私钥不出本机。服务端以 PEM 实算
+            // 指纹为准（上报的 sha 只当日志线索，绝不直接采信一个无法验证的字符串）。
+            String certPem = str(firstNonNull(body.get("cert_pem"), body.get("certPem"))).trim();
+            String certSha = str(firstNonNull(body.get("cert_sha256"), body.get("certSha256"))).trim();
+            // 被控端自己的 WebGame 基址：用来拼客户端包下载 URL，替代原来写死的
+            // cloud.client-update.base-url。只接受 http(s)，末尾斜杠在 getter 里去掉。
+            String reportBase = str(firstNonNull(body.get("report_base"), body.get("reportBase"))).trim();
+            if (reportBase.startsWith("http://") || reportBase.startsWith("https://")) {
+                while (reportBase.endsWith("/")) {
+                    reportBase = reportBase.substring(0, reportBase.length() - 1);
+                }
+                boolean changed = !reportBase.equals(packageBase);
+                packageBase = reportBase;
+                if (changed && plugin.getCloudClientPages() != null) {
+                    plugin.getCloudClientPages().refreshClientManifest();
+                }
+            }
 
             CloudClient target = findByAddress(ip, port);
             boolean created = false;
@@ -395,12 +545,16 @@ public class CloudClientServiceImpl implements CloudClientService {
                 target.setTls(Boolean.TRUE.equals(reportedTls));
                 target.setPath(target.pageUrl());
                 target.setCloudKey(key);
+                if (Boolean.TRUE.equals(reportedTls) && !certPem.isEmpty()) {
+                    applyTlsCert(target, certPem, certSha);
+                }
                 target.setMcVersion(mcVersion);
                 clients.put(id, target);
                 created = true;
                 if (!isServableQuiet(defaultId)) {
                     defaultId = id;
                 }
+                persistSettings();
             } else {
                 // 已登记设备：密钥必须一致，否则拒绝（只能由管理员 applyKey 覆盖）
                 String recorded = target.getCloudKey();
@@ -418,6 +572,11 @@ public class CloudClientServiceImpl implements CloudClientService {
                     if (target.getPath().isEmpty()) {
                         target.setPath(target.pageUrl());
                     }
+                }
+                if (Boolean.FALSE.equals(reportedTls)) {
+                    clearTlsCert(target);
+                } else if (!certPem.isEmpty()) {
+                    applyTlsCert(target, certPem, certSha);
                 }
                 if (!name.isEmpty()) {
                     target.setName(name);
@@ -443,6 +602,49 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
     }
 
+    /**
+     * 把设备上报的证书钉到该条目。
+     *
+     * <p>只采信 PEM 实算的 SHA-256；客户端带的 {@code cert_sha256} 只用于发现
+     * “它自己算的和发给我的不是一张证书”，不会直接写进配置。解析失败就保持
+     * 原 pin / 回退全局 truststore，并留一条日志，避免一个坏 PEM 把设备判死。</p>
+     */
+    private boolean applyTlsCert(CloudClient target, String pem, String reportedSha) {
+        X509Certificate cert = CloudPinnedCert.parse(pem);
+        if (cert == null) {
+            LOG.warning("设备 " + target.getId() + " 上报的证书无法解析，忽略本次 pin");
+            return false;
+        }
+        String computed = CloudPinnedCert.sha256(cert);
+        if (computed.isEmpty()) {
+            LOG.warning("设备 " + target.getId() + " 上报的证书无法计算指纹，忽略本次 pin");
+            return false;
+        }
+        String supplied = CloudPinnedCert.normalizePin(reportedSha);
+        if (!supplied.isEmpty() && !supplied.equals(computed)) {
+            LOG.warning("设备 " + target.getId() + " 上报的 cert_sha256 与 PEM 不符，以 PEM 实算为准："
+                    + supplied + " != " + computed);
+        }
+        target.setTlsCertPem(pem);
+        target.setTlsCertSha256(computed);
+        target.setTlsCertSubject(cert.getSubjectX500Principal().getName());
+        try {
+            target.setTlsCertExpiresAt(TIME_FMT.format(
+                    LocalDateTime.ofInstant(cert.getNotAfter().toInstant(), ZoneId.systemDefault())));
+        } catch (Throwable t) {
+            target.setTlsCertExpiresAt("");
+        }
+        LOG.info("设备 " + target.getId() + " 已 pin 证书 " + computed.substring(0, 16) + "…");
+        return true;
+    }
+
+    private void clearTlsCert(CloudClient target) {
+        target.setTlsCertPem("");
+        target.setTlsCertSha256("");
+        target.setTlsCertSubject("");
+        target.setTlsCertExpiresAt("");
+    }
+
     @Override
     public AjaxResult refresh(String id) {
         CloudClient c = id == null ? null : clients.get(id);
@@ -460,14 +662,22 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     @Override
     public AjaxResult refreshAll() {
+        return refreshAll("all");
+    }
+
+    @Override
+    public AjaxResult refreshAll(String scope) {
         List<CloudClient> targets = new ArrayList<>();
         for (CloudClient c : clients.values()) {
+            if (!inScope(c, scope)) {
+                continue;
+            }
             if (!c.address().isEmpty()) {
                 targets.add(c);
             }
         }
         if (targets.isEmpty()) {
-            return AjaxResult.error("没有可刷新的设备（全部条目都未配置 ip/port）");
+            return AjaxResult.error("当前范围没有可刷新的设备（条目未配置 ip/port）");
         }
         ExecutorService pool = ensurePool();
         List<java.util.concurrent.Future<CloudClientProbe.Result>> futures = new ArrayList<>();
@@ -510,7 +720,7 @@ public class CloudClientServiceImpl implements CloudClientService {
         data.put("online", ok);
         data.put("unauthorized", unauthorized);
         data.put("failed", failed);
-        data.put("rows", toVos());
+        data.put("rows", toVos(scope));
         return AjaxResult.success("刷新完成：在线 " + ok + " / 鉴权失败 " + unauthorized + " / 不可达 " + failed, data);
     }
 
@@ -724,13 +934,18 @@ public class CloudClientServiceImpl implements CloudClientService {
      */
     private CloudClientProbe.Result probeClient(CloudClient c, String key) {
         boolean trustAll = trustAllCerts();
+        String store = trustStorePath();
+        String pass = trustStorePassword();
+        String type = trustStoreType();
         CloudClientProbe.Result r = CloudClientProbe.probe(
-                c.getIp(), c.getPort(), key, probeTimeoutMs(), c.isTls(), trustAll);
+                c.getIp(), c.getPort(), key, probeTimeoutMs(), c.isTls(), trustAll, store, pass, type,
+                c.getTlsCertPem(), c.getTlsCertSha256());
         if (r.reachable || c.isTls()) {
             return r;
         }
         CloudClientProbe.Result tls = CloudClientProbe.probe(
-                c.getIp(), c.getPort(), key, probeTimeoutMs(), true, trustAll);
+                c.getIp(), c.getPort(), key, probeTimeoutMs(), true, trustAll, store, pass, type,
+                c.getTlsCertPem(), c.getTlsCertSha256());
         return tls.reachable ? tls : r;
     }
 
@@ -740,6 +955,42 @@ public class CloudClientServiceImpl implements CloudClientService {
             return plugin.getConfig().getBoolean("cloud.probe.trust-all", false);
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** 独立 truststore：相对路径按服务端根目录解析；空=沿用 JVM 默认信任库。 */
+    private String trustStorePath() {
+        try {
+            String raw = plugin.getConfig().getString("cloud.probe.trust-store", "");
+            if (raw == null || raw.trim().isEmpty()) {
+                return "";
+            }
+            File f = new File(raw.trim());
+            if (!f.isAbsolute()) {
+                File serverRoot = plugin.getDataFolder().getParentFile().getParentFile();
+                f = new File(serverRoot, raw.trim());
+            }
+            return f.getAbsolutePath();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private String trustStorePassword() {
+        try {
+            String v = plugin.getConfig().getString("cloud.probe.trust-store-password", "");
+            return v == null ? "" : v;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private String trustStoreType() {
+        try {
+            String v = plugin.getConfig().getString("cloud.probe.trust-store-type", "JKS");
+            return v == null || v.trim().isEmpty() ? "JKS" : v.trim();
+        } catch (Throwable t) {
+            return "JKS";
         }
     }
 
@@ -837,6 +1088,35 @@ public class CloudClientServiceImpl implements CloudClientService {
         } catch (Throwable t) {
             return c.getFailCount() >= 3;
         }
+    }
+
+    /** 规范化 ERP 管理范围：空串=未分配；ASCII 小写；只保留 a-z/0-9/_.-；最长 24。 */
+    private static String normalizeScopeValue(String scope) {
+        String s = scope == null ? "" : scope.trim().toLowerCase(java.util.Locale.ROOT);
+        if (s.isEmpty()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length() && out.length() < 24; i++) {
+            char ch = s.charAt(i);
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')
+                    || ch == '_' || ch == '-' || ch == '.') {
+                out.append(ch);
+            }
+        }
+        return out.toString();
+    }
+
+    /** scope=all/空=全部；__unassigned__=未分配；其余规范化后精确匹配。 */
+    private static boolean inScope(CloudClient c, String scope) {
+        String s = normalizeScopeValue(scope);
+        if (s.isEmpty() || "all".equals(s)) {
+            return true;
+        }
+        if ("__unassigned__".equals(s)) {
+            return c.getAdminScope().isEmpty();
+        }
+        return c.getAdminScope().equals(s);
     }
 
     private String summary(CloudClient c, CloudClientProbe.Result r) {
@@ -941,59 +1221,36 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     private synchronized void load() {
         Map<String, CloudClient> loaded = new TreeMap<>(ID_COMPARATOR);
-        String def = "";
-        int storedNextId = 0;
-        File meta = metaFile();
-        if (meta.isFile()) {
-            try {
-                YamlConfiguration yaml = PlatformYaml.load(meta);
-                String d = yaml.getString("default-id", "");
-                if (d != null && !d.trim().isEmpty()) {
-                    def = d.trim();
+        try {
+            for (CloudClient c : store.select(CloudClient.class)) {
+                if (c == null || !isValidId(c.getId())) {
+                    continue;
                 }
-                allowPlayerSelect = yaml.getBoolean("allow-player-select", true);
-                storedNextId = Math.max(storedNextId, yaml.getInt("next-id", 0));
-                ConfigurationSection section = yaml.getConfigurationSection("clients");
-                if (section != null) {
-                    for (String key : section.getKeys(false)) {
-                        if (!isValidId(key)) {
-                            continue;
-                        }
-                        ConfigurationSection c = section.getConfigurationSection(key);
-                        if (c == null) {
-                            continue;
-                        }
-                        CloudClient client = new CloudClient();
-                        client.setId(key);
-                        client.setName(c.getString("name", ""));
-                        client.setPath(c.getString("path", ""));
-                        client.setMcVersion(c.getString("mc-version", ""));
-                        client.setEnabled(c.getBoolean("enabled", true));
-                        client.setOrder(c.getInt("order", -1));
-                        client.setSource(c.getString("source", CloudClient.SOURCE_LOCAL));
-                        // 对外别名与预留池名（老文件没有这段 → 空列表 / 空串）
-                        client.setAliases(c.getStringList("aliases"));
-                        client.setPool(c.getString("pool", ""));
-                        // 运行态（可能不存在：老文件升级上来时全部为空/unknown）
-                        client.setIp(c.getString("ip", ""));
-                        client.setPort(c.getInt("port", 0));
-                        client.setTls(c.getBoolean("tls", false));
-                        client.setStatus(c.getString("status", CloudClient.STATUS_UNKNOWN));
-                        client.setVersion(c.getString("version", ""));
-                        client.setUptimeSeconds(c.getLong("uptime-s", 0));
-                        client.setLastReport(c.getString("last-report", ""));
-                        client.setLastOk(c.getString("last-ok", ""));
-                        client.setLastCheck(c.getString("last-check", ""));
-                        client.setFailCount(c.getInt("fail-count", 0));
-                        client.setCloudKey(c.getString("cloud-key", ""));
-                        client.setLatencyMs(c.getLong("latency-ms", 0));
-                        client.setHealthReason(c.getString("health-reason", ""));
-                        loaded.put(key, client);
-                    }
+                if (c.getName() == null || c.getName().isEmpty()) {
+                    c.setName(c.getId());
                 }
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "读取 " + META_FILE + " 失败: " + t);
+                c.setPath(c.getPath());
+                c.setMcVersion(c.getMcVersion());
+                c.setSource(c.getSource());
+                c.setAliases(parseAliases(c.getAliasesData()));
+                c.setPool(c.getPool());
+                c.setAdminScope(c.getAdminScope());
+                c.setIp(c.getIp());
+                c.setTlsCertSha256(c.getTlsCertSha256());
+                c.setTlsCertPem(c.getTlsCertPem());
+                c.setTlsCertSubject(c.getTlsCertSubject());
+                c.setTlsCertExpiresAt(c.getTlsCertExpiresAt());
+                c.setStatus(c.getStatus());
+                c.setVersion(c.getVersion());
+                c.setLastReport(c.getLastReport());
+                c.setLastOk(c.getLastOk());
+                c.setLastCheck(c.getLastCheck());
+                c.setCloudKey(c.getCloudKey());
+                c.setHealthReason(c.getHealthReason());
+                loaded.put(c.getId(), c);
             }
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "读取云客户端数据失败: " + t);
         }
 
         int maxId = 0;
@@ -1003,7 +1260,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 maxId = n;
             }
         }
-        nextId = Math.max(Math.max(storedNextId, maxId + 1), 1);
+        nextId = Math.max(Math.max(plugin.getWebGameConfig().getCloudNextId(), maxId + 1), 1);
 
         for (CloudClient c : loaded.values()) {
             c.setMissing(!entryExists(c));
@@ -1022,82 +1279,86 @@ public class CloudClientServiceImpl implements CloudClientService {
             }
         }
 
+        String def = plugin.getWebGameConfig().getCloudDefaultId();
+        allowPlayerSelect = plugin.getWebGameConfig().isCloudAllowPlayerSelect();
         if (!loaded.containsKey(def)) {
             def = pickFallbackDefault(loaded);
         }
         this.clients = new ConcurrentSkipListMap<>(loaded);
         this.defaultId = def;
+        persistSettings();
         save();
     }
 
     private synchronized void save() {
         try {
-            Map<String, Object> root = new LinkedHashMap<>();
-            root.put("default-id", defaultId);
-            root.put("allow-player-select", allowPlayerSelect);
-            root.put("next-id", nextId);
-            Map<String, Object> items = new LinkedHashMap<>();
             for (CloudClient c : clients.values()) {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("name", c.getName());
-                m.put("path", c.getPath());
-                m.put("mc-version", c.getMcVersion());
-                m.put("enabled", c.isEnabled());
-                m.put("order", c.getOrder());
-                m.put("source", c.getSource());
-                m.put("aliases", new java.util.ArrayList<>(c.getAliases()));
-                m.put("pool", c.getPool());
-                // 运行态：必须一起写回，否则管理员在 ERP 改任意字段都会把状态抹掉
-                m.put("ip", c.getIp());
-                m.put("port", c.getPort());
-                m.put("tls", c.isTls());
-                m.put("status", c.getStatus());
-                m.put("version", c.getVersion());
-                m.put("uptime-s", c.getUptimeSeconds());
-                m.put("last-report", c.getLastReport());
-                m.put("last-ok", c.getLastOk());
-                m.put("last-check", c.getLastCheck());
-                m.put("fail-count", c.getFailCount());
-                m.put("cloud-key", c.getCloudKey());
-                m.put("latency-ms", c.getLatencyMs());
-                m.put("health-reason", c.getHealthReason());
-                items.put(c.getId(), m);
-            }
-            root.put("clients", items);
-            // 原子落盘：先写临时文件再整体替换，避免半截 YAML 把整个配置写坏
-            File target = metaFile();
-            File parent = target.getParentFile();
-            if (parent != null && !parent.isDirectory()) {
-                parent.mkdirs();
-            }
-            File tmp = new File(parent, META_FILE + ".tmp");
-            PlatformYaml.save(ConfigUtil.toYaml(root), tmp);
-            try {
-                Files.move(tmp.toPath(), target.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (Throwable atomicFailed) {
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                c.setAliasesData(formatAliases(c.getAliases()));
+                store.save(c);
             }
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "写入 " + META_FILE + " 失败: " + t);
+            LOG.log(Level.WARNING, "写入云客户端数据失败: " + t);
         }
     }
 
-    private File metaFile() {
-        return new File(plugin.getDataFolder(), META_FILE);
+    private static java.util.List<String> parseAliases(String data) {
+        java.util.List<String> out = new ArrayList<>();
+        if (data == null || data.trim().isEmpty()) {
+            return out;
+        }
+        for (String item : data.split(",")) {
+            String alias = item.trim();
+            if (!alias.isEmpty() && !out.contains(alias)) {
+                out.add(alias);
+            }
+        }
+        return out;
+    }
+
+    private static String formatAliases(java.util.List<String> aliases) {
+        StringBuilder sb = new StringBuilder();
+        if (aliases == null) {
+            return "";
+        }
+        for (String alias : aliases) {
+            if (alias == null || alias.trim().isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(alias.trim());
+        }
+        return sb.toString();
+    }
+
+    /** 把 default-id / allow-player-select / next-id 回写到 config.yml。 */
+    private void persistSettings() {
+        WebGameConfig cfg = plugin.getWebGameConfig();
+        cfg.setCloudDefaultId(defaultId);
+        cfg.setCloudAllowPlayerSelect(allowPlayerSelect);
+        cfg.setCloudNextId(nextId);
     }
 
     // ===== 辅助 =====
 
     private List<CloudClientVo> toVos() {
+        return toVos("all");
+    }
+
+    private List<CloudClientVo> toVos(String scope) {
         List<CloudClientVo> rows = new ArrayList<>();
         String prefix = WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
         CloudClientPages pages = plugin.getCloudClientPages();
         for (CloudClient c : versions()) {
+            if (!inScope(c, scope)) {
+                continue;
+            }
             CloudClientVo vo = new CloudClientVo();
             vo.setId(c.getId());
             vo.setName(c.getName());
             vo.setPath(c.getPath());
+            vo.setPackageId(c.getPackageId());
             vo.setMcVersion(c.getMcVersion());
             vo.setEnabled(c.isEnabled());
             vo.setOrder(c.getOrder());
@@ -1110,6 +1371,10 @@ public class CloudClientServiceImpl implements CloudClientService {
             vo.setIp(c.getIp());
             vo.setPort(c.getPort());
             vo.setTls(c.isTls());
+            vo.setTlsCertPinned(!c.getTlsCertSha256().isEmpty());
+            vo.setTlsCertSha256(c.getTlsCertSha256());
+            vo.setTlsCertSubject(c.getTlsCertSubject());
+            vo.setTlsCertExpiresAt(c.getTlsCertExpiresAt());
             vo.setAddress(c.address());
             vo.setStatus(c.getStatus());
             vo.setVersion(c.getVersion());
@@ -1122,12 +1387,25 @@ public class CloudClientServiceImpl implements CloudClientService {
             vo.setCloudKeyMasked(maskKey(c.getCloudKey()));
             vo.setAliases(new ArrayList<>(c.getAliases()));
             vo.setPool(c.getPool());
+            vo.setAdminScope(c.getAdminScope());
             vo.setHealthReason(c.getHealthReason());
-            String expected = pages == null ? "" : pages.clientPackageVersion();
+            String expected = "";
+            String pkgName = "";
+            com.github.cocosoys.mc.webgame.spring.service.ClientPackageService pkgs =
+                    plugin.getClientPackageService();
+            if (pkgs != null && !c.getPackageId().isEmpty()) {
+                com.github.cocosoys.mc.webgame.spring.entity.ClientPackage p = pkgs.find(c.getPackageId());
+                if (p != null && p.isCloud() && p.isEnabled()) {
+                    expected = p.getVersion();
+                    pkgName = p.getName();
+                }
+            }
             vo.setExpectedVersion(expected);
+            vo.setPackageName(pkgName);
             vo.setVersionMatch(expected.isEmpty() || expected.equals(c.getVersion()));
             com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService play = plugin.getCloudPlayService();
             if (play != null) {
+                vo.setEndUnconfirmed(play.hasUnconfirmedEnd(c.getId()));
                 vo.setBusy(play.isBusy(c.getId()));
                 if (play.isUpdating(c.getId())) {
                     vo.setUpdateState("updating");
@@ -1188,6 +1466,9 @@ public class CloudClientServiceImpl implements CloudClientService {
         if (body.containsKey("pool")) {
             String raw = str(body.get("pool")).trim();
             c.setPool(raw.isEmpty() ? "" : CloudClientPages.normalizeAlias(raw));
+        }
+        if (body.containsKey("adminScope")) {
+            c.setAdminScope(normalizeScopeValue(str(body.get("adminScope"))));
         }
         String name = str(body.get("name")).trim();
         c.setName(name);

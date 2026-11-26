@@ -56,6 +56,12 @@ permissions:
   webgame.erp.cloudclients.refresh:
     description: ERP-刷新云游戏客户端状态/更新共享密钥
     default: op
+  webgame.erp.cloudclients.force-end:
+    description: ERP-强制结束云机当前会话（含停止云机游戏）
+    default: op
+  webgame.erp.cloudclients.restart:
+    description: ERP-空闲时重启云机游戏
+    default: op
   webgame.cloud.admin:
     description: 指令-/webgame cloud 查看与刷新云游戏客户端
     default: op

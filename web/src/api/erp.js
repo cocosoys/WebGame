@@ -94,8 +94,16 @@ export function abortClientUpload(uploadId) {
 
 // ===== 云游戏客户端 =====
 
-export function listCloudClients() {
-  return request({ url: '/erp/cloud-clients/list', method: 'get' })
+export function listCloudClients(scope) {
+  return request({ url: '/erp/cloud-clients/list', method: 'get', params: { scope } })
+}
+
+export function listCloudClientScopes() {
+  return request({ url: '/erp/cloud-clients/scopes', method: 'get' })
+}
+
+export function setCloudClientScope(id, adminScope) {
+  return request({ url: '/erp/cloud-clients/scope', method: 'post', params: { id, adminScope } })
 }
 
 export function setCloudClientEnabled(id, enabled) {
@@ -106,8 +114,16 @@ export function setDefaultCloudClient(id) {
   return request({ url: '/erp/cloud-clients/default', method: 'post', params: { id } })
 }
 
-export function deleteCloudClient(id) {
-  return request({ url: '/erp/cloud-clients/delete', method: 'post', params: { id } })
+export function deleteCloudClient(id, reason) {
+  return request({ url: '/erp/cloud-clients/delete', method: 'post', params: { id, reason } })
+}
+
+export function forceEndCloudClientSession(id, reason) {
+  return request({ url: '/erp/cloud-clients/session/force-end', method: 'post', params: { id, reason } })
+}
+
+export function restartCloudClientGame(id) {
+  return request({ url: '/erp/cloud-clients/game/restart', method: 'post', params: { id } })
 }
 
 export function reorderCloudClients(ids) {
@@ -128,8 +144,8 @@ export function refreshCloudClient(id) {
   return request({ url: '/erp/cloud-clients/refresh', method: 'post', params: { id } })
 }
 
-export function refreshAllCloudClients() {
-  return request({ url: '/erp/cloud-clients/refresh-all', method: 'post' })
+export function refreshAllCloudClients(scope) {
+  return request({ url: '/erp/cloud-clients/refresh-all', method: 'post', params: { scope } })
 }
 
 export function updateCloudClientKey(id, key) {
@@ -141,6 +157,96 @@ export function updateCloudClient(id, payload) {
 }
 
 // 下发客户端包更新：后台下载/解包，立刻返回 updating
-export function pushCloudClientUpdate(id) {
-  return request({ url: '/erp/cloud-clients/push-update', method: 'post', params: { id } })
+export function pushCloudClientUpdate(id, packageId) {
+  return request({ url: '/erp/cloud-clients/push-update', method: 'post', params: { id, packageId } })
+}
+
+// ===== 统一客户端制品库（客户端管理） =====
+
+export function listClientPackages(type) {
+  return request({ url: '/erp/client-packages/list', method: 'get', params: { type } })
+}
+
+export function updateClientPackage(id, payload) {
+  return request({ url: '/erp/client-packages/update', method: 'post', params: { id }, data: payload })
+}
+
+export function setPreselectClientPackage(id) {
+  return request({ url: '/erp/client-packages/default', method: 'post', params: { id } })
+}
+
+export function setClientPackageEnabled(id, enabled) {
+  return request({ url: '/erp/client-packages/enabled', method: 'post', params: { id, enabled } })
+}
+
+export function deleteClientPackage(id) {
+  return request({ url: '/erp/client-packages/delete', method: 'post', params: { id } })
+}
+
+export function initClientPackageUpload(payload) {
+  return request({ url: '/erp/client-packages/upload/init', method: 'post', data: payload })
+}
+
+export function uploadClientPackageChunk(uploadId, index, data) {
+  return request({
+    url: '/erp/client-packages/upload/chunk',
+    method: 'post',
+    params: { uploadId },
+    data: { index, data }
+  })
+}
+
+export function finishClientPackageUpload(uploadId) {
+  return request({ url: '/erp/client-packages/upload/finish', method: 'post', params: { uploadId } })
+}
+
+export function abortClientPackageUpload(uploadId) {
+  return request({ url: '/erp/client-packages/upload/abort', method: 'post', params: { uploadId } })
+}
+
+export function registerExternalClientPackage(payload) {
+  return request({ url: '/erp/client-packages/external', method: 'post', data: payload })
+}
+
+// ===== 云游戏客户端包制品库（旧端点兼容） =====
+
+export function listCloudPackages() {
+  return request({ url: '/erp/cloud-packages/list', method: 'get' })
+}
+
+export function updateCloudPackage(id, payload) {
+  return request({ url: '/erp/cloud-packages/update', method: 'post', params: { id }, data: payload })
+}
+
+export function setDefaultCloudPackage(id) {
+  return request({ url: '/erp/cloud-packages/default', method: 'post', params: { id } })
+}
+
+export function setCloudPackageEnabled(id, enabled) {
+  return request({ url: '/erp/cloud-packages/enabled', method: 'post', params: { id, enabled } })
+}
+
+export function deleteCloudPackage(id) {
+  return request({ url: '/erp/cloud-packages/delete', method: 'post', params: { id } })
+}
+
+export function initCloudPackageUpload(payload) {
+  return request({ url: '/erp/cloud-packages/upload/init', method: 'post', data: payload })
+}
+
+export function uploadCloudPackageChunk(uploadId, index, data) {
+  return request({
+    url: '/erp/cloud-packages/upload/chunk',
+    method: 'post',
+    params: { uploadId },
+    data: { index, data }
+  })
+}
+
+export function finishCloudPackageUpload(uploadId) {
+  return request({ url: '/erp/cloud-packages/upload/finish', method: 'post', params: { uploadId } })
+}
+
+export function abortCloudPackageUpload(uploadId) {
+  return request({ url: '/erp/cloud-packages/upload/abort', method: 'post', params: { uploadId } })
 }

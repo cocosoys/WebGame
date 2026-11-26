@@ -8,6 +8,16 @@ import org.bukkit.plugin.java.JavaPlugin;
  */
 public final class WebGameConfig {
 
+    private final JavaPlugin plugin;
+    private final String dataMode;
+    private final String eaglerDefaultId;
+    private final boolean eaglerAllowPlayerSelect;
+    private final String cloudDefaultId;
+    private final boolean cloudAllowPlayerSelect;
+    private final int cloudNextId;
+    private final String packagePreselectCloudId;
+    private final int packageNextEaglerId;
+    private final int packageNextCloudId;
     private final String publicHost;
     private final int publicPort;
     private final String wsPath;
@@ -25,7 +35,19 @@ public final class WebGameConfig {
     private final int maxConnectionsPerDevice;
 
     public WebGameConfig(JavaPlugin plugin) {
+        this.plugin = plugin;
         FileConfiguration c = plugin.getConfig();
+        String rawMode = c.getString("data.mode", "yaml");
+        this.dataMode = ("mysql".equalsIgnoreCase(rawMode) || "sql".equalsIgnoreCase(rawMode))
+                ? "mysql" : "yaml";
+        this.eaglerDefaultId = c.getString("eagler.default-id", "1.12.2").trim();
+        this.eaglerAllowPlayerSelect = c.getBoolean("eagler.allow-player-select", true);
+        this.cloudDefaultId = c.getString("cloud.default-id", "").trim();
+        this.cloudAllowPlayerSelect = c.getBoolean("cloud.allow-player-select", true);
+        this.cloudNextId = Math.max(1, c.getInt("cloud.next-id", 1));
+        this.packagePreselectCloudId = c.getString("client-packages.preselect-cloud-id", "").trim();
+        this.packageNextEaglerId = Math.max(1, c.getInt("client-packages.next-eagler-id", 1));
+        this.packageNextCloudId = Math.max(1, c.getInt("client-packages.next-cloud-id", 1));
         this.publicHost = c.getString("page.public-host", "127.0.0.1").trim();
         this.publicPort = Math.max(0, c.getInt("page.public-port", 0));
         this.pagePath = normalizePath(c.getString("page.path", "/eagler/"));
@@ -127,5 +149,82 @@ public final class WebGameConfig {
     /** 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数，默认 2。 */
     public int getMaxConnectionsPerDevice() {
         return maxConnectionsPerDevice;
+    }
+
+    /** 数据后端：yaml（插件本地 data 目录）或 mysql（SOYS DataSpec）。 */
+    public String getDataMode() {
+        return dataMode;
+    }
+
+    public String getEaglerDefaultId() {
+        return eaglerDefaultId;
+    }
+
+    public boolean isEaglerAllowPlayerSelect() {
+        return eaglerAllowPlayerSelect;
+    }
+
+    public String getCloudDefaultId() {
+        return cloudDefaultId;
+    }
+
+    public boolean isCloudAllowPlayerSelect() {
+        return cloudAllowPlayerSelect;
+    }
+
+    public int getCloudNextId() {
+        return cloudNextId;
+    }
+
+    public String getPackagePreselectCloudId() {
+        return packagePreselectCloudId;
+    }
+
+    public int getPackageNextEaglerId() {
+        return packageNextEaglerId;
+    }
+
+    public int getPackageNextCloudId() {
+        return packageNextCloudId;
+    }
+
+    public void setEaglerDefaultId(String id) {
+        plugin.getConfig().set("eagler.default-id", id == null ? "" : id.trim());
+        plugin.saveConfig();
+    }
+
+    public void setEaglerAllowPlayerSelect(boolean allow) {
+        plugin.getConfig().set("eagler.allow-player-select", allow);
+        plugin.saveConfig();
+    }
+
+    public void setCloudDefaultId(String id) {
+        plugin.getConfig().set("cloud.default-id", id == null ? "" : id.trim());
+        plugin.saveConfig();
+    }
+
+    public void setCloudAllowPlayerSelect(boolean allow) {
+        plugin.getConfig().set("cloud.allow-player-select", allow);
+        plugin.saveConfig();
+    }
+
+    public void setCloudNextId(int nextId) {
+        plugin.getConfig().set("cloud.next-id", Math.max(1, nextId));
+        plugin.saveConfig();
+    }
+
+    public void setPackagePreselectCloudId(String id) {
+        plugin.getConfig().set("client-packages.preselect-cloud-id", id == null ? "" : id.trim());
+        plugin.saveConfig();
+    }
+
+    public void setPackageNextEaglerId(int nextId) {
+        plugin.getConfig().set("client-packages.next-eagler-id", Math.max(1, nextId));
+        plugin.saveConfig();
+    }
+
+    public void setPackageNextCloudId(int nextId) {
+        plugin.getConfig().set("client-packages.next-cloud-id", Math.max(1, nextId));
+        plugin.saveConfig();
     }
 }

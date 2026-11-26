@@ -108,6 +108,11 @@ public final class WebGameClientPages {
 
         String entryHtml = allowSelect ? buildSelectionPage() : buildRedirectPage(defaultEntry(defaultId));
         registerPage(pages, pagePath, entryHtml);
+        // 统一入口页的版本统计跟着本页数据一起刷新
+        com.github.cocosoys.mc.webgame.shttp.GameHubPages hub = plugin.getGameHubPages();
+        if (hub != null) {
+            hub.publish();
+        }
     }
 
     /** 登记 {@code <entry>index.html} 与目录别名 {@code <entry>}。 */
@@ -177,6 +182,13 @@ public final class WebGameClientPages {
         return p;
     }
 
+    /**
+     * Eagler 选择页：统一入口（/play/）的下一级。
+     *
+     * <p>顶栏品牌 + 返回统一入口；默认版本置顶带「默认」徽标，其余按管理员拖拽顺序。
+     * 视觉全部走 {@link com.github.cocosoys.mc.webgame.shttp.GamePageTheme}，
+     * 与 /play/、/cloud/ 同款。</p>
+     */
     private String buildSelectionPage() {
         String pagePath = pagePath();
         String prefix = com.github.cocosoys.mc.webgame.config.WebGameConfig.WEB_PLUGIN_PREFIX;
@@ -227,37 +239,21 @@ public final class WebGameClientPages {
             cards.append("<div class=\"empty\">暂无可用的客户端版本，请联系管理员。</div>");
         }
 
-        return "<!DOCTYPE html>\n"
-                + "<html lang=\"zh-CN\">\n<head>\n"
-                + "<meta charset=\"utf-8\">\n"
-                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                + "<title>选择游戏版本</title>\n"
-                + "<style>\n"
-                + "*{box-sizing:border-box}\n"
-                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
-                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
-                + ".wrap{width:100%;max-width:860px;padding:48px 24px}\n"
-                + "h1{margin:0 0 8px;font-size:28px;font-weight:600;letter-spacing:1px}\n"
-                + ".sub{margin:0 0 32px;color:#8f9bb3;font-size:14px}\n"
-                + ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}\n"
-                + ".card{display:block;padding:20px;border-radius:14px;text-decoration:none;color:inherit;"
-                + "background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);"
-                + "transition:transform .15s ease,border-color .15s ease,background .15s ease}\n"
-                + ".card:hover{transform:translateY(-3px);border-color:#4f8cff;background:rgba(79,140,255,.12)}\n"
-                + ".card-default{border-color:rgba(103,194,58,.55)}\n"
-                + ".card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}\n"
-                + ".card-name{font-size:17px;font-weight:600}\n"
-                + ".badge{font-size:12px;padding:2px 8px;border-radius:999px;background:#67c23a;color:#08130a}\n"
-                + ".card-meta{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;color:#9aa6bd;font-size:12px}\n"
-                + ".card-meta span{padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.06)}\n"
-                + ".empty{padding:32px;text-align:center;color:#8f9bb3;border:1px dashed rgba(255,255,255,.15);border-radius:14px}\n"
-                + "</style>\n</head>\n<body>\n"
-                + "<div class=\"wrap\">\n"
-                + "<h1>选择游戏版本</h1>\n"
-                + "<p class=\"sub\">选择一个客户端版本开始游戏</p>\n"
-                + "<div class=\"grid\">" + cards + "</div>\n"
-                + "</div>\n</body>\n</html>\n";
+        StringBuilder body = new StringBuilder(1024);
+        body.append(com.github.cocosoys.mc.webgame.shttp.GamePageTheme
+                .topbar(com.github.cocosoys.mc.webgame.shttp.GameHubPages.PLAY_PATH))
+                .append("<h1>Eagler 网页版</h1>\n")
+                .append("<p class=\"sub\">浏览器直连服务器，不需要云主机、也不用安装客户端。选择一个版本开始游戏。</p>\n")
+                .append("<img class=\"banner\" src=\"")
+                .append(com.github.cocosoys.mc.webgame.shttp.GamePageTheme.image("eagler.jpg"))
+                .append("\" alt=\"\">\n")
+                .append("<div class=\"sec\">客户端版本 · ").append(count).append(" 个</div>\n")
+                .append("<div class=\"grid\">").append(cards).append("</div>\n")
+                .append(com.github.cocosoys.mc.webgame.shttp.GamePageTheme
+                        .foot("WebGame · Eagler 网页版"));
+
+        return com.github.cocosoys.mc.webgame.shttp.GamePageTheme
+                .shell("Eagler 网页版 · 选择版本", "", body.toString());
     }
 
     /**

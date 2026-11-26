@@ -1,10 +1,10 @@
 package com.github.cocosoys.mc.webgame.spring.impl;
 
-import com.github.cocosoys.mc.soyshttpovermc.platform.PlatformYaml;
 import com.github.cocosoys.mc.soyshttpovermc.util.AjaxResult;
-import com.github.cocosoys.mc.soyshttpovermc.util.ConfigUtil;
 import com.github.cocosoys.mc.webgame.WebGame;
+import com.github.cocosoys.mc.webgame.data.WebGameDataStore;
 import com.github.cocosoys.mc.webgame.spring.entity.ClientVersion;
+import com.github.cocosoys.mc.webgame.spring.entity.ClientPackage;
 import com.github.cocosoys.mc.webgame.spring.entity.McVersionOption;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.ClientImpactVo;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.ClientVersionVo;
@@ -12,7 +12,6 @@ import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
 import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.web.ws.WsFrameHandler;
 import com.github.cocosoys.mc.webgame.web.ws.WsGateway;
-import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
 import java.io.RandomAccessFile;
@@ -21,7 +20,6 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -51,11 +49,12 @@ public class WebGameClientServiceImpl implements WebGameClientService {
      * 会让该请求 404，浏览器侧（?user= 记忆名自动进服、倒计时跳过）就整段失效。</p>
      */
     private static final String[] BUILTIN_SIDECARS = {"eagler-bootstrap.js"};
-    private static final String META_FILE = "eagler-clients.yml";
     private static final String CLIENTS_DIR = "eagler-clients";
     private static final String UPLOAD_DIR = ".upload";
 
     private final WebGame plugin;
+    private final WebGameDataStore store;
+    private final com.github.cocosoys.mc.webgame.spring.service.ClientPackageService packageService;
     private final File clientsDir;
     private final Map<String, UploadSession> uploads = new ConcurrentHashMap<>();
 
@@ -67,10 +66,17 @@ public class WebGameClientServiceImpl implements WebGameClientService {
 
     public WebGameClientServiceImpl(WebGame plugin) {
         this.plugin = plugin;
+        this.store = plugin.getDataStore();
+        if (this.store == null) {
+            throw new IllegalStateException("WebGameDataStore 未初始化，无法加载 eagler 客户端数据");
+        }
+        this.packageService = plugin.getClientPackageService();
+        if (this.packageService == null) {
+            throw new IllegalStateException("ClientPackageService 未初始化，无法解析 eagler 客户端包");
+        }
         this.clientsDir = new File(plugin.getDataFolder(), CLIENTS_DIR);
         ensureDir(clientsDir);
         ensureBuiltin();
-        ensureDefaultMeta();
         load();
     }
 
@@ -152,6 +158,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 return AjaxResult.error("该版本已关闭，无法设为默认");
             }
             defaultId = id;
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success("默认版本已设为 " + id, null);
@@ -176,10 +183,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 deleteRecursively(new File(clientsDir, id));
             }
             versions.remove(id);
+            store.delete(ClientVersion.class, id);
             if (id.equals(defaultId)) {
                 defaultId = pickFallbackDefault();
             }
-            save();
+            persistSettings();
             publishPages();
             return AjaxResult.success("已删除 " + id, null);
         } catch (Throwable t) {
@@ -226,6 +234,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 return AjaxResult.error("默认版本不可用（已关闭或目录缺失），请先切换默认版本");
             }
             allowPlayerSelect = allow;
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success(allow
@@ -252,10 +261,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             ClientVersion v = new ClientVersion();
             v.setId(id);
             applyBody(v, body);
-            if (v.getPath().isEmpty()) {
-                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
+            String packageError = applyPackage(v, true);
+            if (!packageError.isEmpty()) {
+                return AjaxResult.error(packageError);
             }
-            v.setSource(deriveSource(v));
             v.setOrder(maxOrder() + 1);
             v.setUploadedAt(System.currentTimeMillis());
             v.setMissing(!entryExists(v));
@@ -263,6 +272,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             if (!isServableQuiet(defaultId)) {
                 defaultId = id;
             }
+            persistSettings();
             save();
             publishPages();
             return AjaxResult.success("已新增 eagler 客户端 " + id, findVo(id));
@@ -283,16 +293,23 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 return AjaxResult.error("默认版本不可关闭，请先将其它版本设为默认");
             }
             String oldPath = v.getPath();
+            String oldPackageId = v.getPackageId();
             applyBody(v, body);
             if (v.isBuiltin()) {
-                // 内置客户端路径固定，只允许调整展示信息与启用状态
+                // 内置客户端包固定，只允许调整展示信息与启用状态
+                v.setPackageId(ClientVersion.BUILTIN_PACKAGE_ID);
                 v.setPath(oldPath);
+            } else {
+                String packageError = applyPackage(v, false);
+                if (!packageError.isEmpty()) {
+                    return AjaxResult.error(packageError);
+                }
+                if (v.getPackageId().isEmpty()) {
+                    v.setPackageId(oldPackageId);
+                }
             }
             if (v.getPath().isEmpty()) {
-                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
-            }
-            if (!v.isBuiltin()) {
-                v.setSource(deriveSource(v));
+                return AjaxResult.error("请选择客户端管理里的 Eagler 客户端包");
             }
             v.setMissing(!entryExists(v));
             save();
@@ -474,109 +491,98 @@ public class WebGameClientServiceImpl implements WebGameClientService {
 
     // ===== 元数据 / 目录 =====
 
-    /** 从 eagler-clients.yml 重建内存视图，并回写规范化后的元数据。 */
+    /** 从数据层重建内存视图；default-id / allow-player-select 从 config.yml 读取。 */
     private synchronized void load() {
         Map<String, ClientVersion> loaded = new TreeMap<>();
-        String def = "";
-        File meta = metaFile();
-        if (meta.isFile()) {
-            try {
-                YamlConfiguration yaml = PlatformYaml.load(meta);
-                String d = yaml.getString("default-id", "");
-                if (d != null && !d.trim().isEmpty()) {
-                    def = d.trim();
+        try {
+            for (ClientVersion v : store.select(ClientVersion.class)) {
+                if (v == null) {
+                    continue;
                 }
-                allowPlayerSelect = yaml.getBoolean("allow-player-select", true);
-                // clients 使用列表而非以 id 为键的映射：Bukkit 会把含 "." 的键（如 1.12.2）拆成多级路径
-                for (Map<?, ?> c : yaml.getMapList("clients")) {
-                    if (c == null) {
-                        continue;
-                    }
-                    String id = str(c.get("id")).trim();
-                    if (!isValidId(id)) {
-                        continue;
-                    }
-                    ClientVersion v = new ClientVersion();
-                    v.setId(id);
-                    v.setName(str(c.get("name")));
-                    v.setPath(str(c.get("path")));
-                    v.setMcVersions(parseMcVersions(c.get("mc-versions")));
-                    v.setEaglerProtocol(toInt(c.get("eagler-protocol"), 0));
-                    Boolean enabled = toBool(c.get("enabled"));
-                    v.setEnabled(enabled == null || enabled);
-                    v.setOrder(toInt(c.get("order"), 0));
-                    String source = str(c.get("source")).trim();
-                    v.setSource(source.isEmpty() ? deriveSource(v) : source);
-                    v.setSha256(str(c.get("sha256")));
-                    v.setSize(toLong(c.get("size"), 0L));
-                    v.setUploadedAt(toLong(c.get("uploaded-at"), 0L));
-                    loaded.put(id, v);
+                if (!isValidId(v.getId())) {
+                    continue;
                 }
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "读取 " + META_FILE + " 失败: " + t);
+                if (v.getName() == null || v.getName().isEmpty()) {
+                    v.setName(v.getId());
+                }
+                if (v.getSource() == null || v.getSource().isEmpty()) {
+                    v.setSource(deriveSource(v));
+                }
+                v.setMcVersions(parseMcVersionData(v.getMcVersionData()));
+                bindLoadedPackage(v);
+                loaded.put(v.getId(), v);
             }
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "读取 eagler 客户端数据失败: " + t);
         }
 
-        // 条目只来自 eagler-clients.yml；不再扫描目录，也不在代码里补建内置条目
         for (ClientVersion v : loaded.values()) {
             v.setMissing(!entryExists(v));
         }
 
+        String def = plugin.getWebGameConfig().getEaglerDefaultId();
+        allowPlayerSelect = plugin.getWebGameConfig().isEaglerAllowPlayerSelect();
         if (!loaded.containsKey(def)) {
             def = pickFallbackDefault(loaded);
         }
         this.versions = new ConcurrentSkipListMap<>(loaded);
         this.defaultId = def;
+        persistSettings();
         save();
     }
 
     private synchronized void save() {
         try {
-            Map<String, Object> root = new LinkedHashMap<>();
-            root.put("default-id", defaultId);
-            root.put("allow-player-select", allowPlayerSelect);
-            List<Map<String, Object>> clients = new ArrayList<>();
             for (ClientVersion v : versions.values()) {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("id", v.getId());
-                m.put("name", v.getName());
-                m.put("path", v.getPath());
-                List<Map<String, Object>> mcVersions = new ArrayList<>();
-                for (McVersionOption opt : v.getMcVersions()) {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("version", opt.getVersion());
-                    item.put("protocol", opt.getProtocol());
-                    mcVersions.add(item);
-                }
-                m.put("mc-versions", mcVersions);
-                m.put("eagler-protocol", v.getEaglerProtocol());
-                m.put("enabled", v.isEnabled());
-                m.put("order", v.getOrder());
-                m.put("source", v.getSource());
-                m.put("sha256", v.getSha256());
-                m.put("size", v.getSize());
-                m.put("uploaded-at", v.getUploadedAt());
-                clients.add(m);
+                v.setMcVersionData(formatMcVersionData(v.getMcVersions()));
+                store.save(v);
             }
-            root.put("clients", clients);
-            ensureDir(clientsDir);
-            PlatformYaml.save(ConfigUtil.toYaml(root), metaFile());
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "写入 " + META_FILE + " 失败: " + t);
+            LOG.log(Level.WARNING, "写入 eagler 客户端数据失败: " + t);
         }
     }
 
-    /** 首次启用时从 jar 释放默认元数据（已存在则不覆盖）。 */
-    private void ensureDefaultMeta() {
-        if (metaFile().isFile()) {
-            return;
+    private static List<McVersionOption> parseMcVersionData(String data) {
+        List<McVersionOption> out = new ArrayList<>();
+        if (data == null || data.trim().isEmpty()) {
+            return out;
         }
-        try {
-            plugin.saveResource(META_FILE, false);
-            LOG.info("已释放默认 " + META_FILE);
-        } catch (Throwable t) {
-            LOG.log(Level.WARNING, "释放默认 " + META_FILE + " 失败: " + t);
+        for (String row : data.split(",")) {
+            String item = row.trim();
+            if (item.isEmpty()) {
+                continue;
+            }
+            int sep = item.indexOf('|');
+            String version = (sep >= 0 ? item.substring(0, sep) : item).trim();
+            int protocol = sep >= 0 ? toInt(item.substring(sep + 1), 0) : 0;
+            if (!version.isEmpty()) {
+                out.add(McVersionOption.of(version, protocol));
+            }
         }
+        return out;
+    }
+
+    private static String formatMcVersionData(List<McVersionOption> options) {
+        StringBuilder sb = new StringBuilder();
+        if (options == null) {
+            return "";
+        }
+        for (McVersionOption option : options) {
+            if (option == null) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(option.getVersion()).append('|').append(option.getProtocol());
+        }
+        return sb.toString();
+    }
+
+    /** 把 default-id / allow-player-select 回写到 config.yml。 */
+    private void persistSettings() {
+        plugin.getWebGameConfig().setEaglerDefaultId(defaultId);
+        plugin.getWebGameConfig().setEaglerAllowPlayerSelect(allowPlayerSelect);
     }
 
     /** 首次启用时从 jar 释放内置客户端（已存在则不覆盖，避免抹掉管理员替换的文件）。 */
@@ -619,6 +625,9 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             ClientVersionVo vo = new ClientVersionVo();
             vo.setId(v.getId());
             vo.setName(v.getName());
+            vo.setPackageId(v.getPackageId());
+            ClientPackage pkg = v.getPackageId().isEmpty() ? null : packageService.find(v.getPackageId());
+            vo.setPackageName(pkg == null ? "" : pkg.getName());
             vo.setPath(v.getPath());
             vo.setMcVersions(v.getMcVersions());
             vo.setEaglerProtocol(v.getEaglerProtocol());
@@ -694,9 +703,9 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         }
         String name = str(body.get("name")).trim();
         v.setName(name.isEmpty() ? v.getId() : name);
-        String path = str(body.get("path")).trim();
-        if (!path.isEmpty()) {
-            v.setPath(path);
+        String packageId = str(body.get("packageId")).trim();
+        if (!packageId.isEmpty()) {
+            v.setPackageId(packageId);
         }
         v.setMcVersions(parseMcVersions(body.get("mcVersions")));
         v.setEaglerProtocol(toInt(body.get("eaglerProtocol"), 0));
@@ -704,6 +713,60 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         if (enabled != null) {
             v.setEnabled(enabled);
         }
+    }
+
+    /**
+     * 按 packageId 解析 Eagler 制品，把路径/指纹/来源回填到 ClientVersion。
+     *
+     * @return 空串表示成功；否则是给前端的错误文案。
+     */
+    private String applyPackage(ClientVersion v, boolean required) {
+        String packageId = v.getPackageId();
+        if (packageId.isEmpty()) {
+            return required ? "请先从客户端管理选择 Eagler 客户端包" : "";
+        }
+        ClientPackage p = packageService.find(packageId);
+        if (p == null) {
+            return "客户端包不存在，请重新选择";
+        }
+        if (!p.isEagler()) {
+            return "所选客户端包不是 Eagler 类型";
+        }
+        if (!p.isEnabled()) {
+            return "该客户端包已停用，请先启用或选择其它包";
+        }
+        String path = p.getStoragePath();
+        if (path.isEmpty()) {
+            return "该客户端包没有可用的入口文件";
+        }
+        v.setPath(path);
+        v.setSource(deriveSource(v));
+        v.setSha256(p.getSha256());
+        v.setSize(p.getSize());
+        return "";
+    }
+
+    private void bindLoadedPackage(ClientVersion v) {
+        if (v.getPackageId().isEmpty() && v.isBuiltin()) {
+            v.setPackageId(ClientVersion.BUILTIN_PACKAGE_ID);
+        }
+        if (v.getPackageId().isEmpty()) {
+            return;
+        }
+        ClientPackage p = packageService.find(v.getPackageId());
+        if (p == null || !p.isEagler() || !p.isEnabled()) {
+            v.setMissing(true);
+            return;
+        }
+        String path = p.getStoragePath();
+        if (path.isEmpty()) {
+            v.setMissing(true);
+            return;
+        }
+        v.setPath(path);
+        v.setSource(deriveSource(v));
+        v.setSha256(p.getSha256());
+        v.setSize(p.getSize());
     }
 
     /** 解析前端提交的 mcVersions（版本名数组或 {version,protocol} 数组），协议号以枚举为准。 */
@@ -751,8 +814,15 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         return name.isEmpty() ? null : McVersionOption.of(name, protocol);
     }
 
-    /** URL → url；本插件托管目录 → uploaded；其余本地路径 → local。 */
+    /** 制品来源映射：内置 → builtin；外链 → url；上传 → uploaded；旧条目再按路径猜。 */
     private String deriveSource(ClientVersion v) {
+        ClientPackage p = v.getPackageId().isEmpty() ? null : packageService.find(v.getPackageId());
+        if (p != null) {
+            if (p.isBuiltin()) {
+                return ClientVersion.SOURCE_BUILTIN;
+            }
+            return p.isExternal() ? ClientVersion.SOURCE_URL : ClientVersion.SOURCE_UPLOADED;
+        }
         if (v.isBuiltin()) {
             return ClientVersion.SOURCE_BUILTIN;
         }
@@ -805,10 +875,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             }
         }
         return "";
-    }
-
-    private File metaFile() {
-        return new File(plugin.getDataFolder(), META_FILE);
     }
 
     private File uploadDir() {

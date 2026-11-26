@@ -21,6 +21,14 @@
       </el-col>
     </el-row>
 
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="客户端路径改为从「客户端」→「客户端管理」登记的 Eagler 制品中选择；这里不再手输路径，也不再单独上传文件。"
+      style="margin-bottom: 12px"
+    />
+
     <el-table ref="table" v-loading="loading" :data="rows" size="small">
       <el-table-column label="排序" align="center" width="60">
         <template slot-scope="scope">
@@ -35,7 +43,15 @@
       </el-table-column>
       <el-table-column label="客户端 id" align="center" prop="id" width="120" />
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
-      <el-table-column label="路径" align="center" prop="path" min-width="240" show-overflow-tooltip />
+      <el-table-column label="客户端包" align="center" min-width="180" show-overflow-tooltip>
+        <template slot-scope="scope">
+          <div>{{ scope.row.packageName || '—' }}</div>
+          <div class="form-hint">{{ scope.row.packageId || '' }}</div>
+        </template>
+      </el-table-column>
+      <el-table-column label="入口 / 路径" align="center" min-width="240" show-overflow-tooltip>
+        <template slot-scope="scope">{{ scope.row.path }}</template>
+      </el-table-column>
       <el-table-column label="MC 版本" align="center" min-width="160">
         <template slot-scope="scope">
           <template v-if="scope.row.mcVersions && scope.row.mcVersions.length">
@@ -105,41 +121,25 @@
         <el-form-item label="名称">
           <el-input v-model="editForm.name" maxlength="64" placeholder="展示名称，默认同客户端 id" />
         </el-form-item>
-        <el-form-item label="客户端路径" required>
-          <el-input
-            v-model="editForm.path"
-            :disabled="editEditing && editForm.source === 'builtin'"
-            placeholder="https://example.com/client.html 或 eagler-clients/1.8.9/index.html"
-          />
-          <div class="form-hint">
-            支持 URL、本地文件（相对插件数据目录 <code>plugins/WebGame</code> / 服务器根目录）与绝对路径；
-            也可在下方上传文件后自动回填
-          </div>
-        </el-form-item>
-        <el-form-item v-if="!(editEditing && editForm.source === 'builtin')" label="上传文件">
-          <el-upload
-            ref="upload"
-            drag
-            action="#"
-            accept=".html,.htm,.zip"
-            :auto-upload="false"
-            :limit="1"
-            :disabled="editSaving"
-            :file-list="fileList"
-            :on-change="onFileChange"
-            :on-remove="onFileRemove"
+        <el-form-item label="客户端包" required>
+          <el-select
+            v-model="editForm.packageId"
+            filterable
+            placeholder="从客户端管理中选择 Eagler 制品"
             style="width: 100%"
           >
-            <i class="el-icon-upload" />
-            <div class="el-upload__text">将文件拖到此处，或<em>点击选择</em></div>
-          </el-upload>
+            <el-option
+              v-for="pkg in eaglerPackages"
+              :key="pkg.id"
+              :label="packageLabel(pkg)"
+              :value="pkg.id"
+              :disabled="!pkg.enabled"
+            />
+          </el-select>
           <div class="form-hint">
-            只可上传一个文件，保存时写入 <code>eagler-clients/&lt;id&gt;/</code>（先清空该目录）并回填客户端路径；
-            上传 .zip 会自动解压，且只回填目录前缀，需再补充具体入口文件
+            只列出「客户端管理」中 type=Eagler 的制品，路径、入口、SHA-256 由制品自动解析。
+            <router-link to="/webgameerp/client-center/packages">去客户端管理上传</router-link>
           </div>
-        </el-form-item>
-        <el-form-item v-if="uploading" label="上传进度">
-          <el-progress :percentage="uploadPercent" :stroke-width="14" />
         </el-form-item>
         <el-form-item label="MC 版本">
           <el-select
@@ -190,19 +190,14 @@ import {
   setClientAllowSelect,
   createClient,
   updateClient,
-  initClientUpload,
-  uploadClientChunk,
-  finishClientUpload,
-  abortClientUpload
+  listClientPackages
 } from '@/api/erp'
 import Sortable from 'sortablejs'
-
-const CHUNK_SIZE = 512 * 1024
 
 const emptyEditForm = () => ({
   id: '',
   name: '',
-  path: '',
+  packageId: '',
   mcVersions: [],
   eaglerProtocol: 0,
   enabled: true,
@@ -216,6 +211,7 @@ export default {
       loading: false,
       rows: [],
       mcVersionOptions: [],
+      eaglerPackages: [],
       defaultId: '',
       allowPlayerSelect: true,
       allowSelectSaving: false,
@@ -223,11 +219,7 @@ export default {
       editVisible: false,
       editEditing: false,
       editSaving: false,
-      editForm: emptyEditForm(),
-      uploading: false,
-      uploadPercent: 0,
-      file: null,
-      fileList: []
+      editForm: emptyEditForm()
     }
   },
   computed: {
@@ -238,6 +230,7 @@ export default {
   created() {
     this.getList()
     this.getMcVersions()
+    this.getPackages()
   },
   beforeDestroy() {
     this.destroySortable()
@@ -260,6 +253,17 @@ export default {
       listMcVersions().then(res => {
         this.mcVersionOptions = res.data || []
       })
+    },
+    getPackages() {
+      listClientPackages('eagler').then(res => {
+        const data = res.data || {}
+        this.eaglerPackages = data.rows || data.packages || []
+      })
+    },
+    packageLabel(pkg) {
+      const version = pkg.version ? ` · ${pkg.version}` : ''
+      const entry = pkg.entryPath ? ` · ${pkg.entryPath}` : ''
+      return `${pkg.name}${version}${entry}${pkg.enabled ? '' : '（已停用）'}`
     },
     initSortable() {
       this.destroySortable()
@@ -323,65 +327,38 @@ export default {
     openCreate() {
       this.editEditing = false
       this.editForm = emptyEditForm()
+      this.editForm.packageId = (this.eaglerPackages.find(p => p.enabled) || {}).id || ''
       this.editVisible = true
-      this.$nextTick(this.clearFile)
     },
     openEdit(row) {
       this.editEditing = true
       this.editForm = {
         id: row.id,
         name: row.name,
-        path: row.path,
+        packageId: row.packageId || '',
         mcVersions: (row.mcVersions || []).map(v => v.version),
         eaglerProtocol: row.eaglerProtocol,
         enabled: row.enabled,
         source: row.source
       }
       this.editVisible = true
-      this.$nextTick(this.clearFile)
     },
     async submitEdit() {
       const creating = !this.editEditing
-      const builtin = this.editEditing && this.editForm.source === 'builtin'
       if (creating && !/^[A-Za-z0-9_.-]{1,32}$/.test(this.editForm.id)) {
         this.$message.error('客户端 id 只能包含字母、数字、下划线、点、短横线（1-32 位）')
         return
       }
-      if (!builtin && !this.editForm.path && !this.file) {
-        this.$message.error('请填写客户端路径或上传客户端文件')
+      if (!this.editForm.packageId) {
+        this.$message.error('请选择一个 Eagler 客户端包')
         return
       }
       this.editSaving = true
       try {
-        let path = this.editForm.path
-        if (this.file) {
-          const result = await this.uploadFile()
-          if (!result) {
-            return
-          }
-          if (result.archive) {
-            // 压缩包：只回填目录前缀，等待管理员补充具体入口文件
-            this.editForm.path = result.path
-            this.clearFile()
-            this.$message.warning('压缩包已解压，请补充具体入口文件路径（如 ' + result.path + 'index.html）后再次保存')
-            return
-          }
-          path = result.path
-          this.editForm.path = path
-          this.clearFile()
-        }
-        if (!path) {
-          this.$message.error('请填写客户端路径或上传客户端文件')
-          return
-        }
-        if (path.endsWith('/') || path.endsWith('\\')) {
-          this.$message.error('请补充具体入口文件路径，例如 ' + path + 'index.html')
-          return
-        }
         const payload = {
           id: this.editForm.id,
           name: this.editForm.name,
-          path,
+          packageId: this.editForm.packageId,
           mcVersions: this.editForm.mcVersions,
           eaglerProtocol: this.editForm.eaglerProtocol,
           enabled: this.editForm.enabled
@@ -396,51 +373,11 @@ export default {
         this.editSaving = false
       }
     },
-    async uploadFile() {
-      const fileName = this.file.name || ''
-      if (!/\.(html?|zip)$/i.test(fileName)) {
-        this.$message.error('仅支持上传 .html/.htm/.zip 文件')
-        return null
-      }
-      this.uploading = true
-      this.uploadPercent = 0
-      let uploadId = null
-      try {
-        const initRes = await initClientUpload({ id: this.editForm.id, fileName })
-        uploadId = initRes.data.uploadId
-        const chunkSize = initRes.data.chunkSize || CHUNK_SIZE
-        const total = Math.max(1, Math.ceil(this.file.size / chunkSize))
-        for (let i = 0; i < total; i++) {
-          const blob = this.file.slice(i * chunkSize, Math.min(this.file.size, (i + 1) * chunkSize))
-          const base64 = await this.readBase64(blob)
-          await uploadClientChunk(uploadId, i, base64)
-          this.uploadPercent = Math.floor(((i + 1) / total) * 100)
-        }
-        const finishRes = await finishClientUpload(uploadId)
-        uploadId = null
-        this.uploadPercent = 100
-        return finishRes.data || {}
-      } catch (e) {
-        if (uploadId) {
-          abortClientUpload(uploadId).catch(() => {})
-        }
-        return null
-      } finally {
-        this.uploading = false
-      }
-    },
-    clearFile() {
-      this.file = null
-      this.fileList = []
-      if (this.$refs.upload) {
-        this.$refs.upload.clearFiles()
-      }
-    },
     sourceLabel(source) {
-      return { builtin: '内置', uploaded: '上传', url: 'URL', local: '本地' }[source] || source || '—'
+      return { builtin: '内置', uploaded: '上传', external: '外链', local: '本地' }[source] || source || '—'
     },
     sourceTagType(source) {
-      return { builtin: 'info', uploaded: '', url: 'warning', local: 'success' }[source] || ''
+      return { builtin: 'info', uploaded: '', external: 'warning', local: 'success' }[source] || ''
     },
     onToggle(row, val) {
       if (val) {
@@ -494,31 +431,6 @@ export default {
     },
     openPage(row) {
       window.open(row.pagePath, '_blank')
-    },
-    onFileChange(file, fileList) {
-      if (!/\.(html?|zip)$/i.test(file.name || '')) {
-        this.$message.error('仅支持上传 .html/.htm/.zip 文件')
-        this.clearFile()
-        return
-      }
-      this.file = file.raw
-      this.fileList = fileList.slice(-1)
-    },
-    onFileRemove() {
-      this.file = null
-      this.fileList = []
-    },
-    readBase64(blob) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const s = String(reader.result || '')
-          const idx = s.indexOf(',')
-          resolve(idx >= 0 ? s.substring(idx + 1) : s)
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
-      })
     }
   }
 }

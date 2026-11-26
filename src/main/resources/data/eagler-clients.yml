@@ -1,0 +1,17 @@
+# WebGame Eagler 客户端表（YAML 模式）
+# 根节点 = 表名，键 = 主键 id 的 YAML 编码（点号替换为 ·，避免 Bukkit 按路径拆键）；字段名与实体列名一致。
+# default-id / allow-player-select 已移到 config.yml 的 eagler 段，不再写在这里。
+eagler-clients:
+  '1·12·2':
+    id: "1.12.2"
+    name: "1.12.2 内置客户端"
+    path: "eagler-clients/1.12.2/index.html"
+    mc_versions: "1.12.2|340"
+    eagler_protocol: 4
+    enabled: true
+    order: 0
+    source: "builtin"
+    package_id: "eagler-1"
+    sha256: ""
+    size: 0
+    uploaded_at: 0

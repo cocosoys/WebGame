@@ -17,6 +17,15 @@ public interface CloudClientService {
     /** 列表：rows + defaultId + allowPlayerSelect。 */
     AjaxResult list();
 
+    /** 按 ERP 管理范围过滤列表；scope=all/空 表示全部，__unassigned__ 表示未分配。 */
+    AjaxResult list(String scope);
+
+    /** ERP 管理范围选项与计数（纯过滤，不作为授权边界）。 */
+    AjaxResult scopes();
+
+    /** 修改单台云机的管理范围（纯过滤字段，不触发页面重建）。 */
+    AjaxResult setAdminScope(String id, String adminScope);
+
     /** 新增一个云游戏客户端（id 由服务端自增生成；body: name/path/mcVersion/enabled）。 */
     AjaxResult create(Map<String, Object> body);
 
@@ -32,6 +41,9 @@ public interface CloudClientService {
     /** 删除客户端（默认客户端删除后自动回退）。 */
     AjaxResult delete(String id);
 
+    /** 删除客户端，并记录管理员给出的原因；占用中/结束未确认时拒绝。 */
+    AjaxResult delete(String id, String reason);
+
     /** 保存玩家选择页排序。 */
     AjaxResult reorder(List<String> ids);
 
@@ -43,10 +55,22 @@ public interface CloudClientService {
 
     String defaultId();
 
+    /**
+     * 客户端包下载基址（由 cloud-stream 上报的 report_base 学习；空=未知）。
+     * 是设备侧访问 WebGame 的 scheme://host:port，不含末尾斜杠。
+     */
+    String publicBase();
+
     boolean allowPlayerSelect();
 
     /** 解析本地入口文件；URL 条目返回 null。 */
     File resolveClientFile(CloudClient client);
+
+    /** 管理员显式下发成功后，记录该设备的期望客户端制品。 */
+    void setPackageReference(String id, String packageId);
+
+    /** 制品被删除时清理所有设备的期望引用；返回清理条数。 */
+    int clearPackageReference(String packageId);
 
     /** 重新发布 /cloud/ 页面。 */
     void publishPages();
@@ -68,6 +92,9 @@ public interface CloudClientService {
 
     /** 全部手动刷新（并发受限）；异步执行，返回本轮结果摘要。 */
     AjaxResult refreshAll();
+
+    /** 按 ERP 管理范围刷新；scope=all/空 表示全部，__unassigned__ 表示未分配。 */
+    AjaxResult refreshAll(String scope);
 
     /** 管理员手动写入/更正共享密钥并立即探测一次（成功才落库）。 */
     AjaxResult applyKey(String id, String key);

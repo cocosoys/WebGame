@@ -9,6 +9,8 @@ public class CloudClientVo {
     private String name;
     /** 客户端入口路径（URL 或本地文件）。 */
     private String path;
+    private String packageId;
+    private String packageName;
     /** Minecraft 版本描述（自由文本）。 */
     private String mcVersion;
     private boolean enabled;
@@ -33,6 +35,14 @@ public class CloudClientVo {
     private int port;
     /** 是否只提供 HTTPS（前端拿到后按 scheme 显示入口地址）。 */
     private boolean tls;
+    /** 该设备证书是否已按设备 pin（true=探针只信任这张证书）。 */
+    private boolean tlsCertPinned;
+    /** 证书 DER SHA-256（小写十六进制；空=未 pin）。 */
+    private String tlsCertSha256;
+    /** 证书 Subject（排查/展示用）。 */
+    private String tlsCertSubject;
+    /** 证书到期时间（排查/展示用）。 */
+    private String tlsCertExpiresAt;
     /** 拼接后的设备地址 ip:port（未配置为空）。 */
     private String address;
     /** online / offline / unknown / unauthorized。 */
@@ -53,6 +63,10 @@ public class CloudClientVo {
     private java.util.List<String> aliases = new java.util.ArrayList<>();
     /** 逻辑池名（空 = 该机器自成一池，不参与池匹配）。 */
     private String pool = "";
+    /** ERP 管理范围（纯过滤字段；空 = 未分配）。 */
+    private String adminScope = "";
+    /** 上一轮 /session/end 未被远端确认（删除/重启必须拒绝）。 */
+    private boolean endUnconfirmed;
     /** 最近一次探测的原因（不可达异常 / HTTP 状态 / health.ok=false）。 */
     private String healthReason = "";
     /** WebGame 期望的客户端包版本（config.yml 的 cloud.client-update.version）。 */
@@ -80,6 +94,22 @@ public class CloudClientVo {
 
     public void setPool(String pool) {
         this.pool = pool == null ? "" : pool;
+    }
+
+    public String getAdminScope() {
+        return adminScope;
+    }
+
+    public void setAdminScope(String adminScope) {
+        this.adminScope = adminScope == null ? "" : adminScope;
+    }
+
+    public boolean isEndUnconfirmed() {
+        return endUnconfirmed;
+    }
+
+    public void setEndUnconfirmed(boolean endUnconfirmed) {
+        this.endUnconfirmed = endUnconfirmed;
     }
 
     public String getHealthReason() {
@@ -152,6 +182,22 @@ public class CloudClientVo {
 
     public void setPath(String path) {
         this.path = path;
+    }
+
+    public String getPackageId() {
+        return packageId == null ? "" : packageId;
+    }
+
+    public void setPackageId(String packageId) {
+        this.packageId = packageId == null ? "" : packageId;
+    }
+
+    public String getPackageName() {
+        return packageName == null ? "" : packageName;
+    }
+
+    public void setPackageName(String packageName) {
+        this.packageName = packageName == null ? "" : packageName;
     }
 
     public String getMcVersion() {
@@ -240,6 +286,38 @@ public class CloudClientVo {
 
     public void setTls(boolean tls) {
         this.tls = tls;
+    }
+
+    public boolean isTlsCertPinned() {
+        return tlsCertPinned;
+    }
+
+    public void setTlsCertPinned(boolean tlsCertPinned) {
+        this.tlsCertPinned = tlsCertPinned;
+    }
+
+    public String getTlsCertSha256() {
+        return tlsCertSha256;
+    }
+
+    public void setTlsCertSha256(String tlsCertSha256) {
+        this.tlsCertSha256 = tlsCertSha256 == null ? "" : tlsCertSha256;
+    }
+
+    public String getTlsCertSubject() {
+        return tlsCertSubject;
+    }
+
+    public void setTlsCertSubject(String tlsCertSubject) {
+        this.tlsCertSubject = tlsCertSubject == null ? "" : tlsCertSubject;
+    }
+
+    public String getTlsCertExpiresAt() {
+        return tlsCertExpiresAt;
+    }
+
+    public void setTlsCertExpiresAt(String tlsCertExpiresAt) {
+        this.tlsCertExpiresAt = tlsCertExpiresAt == null ? "" : tlsCertExpiresAt;
     }
 
     public String getAddress() {

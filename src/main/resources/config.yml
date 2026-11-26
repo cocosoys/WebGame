@@ -1,4 +1,16 @@
 # WebGame 配置（前端统一托管在 /web/plugins/WebGame/）
+data:
+  # 数据后端：yaml = plugins/WebGame/data/*.yml；mysql = SOYS DataSpec（需启用 storage.backends.mysql）
+  mode: "yaml"
+client-packages:
+  # 云游戏“下发更新”弹窗的预选制品；只做预选，不自动下发
+  preselect-cloud-id: ""
+  next-eagler-id: 2
+  next-cloud-id: 2
+eagler:
+  # 默认 Eagler 客户端 id（对应 /eagler/<id>/）；allow-player-select=false 时只进默认版本
+  default-id: "1.12.2"
+  allow-player-select: true
 page:
   # 游戏页所在目录（相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾）。
   # 页面文件：src/main/resources/eagler-clients/1.12.2/（构建期打进 jar），
@@ -38,6 +50,14 @@ auto-join:
   # 弹框默认用户名，可被 URL 参数覆盖：.../eagler/?user=Tom
   default-username: "WebPlayer"
 cloud:
+  # 默认云客户端 id（空 = 由服务端从可用条目里挑）；allow-player-select=false 时只进默认客户端
+  default-id: ""
+  allow-player-select: true
+  # 下一个云客户端 id；删除后不复用，新增/上报时自动递增并回写
+  next-id: 1
+  # 云游戏客户端包不再写在这里：见 ERP「客户端 → 客户端管理」。
+  # 下载预选只影响“下发更新”弹窗的默认选中项，不再参与玩家进入时的自动更新；
+  # 设备是否自动更新由 cloud-clients 的 package_id（管理员下发成功后回写）决定。
   # 云游戏客户端（cloud-stream）运行态探测周期（秒）。
   # 每轮向 cloud-clients.yml 里登记的设备请求 GET /api/v1/health，
   # 带 Authorization: Bearer <cloud-key>（= stream-server 的 auth_token）。
@@ -47,11 +67,17 @@ cloud:
   # 单次探测的连接/读取超时（毫秒）；范围 500–15000。
   probe-timeout-ms: 3000
   # 探测的证书校验（默认严格）：
-  #   false = 走 JVM 信任库（服务端以 -Djavax.net.ssl.trustStore 指向 trust-cloud.jks），
+  #   false = 优先使用下方独立 trust-store（未配置才退回 JVM 默认信任库），
   #           证书链/主机名照常校验；证书不受信时状态为离线，原因里写明"TLS 证书校验失败"。
   #   true  = 跳过证书链与主机名校验（仅用于无法导入证书的老内网机器；等于放弃探测侧的身份保证）。
   probe:
     trust-all: false
+    # 独立信任库（只用于 WebGame → cloud-stream 的探针/控制指令，不影响 JVM 全局）：
+    #   相对路径按服务端根目录解析；留空 = 沿用 JVM 默认信任库。
+    #   文件 mtime/大小变化后下一轮自动重载，新增云机证书不必重启 MC。
+    trust-store: ''
+    trust-store-password: ''
+    trust-store-type: 'JKS'
   # 同端口转播：URL 客户端的页面/资源/WebSocket 全部经 MC 端口（SOYS upstream 前缀转播），
   # 玩家只访问 /web/plugins/WebGame/cloud/<id>/live/，不必为云主机单独做端口映射。
   # 关闭后回退为跳转设备地址（需要玩家能直连设备端口）。
@@ -89,17 +115,8 @@ cloud:
     join-window-seconds: 30
     # 揭幕下限（秒）：进服后页面至少再压这么久才揭开遮罩，避免画面闪一下又黑屏。
     min-hold-seconds: 15
-  # 云游戏客户端包更新：zip 放 plugins/WebGame/packages/ 下，由 WebGame 托管下载；
-  # WebGame 只在 prepare 时把 version 发给云主机代理，代理比对本地版本，不一致才去下载解包。
-  # 代理从不主动更新——版本号是唯一的触发器；ERP 的「下发更新」是同一链路的主动版。
-  client-update:
-    enabled: true
-    # 期望版本号（空 = 不做版本比对，等价于关闭）
-    version: "1.12.2-Forge_14.23.5.2864"
-    # 包文件名（相对 plugins/WebGame/packages/）与包内客户端目录名
-    package: "cloud-client.zip"
-    # 代理把 zip 解开后落到 games/clients/ 下的目录名
-    target-dir: "1.12.2-Forge_14.23.5.2864"
+  # 云游戏客户端包不再写在这里：见 ERP「客户端管理 → 云游戏客户端包」，
+  # 制品元数据在 cloud-client-packages.yml，文件仍托管在 packages/。
   # 池（一组同配置的机器，玩家只认池名 /cloud/pool/<池名>，由服务端挑一台空闲的）。
   # 选机前提永远是"在线 + 健康 + 空闲 + 口令一致"，策略只决定在合格机器里挑哪一台：
   #   order   = 按 ERP 里的排序取第一台（默认，行为最可预期）

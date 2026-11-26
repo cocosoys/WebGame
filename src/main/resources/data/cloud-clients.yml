@@ -1,0 +1,4 @@
+# WebGame 云游戏客户端表（YAML 模式）
+# 根节点 = 表名，键 = 主键 id；字段名与实体列名一致（驼峰转 snake_case）。
+# default-id / allow-player-select / next-id 已移到 config.yml 的 cloud 段，不再写在这里。
+cloud-clients: {}

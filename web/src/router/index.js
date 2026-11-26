@@ -98,7 +98,11 @@ const routeBindings = {
   [moduleRoot + '/config']: { component: NestedRouterView, name: 'WebGameConfigDir' },
   [moduleRoot + '/config/config']: { component: () => import('@/views/webgameerp/config/config'), name: 'WebGameConfig' },
   [moduleRoot + '/clients']: { component: () => import('@/views/webgameerp/clients/index'), name: 'WebGameClients' },
-  [moduleRoot + '/cloud']: { component: () => import('@/views/webgameerp/cloud/index'), name: 'WebGameCloudClients' }
+  [moduleRoot + '/cloud']: { component: () => import('@/views/webgameerp/cloud/index'), name: 'WebGameCloudClients' },
+  [moduleRoot + '/client-center']: { component: NestedRouterView, name: 'WebGameClientCenterDir' },
+  [moduleRoot + '/client-center/eagler']: { component: () => import('@/views/webgameerp/clients/index'), name: 'WebGameClientCenterEagler' },
+  [moduleRoot + '/client-center/packages']: { component: () => import('@/views/webgameerp/client-center/packages/index'), name: 'WebGameClientCenterPackages' },
+  [moduleRoot + '/client-center/devices']: { component: () => import('@/views/webgameerp/cloud/index'), name: 'WebGameClientCenterDevices' }
 }
 
 /** 决策②：对外暴露的纯 path → component 表（供 router/menuAdapter.js 查表）。 */

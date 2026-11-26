@@ -32,6 +32,9 @@ public final class CloudClientPages {
     /** 本类登记条目的专用 tag（与 dist / eagler 客户端页面隔离）。 */
     public static final String TAG = "webgame-cloud-client-pages";
 
+    /** 页面统一声明为 HTML：缺省的 application/octet-stream 会让浏览器把入口页当文件下载。 */
+    private static final String HTML_CONTENT_TYPE = "text/html; charset=utf-8";
+
     private static final String INDEX_FILE = "index.html";
     /** 云游戏客户端固定挂载路径（相对插件页面根）。 */
     private static final String PAGE_PATH = "/cloud/";
@@ -65,6 +68,8 @@ public final class CloudClientPages {
     private final com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService playService;
 
     private volatile SoysHttpOverMcApi api;
+    /** 最近一次 publish 用的页面 API；设备上报新基址后用它刷新 manifest。 */
+    private volatile WebPageApi packagePages;
 
     /**
      * 已生效的同端口转播基址（id → {@code /web/plugins/WebGame/cloud/&lt;id&gt;/live}）。
@@ -223,11 +228,11 @@ public final class CloudClientPages {
                 ? buildRedirectPage(defaultEntry(defaultId))
                 : buildSelectionPage();
         registerPage(pages, PAGE_PATH, entryHtml);
-        // 根路径门牌目录：/cloud 与 /cloud/ 都登记（浏览器只发其一，另一边 404 会让人以为服务坏了）
-        String dirHtml = buildRootDirectoryPage(aliasMap);
-        byte[] dirBytes = dirHtml.getBytes(StandardCharsets.UTF_8);
-        registerProxyPage(pages, ROOT_CLOUD_PATH, dirBytes);
-        registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), dirBytes);
+        // 根路径别名：/cloud 与 /cloud/ 直接复用插件页面的同一份 HTML，
+        // 不再单独渲染"门牌目录"，避免两个 URL 看起来是两套页面。
+        byte[] entryBytes = entryHtml.getBytes(StandardCharsets.UTF_8);
+        registerProxyPage(pages, ROOT_CLOUD_PATH, entryBytes);
+        registerProxyPage(pages, ROOT_CLOUD_PATH.substring(0, ROOT_CLOUD_PATH.length() - 1), entryBytes);
         // 池入口：/cloud/pool/<池名> —— 一个名字对应多台机器，点进去由服务端挑一台空闲的
         registerPoolPages(pages, allowSelect);
         // 唯一入口：/cloud/auto/ —— 整张短地址，玩家只填游戏名，机器由服务端挑，
@@ -237,6 +242,11 @@ public final class CloudClientPages {
         aliasToClient = aliasMap;
         // 客户端更新包：目录登记 + manifest（代理按 version/sha256 决定要不要下载）
         publishClientPackage(pages);
+        // 统一入口页的云机统计跟着本页数据一起刷新
+        GameHubPages hub = plugin.getGameHubPages();
+        if (hub != null) {
+            hub.publish();
+        }
     }
 
     /**
@@ -251,6 +261,7 @@ public final class CloudClientPages {
         if (!dir.isDirectory()) {
             return;
         }
+        packagePages = pages;
         String rel = "/cloud/client";
         try {
             Set<WebRegistry.Entry> entries = pages.registerDirectory(plugin, rel, dir);
@@ -265,71 +276,54 @@ public final class CloudClientPages {
         }
     }
 
-    /** manifest.json：版本 + 大小 + 文件数 + sha256 + 下载地址。 */
+    /** manifest.json：完全由客户端包制品库生成（版本/大小/文件数/sha256/URL）。 */
     private String buildClientManifest(File dir) {
-        String version = "";
-        String pkg = "cloud-client.zip";
-        String target = "";
-        boolean enabled = true;
         try {
-            org.bukkit.configuration.file.FileConfiguration cfg = plugin.getConfig();
-            enabled = cfg.getBoolean("cloud.client-update.enabled", true);
-            version = cfg.getString("cloud.client-update.version", "");
-            pkg = cfg.getString("cloud.client-update.package", pkg);
-            target = cfg.getString("cloud.client-update.target-dir", "");
-        } catch (Throwable ignored) {
-        }
-        version = version == null ? "" : version.trim();
-        pkg = pkg == null || pkg.trim().isEmpty() ? "cloud-client.zip" : pkg.trim();
-        File zip = new File(dir, pkg);
-        long size = zip.isFile() ? zip.length() : 0;
-        long mtime = zip.isFile() ? zip.lastModified() : 0;
-        String sha = "";
-        int files = 0;
-        if (zip.isFile()) {
-            // 同一个文件不重复算：zip 动辄几十 MB，manifest 又会被反复重建
-            if (mtime == cachedPkgMtime && size == cachedPkgSize && !cachedPkgSha.isEmpty()) {
-                sha = cachedPkgSha;
-                files = cachedPkgFiles;
-            } else {
-                try {
-                    sha = sha256(zip);
-                    files = countZipEntries(zip);
-                    cachedPkgMtime = mtime;
-                    cachedPkgSize = size;
-                    cachedPkgSha = sha;
-                    cachedPkgFiles = files;
-                } catch (Throwable t) {
-                    LOG.log(Level.WARNING, "计算客户端包摘要失败 " + zip + ": " + t);
-                }
+            com.github.cocosoys.mc.webgame.spring.service.ClientPackageService pkgs =
+                    plugin.getClientPackageService();
+            if (pkgs != null) {
+                return pkgs.manifestJson();
             }
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "生成客户端包 manifest 失败: " + t);
         }
-        StringBuilder sb = new StringBuilder(256);
-        sb.append("{\"enabled\":").append(enabled)
-                .append(",\"version\":\"").append(jsonStr(version))
-                .append("\",\"package\":\"").append(jsonStr(pkg))
-                .append("\",\"size\":").append(size)
-                .append(",\"files\":").append(files)
-                .append(",\"sha256\":\"").append(sha)
-                .append("\",\"targetDir\":\"").append(jsonStr(target))
-                .append("\",\"url\":\"").append(jsonStr(WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/client/" + pkg))
-                .append("\"}");
-        return sb.toString();
+        return "{\"enabled\":false,\"version\":\"\",\"package\":\"\",\"size\":0,\"files\":0,"
+                + "\"sha256\":\"\",\"targetDir\":\"\",\"url\":\"\"}";
     }
 
-    private String clientUrlFor(String pkg) {
-        String base = "";
+    /** 设备上报 report_base 后刷新 manifest：URL 依赖基址，不能只在启动时生成一次。 */
+    public void refreshClientManifest() {
+        WebPageApi pages = packagePages;
+        if (pages == null) {
+            return;
+        }
         try {
-            base = plugin.getConfig().getString("cloud.client-update.base-url", "").trim();
-        } catch (Throwable ignored) {
+            File dir = new File(plugin.getDataFolder(), "packages");
+            byte[] bytes = buildClientManifest(dir).getBytes(StandardCharsets.UTF_8);
+            // 覆盖登记：启动时已经登记过一次，普通 registerPage 会拒绝重复路径。
+            pages.registerPage(plugin, "/cloud/client/manifest.jsonindex.html", bytes,
+                    HTML_CONTENT_TYPE, true);
+            pages.registerPage(plugin, "/cloud/client/manifest.json", bytes,
+                    HTML_CONTENT_TYPE, true);
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "刷新客户端包 manifest 失败: " + t);
         }
-        if (base.isEmpty()) {
-            return "";
+    }
+
+    /** 上传/删除制品后重扫 packages 目录：新子目录也要能被 /cloud/client/<id>/ 取到。 */
+    public void refreshClientPackages() {
+        WebPageApi pages = packagePages;
+        if (pages == null) {
+            return;
         }
-        while (base.endsWith("/")) {
-            base = base.substring(0, base.length() - 1);
+        try {
+            File dir = new File(plugin.getDataFolder(), "packages");
+            Set<WebRegistry.Entry> entries = pages.registerDirectory(plugin, "/cloud/client", dir, true);
+            tag(entries);
+            refreshClientManifest();
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "重扫客户端包目录失败: " + t);
         }
-        return base + WebGameConfig.WEB_PLUGIN_PREFIX + "/cloud/client/" + pkg;
     }
 
     private static String sha256(File f) throws Exception {
@@ -574,57 +568,19 @@ public final class CloudClientPages {
         return sb.toString();
     }
 
-    /** 期望的客户端包版本（config.yml 的 cloud.client-update.version；空 = 不比对）。 */
+    /** 全局默认包已降级为“下发预选”，不再作为页面/自动更新基准；恒为空。 */
     public String clientPackageVersion() {
-        try {
-            String v = plugin.getConfig().getString("cloud.client-update.version", "");
-            return v == null ? "" : v.trim();
-        } catch (Throwable t) {
-            return "";
-        }
+        return "";
     }
 
-    /** 客户端包下载地址（给云主机代理用；base-url 没配就返回空，代理会跳过更新）。 */
+    /** 全局默认包已降级为“下发预选”，页面不再暴露默认下载地址；恒为空。 */
     public String clientPackageUrl() {
-        String pkg = "cloud-client.zip";
-        try {
-            String p = plugin.getConfig().getString("cloud.client-update.package", pkg);
-            if (p != null && !p.trim().isEmpty()) {
-                pkg = p.trim();
-            }
-        } catch (Throwable ignored) {
-        }
-        return clientUrlFor(pkg);
+        return "";
     }
 
-    /** 当前包 sha256（与 manifest 同源；包不存在返回空串）。 */
+    /** 全局默认包已降级为“下发预选”，页面不再暴露默认 sha；恒为空。 */
     public String clientPackageSha() {
-        File dir = new File(plugin.getDataFolder(), "packages");
-        String pkg = "cloud-client.zip";
-        try {
-            String p = plugin.getConfig().getString("cloud.client-update.package", pkg);
-            if (p != null && !p.trim().isEmpty()) {
-                pkg = p.trim();
-            }
-        } catch (Throwable ignored) {
-        }
-        File zip = new File(dir, pkg);
-        if (!zip.isFile()) {
-            return "";
-        }
-        if (zip.lastModified() == cachedPkgMtime && zip.length() == cachedPkgSize && !cachedPkgSha.isEmpty()) {
-            return cachedPkgSha;
-        }
-        try {
-            cachedPkgMtime = zip.lastModified();
-            cachedPkgSize = zip.length();
-            cachedPkgSha = sha256(zip);
-            cachedPkgFiles = countZipEntries(zip);
-            return cachedPkgSha;
-        } catch (Throwable t) {
-            LOG.log(Level.FINE, "计算客户端包摘要失败: " + t);
-            return "";
-        }
+        return "";
     }
 
     /** 登记某别名的入口页与包装页（根路径，无 /web/plugins 前缀）。 */
@@ -1043,7 +999,7 @@ public final class CloudClientPages {
     /** 根路径登记（无 /plugins 前缀）；返回的 Entry 手工打 tag 以便随发布整体撤销。 */
     private WebRegistry.Entry registerProxyPage(WebPageApi pages, String path, byte[] content) {
         try {
-            WebRegistry.Entry e = pages.registerProxyPage(plugin, path, content);
+            WebRegistry.Entry e = pages.registerProxyPage(plugin, path, content, HTML_CONTENT_TYPE);
             tag(e);
             return e;
         } catch (Throwable t) {
@@ -1075,13 +1031,13 @@ public final class CloudClientPages {
     private void registerPage(WebPageApi pages, String entry, String html) {
         byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
         try {
-            WebRegistry.Entry e = pages.registerPage(plugin, entry + "index.html", bytes, TAG);
+            WebRegistry.Entry e = pages.registerPage(plugin, entry + "index.html", bytes, HTML_CONTENT_TYPE);
             tag(e);
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "登记页面失败 " + entry + ": " + t);
         }
         try {
-            WebRegistry.Entry e = pages.registerPage(plugin, entry, bytes, TAG);
+            WebRegistry.Entry e = pages.registerPage(plugin, entry, bytes, HTML_CONTENT_TYPE);
             tag(e);
         } catch (Throwable t) {
             LOG.log(Level.FINE, "登记目录别名失败 " + entry + ": " + t);
@@ -1177,6 +1133,11 @@ public final class CloudClientPages {
         try {
             // 内网自签证书必须放宽校验，否则 TLS 握手直接失败；公网目标保持严格校验
             boolean insecure = isPrivateHost(base);
+            if (insecure && playService != null) {
+                // SOYS 的 HTTP upstream 直接用默认 HttpsURLConnection，必须先把同一份
+                // trust-cloud.jks 装成 JVM 默认工厂，否则第一跳就 PKIX。
+                playService.installDefaultHttpsTrust();
+            }
             a.registerUpstream(livePrefix, UpstreamTarget.of(base, insecure), tag);
             LOG.info("云客户端 " + id + " 已注册同端口转播前缀 " + livePrefix + " -> " + base
                     + (insecure ? "（内网自签，跳过证书校验）" : ""));
@@ -1227,6 +1188,12 @@ public final class CloudClientPages {
         }
     }
 
+    /**
+     * 云游戏选择页：统一入口（/play/）的下一级。
+     *
+     * <p>顶栏品牌 + 返回统一入口；自动匹配做成置顶主卡；云机卡片带状态点、别名与池徽章；
+     * 机群（池）单独一节。视觉全部走 {@link GamePageTheme}，与 /play/、/eagler/ 同款。</p>
+     */
     private String buildSelectionPage() {
         String prefix = WebGameConfig.WEB_PLUGIN_PREFIX;
         String defaultId = cloudClientService.defaultId();
@@ -1248,68 +1215,138 @@ public final class CloudClientPages {
             ordered.add(0, defaultClient);
         }
 
+        StringBuilder body = new StringBuilder(2048);
+        body.append(GamePageTheme.topbar(GameHubPages.PLAY_PATH))
+                .append("<h1>云游戏客户端</h1>\n")
+                .append("<p class=\"sub\">选一台云机，或直接自动匹配；每台云机独占使用，被占用时需要排队。</p>\n")
+                .append("<img class=\"banner\" src=\"").append(GamePageTheme.image("cloud.jpg"))
+                .append("\" alt=\"\">\n");
+
+        // 唯一入口主卡（/cloud/auto）：玩家可以不选机器，直接让服务端挑一台空闲的
+        body.append("<a class=\"hero\" href=\"").append(ROOT_CLOUD_PATH).append(AUTO_SEGMENT).append("\">")
+                .append("<div class=\"hero-head\"><span class=\"hero-name\">直接进入</span>")
+                .append("<span class=\"badge badge-blue\">自动匹配</span></div>")
+                .append("<div class=\"hero-desc\">不用选机器：系统自动挑一台在线、健康且空闲的云机，"
+                        + "进入后输入游戏名即可开始。</div></a>\n");
+
+        // 云机卡片
         StringBuilder cards = new StringBuilder(1024);
         int count = 0;
-        // 唯一入口置顶（/cloud/auto）：玩家可以不选机器，直接让服务端挑一台空闲的
-        count++;
-        cards.append("<a class=\"card card-default\" href=\"").append(ROOT_CLOUD_PATH).append(AUTO_SEGMENT).append("\">")
-                .append("<div class=\"card-head\"><span class=\"card-name\">直接进入</span>")
-                .append("<span class=\"badge\">自动匹配</span></div>")
-                .append("<div class=\"card-meta\"><span>不用选机器</span><span>/cloud/auto</span></div></a>");
         for (CloudClient c : ordered) {
             count++;
             String id = escape(c.getId());
             String name = escape(c.getName());
             String mc = escape(c.getMcVersion());
             boolean isDefault = c.getId().equals(defaultId);
+            boolean online = CloudClient.STATUS_ONLINE.equals(c.getStatus());
             cards.append("<a class=\"card").append(isDefault ? " card-default" : "")
                     .append("\" href=\"").append(prefix).append(PAGE_PATH).append(id).append("/\">")
                     .append("<div class=\"card-head\"><span class=\"card-name\">").append(name).append("</span>");
             if (isDefault) {
                 cards.append("<span class=\"badge\">默认</span>");
+            } else {
+                cards.append("<span class=\"dot").append(statusDotClass(c.getStatus())).append("\"></span>");
             }
             cards.append("</div><div class=\"card-meta\">");
             if (!mc.isEmpty()) {
                 cards.append("<span>MC ").append(mc).append("</span>");
             }
             cards.append("<span>ID ").append(id).append("</span>");
+            // 别名最多展示两个，避免把卡片撑高
+            int shown = 0;
+            for (String alias : normalizedAliases(c)) {
+                if (shown >= 2) {
+                    break;
+                }
+                cards.append("<span>/cloud/").append(escape(alias)).append("</span>");
+                shown++;
+            }
+            String pool = c.getPool();
+            if (pool != null && !pool.isEmpty()) {
+                cards.append("<span>池 ").append(escape(pool)).append("</span>");
+            }
+            cards.append("<span class=\"live\">").append(statusText(c.getStatus())).append("</span>");
             cards.append("</div></a>");
         }
         if (count == 0) {
-            cards.append("<div class=\"empty\">暂无可用的云游戏客户端，请联系管理员。</div>");
+            body.append("<div class=\"empty\">暂无可用的云游戏客户端，请联系管理员。</div>\n");
+        } else {
+            body.append("<div class=\"sec\">云机列表 · ").append(count).append(" 台</div>\n")
+                    .append("<div class=\"grid\">").append(cards).append("</div>\n");
         }
 
-        return "<!DOCTYPE html>\n"
-                + "<html lang=\"zh-CN\">\n<head>\n"
-                + "<meta charset=\"utf-8\">\n"
-                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                + "<title>选择云游戏客户端</title>\n"
-                + "<style>\n"
-                + "*{box-sizing:border-box}\n"
-                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
-                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
-                + ".wrap{width:100%;max-width:860px;padding:48px 24px}\n"
-                + "h1{margin:0 0 8px;font-size:28px;font-weight:600;letter-spacing:1px}\n"
-                + ".sub{margin:0 0 32px;color:#8f9bb3;font-size:14px}\n"
-                + ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}\n"
-                + ".card{display:block;padding:20px;border-radius:14px;text-decoration:none;color:inherit;"
-                + "background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);"
-                + "transition:transform .15s ease,border-color .15s ease,background .15s ease}\n"
-                + ".card:hover{transform:translateY(-3px);border-color:#4f8cff;background:rgba(79,140,255,.12)}\n"
-                + ".card-default{border-color:rgba(103,194,58,.55)}\n"
-                + ".card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}\n"
-                + ".card-name{font-size:17px;font-weight:600}\n"
-                + ".badge{font-size:12px;padding:2px 8px;border-radius:999px;background:#67c23a;color:#08130a}\n"
-                + ".card-meta{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px;color:#9aa6bd;font-size:12px}\n"
-                + ".card-meta span{padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.06)}\n"
-                + ".empty{padding:32px;text-align:center;color:#8f9bb3;border:1px dashed rgba(255,255,255,.15);border-radius:14px}\n"
-                + "</style>\n</head>\n<body>\n"
-                + "<div class=\"wrap\">\n"
-                + "<h1>选择云游戏客户端</h1>\n"
-                + "<p class=\"sub\">选择一个客户端开始游戏</p>\n"
-                + "<div class=\"grid\">" + cards + "</div>\n"
-                + "</div>\n</body>\n</html>\n";
+        // 机群（池）卡片：一个名字后面可能有好几台机器，玩家只认名字
+        java.util.Map<String, List<CloudClient>> pools = poolMembers();
+        if (!pools.isEmpty()) {
+            StringBuilder poolCards = new StringBuilder(512);
+            for (java.util.Map.Entry<String, List<CloudClient>> pe : pools.entrySet()) {
+                String pool = pe.getKey();
+                int members = pe.getValue().size();
+                int healthy = 0;
+                for (CloudClient m : pe.getValue()) {
+                    if (m.isHealthy()) {
+                        healthy++;
+                    }
+                }
+                poolCards.append("<a class=\"card\" href=\"").append(ROOT_CLOUD_PATH)
+                        .append(POOL_SEGMENT).append("/").append(escape(pool)).append("\">")
+                        .append("<div class=\"card-head\"><span class=\"card-name\">池 ")
+                        .append(escape(pool)).append("</span>")
+                        .append("<span class=\"dot").append(healthy > 0 ? "" : " off").append("\"></span></div>")
+                        .append("<div class=\"card-meta\"><span>").append(members).append(" 台</span>")
+                        .append("<span class=\"live\">在线 ").append(healthy).append("</span></div></a>");
+            }
+            body.append("<div class=\"sec\">机群（池） · 按名字进入，由服务端挑一台</div>\n")
+                    .append("<div class=\"grid\">").append(poolCards).append("</div>\n");
+        }
+
+        body.append(GamePageTheme.foot("WebGame · 云游戏客户端"));
+
+        String extraCss = ""
+                + ".hero{display:block;padding:20px 24px;border-radius:22px;text-decoration:none;color:#24315e;"
+                + "margin-bottom:6px;background:rgba(255,255,255,.94);border:2px solid rgba(255,255,255,.72);"
+                + "box-shadow:0 14px 34px rgba(46,54,140,.28),inset 0 1px 0 rgba(255,255,255,.8);"
+                + "transition:transform .15s ease,box-shadow .15s ease}\n"
+                + ".hero:hover{transform:translateY(-3px);box-shadow:0 16px 36px rgba(30,40,120,.32)}\n"
+                + ".hero-head{display:flex;align-items:center;justify-content:space-between;gap:8px}\n"
+                + ".hero-name{font-size:18px;font-weight:800}\n"
+                + ".hero-desc{margin-top:8px;color:#5a6a99;font-size:13px;line-height:1.7}\n";
+
+        return GamePageTheme.shell("云游戏客户端 · 选择云机", extraCss, body.toString());
+    }
+
+    /** 状态 → 圆点样式（主题里定义了 off/warn/err 三种非在线色）。 */
+    private static String statusDotClass(String status) {
+        if (CloudClient.STATUS_OFFLINE.equals(status)) {
+            return " off";
+        }
+        if (CloudClient.STATUS_UNAUTHORIZED.equals(status)) {
+            return " err";
+        }
+        if (CloudClient.STATUS_UNKNOWN.equals(status) || CloudClient.STATUS_DEGRADED.equals(status)) {
+            return " warn";
+        }
+        return "";
+    }
+
+    /** 状态 → 玩家可读文案。 */
+    private static String statusText(String status) {
+        if (CloudClient.STATUS_ONLINE.equals(status)) {
+            return "在线";
+        }
+        if (CloudClient.STATUS_OFFLINE.equals(status)) {
+            return "离线";
+        }
+        if (CloudClient.STATUS_UNAUTHORIZED.equals(status)) {
+            return "口令错误";
+        }
+        if (CloudClient.STATUS_DEGRADED.equals(status)) {
+            return "降级";
+        }
+        if (status == null || status.isEmpty() || CloudClient.STATUS_UNKNOWN.equals(status)) {
+            return "未知";
+        }
+        return status;
     }
 
     /**
@@ -1602,8 +1639,6 @@ public final class CloudClientPages {
                 + "*{box-sizing:border-box}\n"
                 + "html,body{margin:0;height:100%;overflow:hidden;background:#070a12;"
                 + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}\n"
-                + ".bar{height:40px;display:flex;align-items:center;gap:12px;padding:0 14px;"
-                + "background:#101728;color:#c7d0e2;font-size:13px;border-bottom:1px solid rgba(255,255,255,.08)}\n"
                 + ".dot{width:8px;height:8px;border-radius:50%;background:#67c23a}\n"
                 + ".pill{padding:1px 8px;border-radius:999px;background:rgba(255,255,255,.08);"
                 + "color:#9aa6bd;font-size:12px}\n"
@@ -1611,8 +1646,14 @@ public final class CloudClientPages {
                 + ".btn{padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.14);"
                 + "background:transparent;color:#c7d0e2;font-size:13px;cursor:pointer}\n"
                 + ".btn:hover{border-color:#4f8cff;color:#fff}\n"
-                + "iframe{display:block;width:100%;height:calc(100% - 40px);border:0;background:#000}\n"
-                + ".mask{position:fixed;inset:40px 0 0 0;display:flex;align-items:center;justify-content:center;"
+                + ".exit{position:fixed;left:10px;bottom:10px;z-index:5;display:flex;align-items:center;"
+                + "gap:6px;padding:8px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.18);"
+                + "background:rgba(16,23,40,.82);color:#c7d0e2;font-size:12px;line-height:1;cursor:pointer;"
+                + "box-shadow:0 2px 10px rgba(0,0,0,.35);backdrop-filter:blur(4px)}\n"
+                + ".exit:hover{border-color:#4f8cff;color:#fff}\n"
+                + ".exit svg{width:14px;height:14px;flex:none}\n"
+                + "iframe{display:block;width:100%;height:100%;border:0;background:#000}\n"
+                + ".mask{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;"
                 + "background:rgba(7,10,18,.94);color:#8f9bb3;font-size:14px;text-align:center;line-height:1.8;z-index:2}\n"
                 + ".mw{width:min(420px,80vw)}\n"
                 + ".mt{margin:0 0 14px;font-size:15px;color:#c7d0e2}\n"
@@ -1630,13 +1671,12 @@ public final class CloudClientPages {
                 + ".now{margin:0;font-size:12px;color:#9aa6bd}\n"
                 + ".note{margin:10px 0 0;font-size:12px;color:#6f7a90}\n"
                 + "</style>\n</head>\n<body>\n"
-                + "<div class=\"bar\">\n"
-                + "<span class=\"dot\"></span><span>" + name + "</span>" + aliasTag
-                + "<span id=\"pl\" class=\"grow\"></span>\n"
-                + "<button class=\"btn\" id=\"end\" type=\"button\">结束游戏</button>\n"
-                + "</div>\n"
                 + "<iframe id=\"v\" src=\"\" allow=\"autoplay; fullscreen; microphone; camera;"
                 + " clipboard-read; clipboard-write; gamepad\" allowfullscreen></iframe>\n"
+                + "<button class=\"exit\" id=\"end\" type=\"button\" title=\"退出游戏\">"
+                + "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" "
+                + "stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18.36 6.64a9 9 0 1 1-12.73 0\"/>"
+                + "<line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"12\"/></svg>退出游戏</button>\n"
                 + "<div class=\"mask\" id=\"mask\"><div class=\"mw\">\n"
                 + "<p class=\"mt\" id=\"mt\">正在连接云主机…</p>\n"
                 + "<div class=\"steps\">\n"
@@ -1649,7 +1689,7 @@ public final class CloudClientPages {
                 + "<div class=\"track\" style=\"margin-top:10px\"><i id=\"fill\"></i></div>\n"
                 + "<p class=\"mp\"><b><span id=\"pc\">0</span>%</b> · <span id=\"st\">首次冷启动通常 30–120 秒；玩家进服后自动揭开画面</span></p>\n"
                 + "<p class=\"note\">关掉本页不会立刻释放机器：服务端约 " + hbKeep + " 秒收不到心跳才会收尾；"
-                + "正常离开请点右上角「结束游戏」。</p>\n"
+                + "正常离开请点左下角「退出游戏」。</p>\n"
                 + "</div></div>\n"
                 + "<script>\n"
                 + "var API=" + js(API_PREFIX) + ";\n"
@@ -1658,7 +1698,7 @@ public final class CloudClientPages {
                 + "var P=" + progressConfig() + ";\n"
                 + progressJs()
                 + "var q=new URLSearchParams(location.search),S=q.get('s')||'';\n"
-                + "var mask=document.getElementById('mask'),pl=document.getElementById('pl'),"
+                + "var mask=document.getElementById('mask'),"
                 + "v=document.getElementById('v'),endBtn=document.getElementById('end'),"
                 + "fill=document.getElementById('fill'),pc=document.getElementById('pc'),st=document.getElementById('st'),"
                 + "mt=document.getElementById('mt'),nowEl=document.getElementById('now'),"
@@ -1707,7 +1747,6 @@ public final class CloudClientPages {
                 + "  .then(function(r){return r.json();})\n"
                 + "  .then(function(j){\n"
                 + "    var d=(j&&j.data)||{};\n"
-                + "    if(d.player){pl.textContent='玩家 '+d.player+' · '+(d.gameState||'');}\n"
                 + "    paintStage(d.stage);\n"
                 + "    // 画面地址由服务端在会话状态里下发：会话专属随机前缀 + 令牌放在 URL 片段里\n"
                 + "    // （片段不会出现在请求行/代理日志/Referer）。拿不到 liveUrl 就不设 src。\n"

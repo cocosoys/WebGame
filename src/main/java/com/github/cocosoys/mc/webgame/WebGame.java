@@ -2,12 +2,17 @@ package com.github.cocosoys.mc.webgame;
 
 import com.github.cocosoys.mc.soyshttpovermc.api.event.SoysReadyEvent;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
+import com.github.cocosoys.mc.webgame.data.WebGameDataBootstrap;
+import com.github.cocosoys.mc.webgame.data.WebGameDataStore;
 import com.github.cocosoys.mc.webgame.spring.impl.WebGameClientServiceImpl;
+import com.github.cocosoys.mc.webgame.spring.impl.ClientPackageServiceImpl;
 import com.github.cocosoys.mc.webgame.spring.impl.CloudClientServiceImpl;
 import com.github.cocosoys.mc.webgame.spring.service.WebGameClientService;
 import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
+import com.github.cocosoys.mc.webgame.spring.service.ClientPackageService;
 import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
+import com.github.cocosoys.mc.webgame.shttp.GameHubPages;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
@@ -39,6 +44,8 @@ import java.io.File;
 public final class WebGame extends JavaPlugin implements Listener {
 
     private WebGameConfig webGameConfig;
+    /** 数据层：YAML 或 MySQL，所有实体读写都从这里走。 */
+    private WebGameDataStore dataStore;
     private WsGateway wsGateway;
 
     /** 页面托管扩展（/web/plugins/WebGame；网关未就绪时为 null）。 */
@@ -56,8 +63,13 @@ public final class WebGame extends JavaPlugin implements Listener {
     /** 云游戏客户端服务（cloud-clients.yml；不涉及上传与 WS 协议）。 */
     private CloudClientService cloudClientService;
 
+    /** 统一客户端制品库（Eagler 包 + 云游戏包）。 */
+    private ClientPackageService clientPackageService;
+
     /** 云游戏客户端页面热登记器（/cloud/ 选择页 + /cloud/&lt;id&gt;/）。 */
     private CloudClientPages cloudClientPages;
+    /** 玩家统一入口页（/play/）：先选云游戏还是 eagler，再进各自选择页。 */
+    private GameHubPages gameHubPages;
 
     /** 云游戏"点击即玩"会话服务（槽位占用 + 代理调用 + 看门狗）。 */
     private CloudPlayService cloudPlayService;
@@ -76,6 +88,16 @@ public final class WebGame extends JavaPlugin implements Listener {
 
         if (!Bukkit.getPluginManager().isPluginEnabled("SOYSHTTPOverMC")) {
             getLogger().severe("SOYSHTTPOverMC 未加载，WebGame 无法工作，已禁用自身。");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        // 数据层必须在 client/cloud service 构造前完成：它们构造时就会 load()
+        try {
+            dataStore = WebGameDataBootstrap.initialize(this, webGameConfig);
+        } catch (Throwable t) {
+            getLogger().severe("WebGame 数据初始化失败：" + t.getMessage());
+            t.printStackTrace();
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -99,7 +121,17 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
-        // 客户端版本：释放内置客户端、读取 eagler-clients.yml，并把准入判定挂到 WS 网关
+        // 云游戏客户端：独立元数据，仅页面托管，不接入 WS 网关
+        try {
+            cloudClientService = new CloudClientServiceImpl(this);
+            // 统一制品库必须先于 Eagler 客户端服务构造：Eagler 条目要按 packageId 解析路径
+            clientPackageService = new ClientPackageServiceImpl(this);
+        } catch (Throwable t) {
+            getLogger().severe("WebGame 客户端制品库初始化失败：");
+            t.printStackTrace();
+        }
+
+        // 客户端版本：释放内置客户端、读取 eagler-clients，并把准入判定挂到 WS 网关
         try {
             clientService = new WebGameClientServiceImpl(this);
             clientPages = new WebGameClientPages(this, clientService);
@@ -112,11 +144,11 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
-        // 云游戏客户端：独立元数据，仅页面托管，不接入 WS 网关
         try {
-            cloudClientService = new CloudClientServiceImpl(this);
-            cloudPlayService = new CloudPlayService(this, cloudClientService);
+            cloudPlayService = new CloudPlayService(this, cloudClientService, clientPackageService);
             cloudClientPages = new CloudClientPages(this, cloudClientService, cloudPlayService);
+            // 玩家统一入口：先选方式（云游戏 / eagler），再进各自二级选择页
+            gameHubPages = new GameHubPages(this, clientService, cloudClientService);
             // 90s 心跳：启动后立刻校准一轮，之后定时探测（离线阈值见 config.cloud.ttl-seconds）
             cloudClientService.startHeartbeat();
             // 会话看门狗：玩家在 MC 里退出后，会话必须被判定结束，否则桌面会解锁在玩家眼前
@@ -188,6 +220,9 @@ public final class WebGame extends JavaPlugin implements Listener {
         if (cloudClientPages != null) {
             cloudClientPages.unpublish();
         }
+        if (gameHubPages != null) {
+            gameHubPages.unpublish();
+        }
         if (erpExpansion != null) {
             erpExpansion.unregister();
             erpExpansion = null;
@@ -244,6 +279,10 @@ public final class WebGame extends JavaPlugin implements Listener {
                 if (cloudClientService != null) {
                     cloudClientService.publishPages();
                 }
+            }
+            if (gameHubPages != null) {
+                gameHubPages.attach(expansion.getApi());
+                gameHubPages.publish();
             }
             getLogger().info("前端页面托管已挂载：" + WebGameConfig.WEB_PLUGIN_PREFIX + "/");
         } else {
@@ -356,6 +395,10 @@ public final class WebGame extends JavaPlugin implements Listener {
         return webGameConfig;
     }
 
+    public WebGameDataStore getDataStore() {
+        return dataStore;
+    }
+
     public WsGateway getWsGateway() {
         return wsGateway;
     }
@@ -372,8 +415,21 @@ public final class WebGame extends JavaPlugin implements Listener {
         return cloudClientService;
     }
 
+    public ClientPackageService getClientPackageService() {
+        return clientPackageService;
+    }
+
+    /** 兼容旧调用名。 */
+    public ClientPackageService getCloudClientPackageService() {
+        return clientPackageService;
+    }
+
     public CloudClientPages getCloudClientPages() {
         return cloudClientPages;
+    }
+
+    public GameHubPages getGameHubPages() {
+        return gameHubPages;
     }
 
     public CloudPlayService getCloudPlayService() {

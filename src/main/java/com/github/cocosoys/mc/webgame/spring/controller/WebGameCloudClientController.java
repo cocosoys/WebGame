@@ -34,8 +34,23 @@ public class WebGameCloudClientController {
     @ApiName("云游戏客户端列表")
     @ApiPermission("webgame.erp.cloudclients.list")
     @GetMapping("/list")
-    public AjaxResult list() {
-        return cloudClientService.list();
+    public AjaxResult list(@RequestParam(name = "scope", required = false) String scope) {
+        return cloudClientService.list(scope);
+    }
+
+    @ApiName("云游戏客户端管理范围")
+    @ApiPermission("webgame.erp.cloudclients.list")
+    @GetMapping("/scopes")
+    public AjaxResult scopes() {
+        return cloudClientService.scopes();
+    }
+
+    @ApiName("修改云游戏客户端管理范围")
+    @ApiPermission("webgame.erp.cloudclients.edit")
+    @PostMapping("/scope")
+    public AjaxResult scope(@RequestParam(name = "id", required = true) String id,
+                            @RequestParam(name = "adminScope", required = false, defaultValue = "") String adminScope) {
+        return cloudClientService.setAdminScope(id, adminScope);
     }
 
     @ApiName("启用/关闭云游戏客户端")
@@ -56,8 +71,30 @@ public class WebGameCloudClientController {
     @ApiName("删除云游戏客户端")
     @ApiPermission("webgame.erp.cloudclients.delete")
     @PostMapping("/delete")
-    public AjaxResult delete(@RequestParam(name = "id", required = true) String id) {
-        return cloudClientService.delete(id);
+    public AjaxResult delete(@RequestParam(name = "id", required = true) String id,
+                             @RequestParam(name = "reason", required = false, defaultValue = "") String reason) {
+        return cloudClientService.delete(id, reason);
+    }
+
+    @ApiName("强制结束云机会话")
+    @ApiPermission("webgame.erp.cloudclients.force-end")
+    @PostMapping("/session/force-end")
+    public AjaxResult forceEnd(@RequestParam(name = "id", required = true) String id,
+                               @RequestParam(name = "reason", required = false, defaultValue = "") String reason) {
+        if (playService == null) {
+            return AjaxResult.error("云游戏会话服务未就绪");
+        }
+        return playService.forceEnd(id, reason);
+    }
+
+    @ApiName("重启云机游戏")
+    @ApiPermission("webgame.erp.cloudclients.restart")
+    @PostMapping("/game/restart")
+    public AjaxResult restart(@RequestParam(name = "id", required = true) String id) {
+        if (playService == null) {
+            return AjaxResult.error("云游戏会话服务未就绪");
+        }
+        return playService.restartGame(id);
     }
 
     @ApiName("保存云游戏客户端排序")
@@ -109,8 +146,8 @@ public class WebGameCloudClientController {
     @ApiName("刷新全部云游戏客户端状态")
     @ApiPermission("webgame.erp.cloudclients.refresh")
     @PostMapping("/refresh-all")
-    public AjaxResult refreshAll() {
-        return cloudClientService.refreshAll();
+    public AjaxResult refreshAll(@RequestParam(name = "scope", required = false) String scope) {
+        return cloudClientService.refreshAll(scope);
     }
 
     @ApiName("更新云游戏客户端共享密钥")
@@ -122,16 +159,18 @@ public class WebGameCloudClientController {
     }
 
     /**
-     * 下发客户端包更新：把 config.yml 里的期望版本推给指定机器（后台下载/解包，立刻返回）。
+     * 下发客户端包更新：把“云游戏客户端包”里的默认/指定制品推给指定机器
+     * （后台下载/解包，立刻返回）。
      * <p>与玩家点击触发的更新是同一条链路，只是发起者从玩家换成了管理员。</p>
      */
     @ApiName("下发云游戏客户端更新")
     @ApiPermission("webgame.erp.cloudclients.edit")
     @PostMapping("/push-update")
-    public AjaxResult pushUpdate(@RequestParam(name = "id", required = true) String id) {
+    public AjaxResult pushUpdate(@RequestParam(name = "id", required = true) String id,
+                                 @RequestParam(name = "packageId", required = false, defaultValue = "") String packageId) {
         if (playService == null) {
             return AjaxResult.error("云游戏会话服务未就绪");
         }
-        return playService.pushUpdate(id);
+        return playService.pushUpdate(id, packageId);
     }
 }

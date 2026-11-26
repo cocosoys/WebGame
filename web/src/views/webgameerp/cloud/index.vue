@@ -34,7 +34,35 @@
           关掉 cloud.same-port-relay 后回退为直连跳转。
         </span>
       </el-col>
+      <el-col :span="24" style="margin-top: 8px">
+        <span class="entry-hint">管理范围：</span>
+        <el-select
+          v-model="scope"
+          size="mini"
+          style="width: 180px"
+          @change="onScopeChange"
+        >
+          <el-option label="全部" value="all" />
+          <el-option
+            v-for="s in scopeOptions"
+            :key="s.value"
+            :label="s.label + '（' + s.count + '）'"
+            :value="s.value"
+          />
+        </el-select>
+        <span class="entry-hint" style="margin-left: 8px">
+          scope 只用于过滤列表，不代表权限边界；换机请先删除旧记录，等云机重新上报生成新 ID。
+        </span>
+      </el-col>
     </el-row>
+
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="云游戏设备的“期望客户端包”只在「更多操作 → 下发更新」时显式选择并回写；客户端管理里的“下发预选”只做弹窗默认值，不会自动静默下发。"
+      style="margin-bottom: 12px"
+    />
 
     <el-table ref="table" v-loading="loading" :data="rows" size="small">
       <el-table-column label="排序" align="center" width="60">
@@ -42,37 +70,23 @@
           <i class="el-icon-rank drag-handle" title="拖拽调整顺序" />
         </template>
       </el-table-column>
-      <el-table-column label="默认" align="center" width="70">
-        <template slot-scope="scope">
-          <el-tag v-if="scope.row.defaultVersion" type="success" size="mini">默认</el-tag>
-          <span v-else style="color: #c0c4cc">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="id" align="center" prop="id" width="90" />
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
-      <el-table-column label="设备地址" align="center" min-width="170">
+      <el-table-column label="管理范围" align="center" width="120">
         <template slot-scope="scope">
-          <span v-if="scope.row.address">{{ (scope.row.tls ? 'https://' : 'http://') + scope.row.address }}</span>
-          <span v-else style="color: #909399">未上报</span>
+          <el-tag v-if="scope.row.adminScope" size="mini" type="success">{{ scope.row.adminScope }}</el-tag>
+          <el-tag v-else size="mini" type="info">未分配</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="运行状态" align="center" width="130">
         <template slot-scope="scope">
           <el-tag size="mini" :type="runtimeTagType(scope.row.status)">{{ runtimeLabel(scope.row.status) }}</el-tag>
           <el-tag v-if="scope.row.busy" size="mini" type="warning" style="margin-left: 4px">占用</el-tag>
+          <el-tag v-if="scope.row.endUnconfirmed" size="mini" type="danger" style="margin-left: 4px">结束未确认</el-tag>
           <div class="runtime-hint">
             <span v-if="scope.row.latencyMs">延迟 {{ scope.row.latencyMs }}ms</span>
             <span v-else-if="scope.row.version">v{{ scope.row.version }}</span>
             <span v-else>—</span>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="健康原因" align="center" min-width="200">
-        <template slot-scope="scope">
-          <el-tooltip v-if="scope.row.healthReason" :content="scope.row.healthReason" placement="top">
-            <span class="reason">{{ scope.row.healthReason }}</span>
-          </el-tooltip>
-          <span v-else style="color: #909399">—</span>
         </template>
       </el-table-column>
       <el-table-column label="别名（门牌）" align="center" min-width="180">
@@ -87,38 +101,6 @@
             >/{{ a }}</a>
           </template>
           <span v-else style="color: #909399">未配置</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="池" align="center" width="110">
-        <template slot-scope="scope">
-          <span v-if="scope.row.pool">{{ scope.row.pool }}</span>
-          <span v-else style="color: #909399">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="客户端版本" align="center" min-width="210">
-        <template slot-scope="scope">
-          <div class="ver-line">
-            <span>实际：</span>
-            <span v-if="scope.row.version">{{ scope.row.version }}</span>
-            <span v-else style="color: #909399">未上报</span>
-          </div>
-          <div class="ver-line">
-            <span>期望：</span>
-            <span v-if="scope.row.expectedVersion">{{ scope.row.expectedVersion }}</span>
-            <span v-else style="color: #909399">未配置</span>
-            <el-tag
-              v-if="scope.row.expectedVersion"
-              size="mini"
-              :type="scope.row.versionMatch ? 'success' : 'warning'"
-              style="margin-left: 4px"
-            >{{ scope.row.versionMatch ? '一致' : '不一致' }}</el-tag>
-          </div>
-          <div v-if="scope.row.updateState" class="runtime-hint">
-            <span v-if="scope.row.updateState === 'updating'" style="color: #e6a23c">正在更新…</span>
-            <el-tooltip v-else :content="scope.row.updateError || '更新失败'" placement="top">
-              <span style="color: #f56c6c">更新失败</span>
-            </el-tooltip>
-          </div>
         </template>
       </el-table-column>
       <el-table-column label="最近成功" align="center" width="150">
@@ -152,16 +134,10 @@
           <el-tag v-else size="mini" type="info">本地页面</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="路径" align="center" prop="path" min-width="240" show-overflow-tooltip />
       <el-table-column label="MC 版本" align="center" min-width="120">
         <template slot-scope="scope">
           <span v-if="scope.row.mcVersion">{{ scope.row.mcVersion }}</span>
           <span v-else style="color: #909399">未填写</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="来源" align="center" width="80">
-        <template slot-scope="scope">
-          <el-tag size="mini" :type="sourceTagType(scope.row.source)">{{ sourceLabel(scope.row.source) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="启用" align="center" width="110">
@@ -174,7 +150,21 @@
           <el-tag v-if="scope.row.missing" size="mini" type="danger" style="margin-left: 6px">缺失</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" width="400">
+      <el-table-column label="期望客户端包" align="center" min-width="200">
+        <template slot-scope="scope">
+          <div v-if="scope.row.packageName">{{ scope.row.packageName }}</div>
+          <div v-else style="color: #909399">未指定</div>
+          <div v-if="scope.row.expectedVersion" class="runtime-hint">
+            版本 {{ scope.row.expectedVersion }}
+            <el-tag v-if="scope.row.versionMatch === false" size="mini" type="danger" style="margin-left: 4px">不一致</el-tag>
+          </div>
+          <el-tag v-if="scope.row.updateState === 'updating'" size="mini" type="warning" style="margin-top: 2px">更新中</el-tag>
+          <el-tooltip v-if="scope.row.updateError" :content="scope.row.updateError" placement="top">
+            <el-tag size="mini" type="danger" style="margin-top: 2px">更新失败</el-tag>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" align="center" width="300">
         <template slot-scope="scope">
           <el-button
             type="text"
@@ -183,27 +173,36 @@
             :disabled="!scope.row.address"
             @click="handleRefresh(scope.row)"
           >刷新</el-button>
-          <el-button
-            type="text"
-            size="mini"
-            :loading="pushingId === scope.row.id"
-            :disabled="scope.row.source !== 'url' || !scope.row.address || scope.row.busy"
-            @click="handlePushUpdate(scope.row)"
-          >下发更新</el-button>
           <el-button type="text" size="mini" @click="openEdit(scope.row)">编辑</el-button>
-          <el-button
-            type="text"
-            size="mini"
-            :disabled="scope.row.defaultVersion || !scope.row.enabled || scope.row.missing"
-            @click="handleSetDefault(scope.row)"
-          >设为默认</el-button>
-          <el-button type="text" size="mini" @click="handleUpdateKey(scope.row)">密钥</el-button>
-          <el-button type="text" size="mini" @click="openPage(scope.row)">打开页面</el-button>
-          <el-button type="text" size="mini" @click="copyText(liveUrl(scope.row))">复制入口</el-button>
+          <el-dropdown trigger="click" size="mini" style="margin: 0 8px" @command="cmd => handleMore(cmd, scope.row)">
+            <el-button type="text" size="mini">更多操作<i class="el-icon-arrow-down el-icon--right" /></el-button>
+            <el-dropdown-menu slot="dropdown">
+              <el-dropdown-item
+                command="push"
+                :disabled="scope.row.source !== 'url' || !scope.row.address || scope.row.busy"
+              >下发更新</el-dropdown-item>
+              <el-dropdown-item
+                command="default"
+                :disabled="scope.row.defaultVersion || !scope.row.enabled || scope.row.missing"
+              >设为默认设备</el-dropdown-item>
+              <el-dropdown-item command="key">密钥</el-dropdown-item>
+              <el-dropdown-item
+                command="forceEnd"
+                :disabled="!scope.row.busy && !scope.row.endUnconfirmed"
+              >强制结束</el-dropdown-item>
+              <el-dropdown-item
+                command="restart"
+                :disabled="scope.row.busy || scope.row.endUnconfirmed || !scope.row.address"
+              >重启游戏</el-dropdown-item>
+              <el-dropdown-item command="openPage">打开页面</el-dropdown-item>
+              <el-dropdown-item command="copyEntry">复制入口</el-dropdown-item>
+            </el-dropdown-menu>
+          </el-dropdown>
           <el-button
             type="text"
             size="mini"
             style="color: #f56c6c"
+            :disabled="scope.row.busy || scope.row.endUnconfirmed"
             @click="handleDelete(scope.row)"
           >删除</el-button>
         </template>
@@ -217,19 +216,16 @@
       :close-on-click-modal="false"
     >
       <el-form ref="editForm" :model="editForm" label-width="90px" size="small">
-        <el-form-item label="id">
-          <el-input :value="editEditing ? editForm.id : '保存后自动生成'" disabled />
-        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editForm.name" maxlength="64" placeholder="展示名称" />
         </el-form-item>
         <el-form-item label="URL" required>
           <el-input
             v-model="editForm.path"
-            placeholder="https://example.com/index.html"
+            placeholder="https://192.168.59.128:8080/（基础地址，可带结尾 /）"
           />
           <div class="form-hint">
-            URL 客户端由 MC 端口同端口转播，玩家访问 {{ entryUrl }}&lt;id&gt;/ 即可，无需为设备单独开端口。
+            URL 客户端填云机基础地址即可，结尾是否带 / 都可以；本地页面才必须写到具体入口文件（如 index.html）。
           </div>
         </el-form-item>
         <el-form-item label="MC 版本">
@@ -251,6 +247,12 @@
             同池的机器会共享入口 /cloud/pool/&lt;池名&gt;，玩家点进去自动挑一台空闲的。
           </div>
         </el-form-item>
+        <el-form-item label="管理范围">
+          <el-input v-model="editForm.adminScope" maxlength="24" placeholder="留空 = 未分配；仅用于 ERP 列表过滤" />
+          <div class="form-hint">
+            纯过滤字段，不是权限边界；ROOT 等管理员可切换任意范围查看。
+          </div>
+        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="editForm.enabled" />
         </el-form-item>
@@ -260,15 +262,78 @@
         <el-button type="primary" size="small" :loading="editSaving" @click="submitEdit">保存</el-button>
       </div>
     </el-dialog>
+
+    <el-dialog
+      title="下发客户端更新"
+      :visible.sync="pushVisible"
+      width="620px"
+      :close-on-click-modal="false"
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="下发会覆盖目标机器当前客户端目录；机器后台下载、解包期间不能起新会话。请确认版本和解包目录。"
+        style="margin-bottom: 12px"
+      />
+      <el-form label-width="100px" size="small">
+        <el-form-item label="目标设备">
+          <span>{{ pushTarget.name }}（{{ pushTarget.id }}）</span>
+        </el-form-item>
+        <el-form-item label="客户端包" required>
+          <el-select
+            v-model="pushPackageId"
+            filterable
+            placeholder="选择一个启用的云游戏客户端包"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="pkg in cloudPackages"
+              :key="pkg.id"
+              :label="pushPackageLabel(pkg)"
+              :value="pkg.id"
+              :disabled="!pkg.enabled"
+            />
+          </el-select>
+          <div v-if="cloudPackages.length === 0" class="form-hint">
+            没有可用的云游戏包，请先到「客户端管理」上传。
+            <router-link to="/webgameerp/client-center/packages">去客户端管理</router-link>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="pushPackage" label="确认信息">
+          <div class="push-detail">
+            <div>版本：{{ pushPackage.version || '未填写' }}</div>
+            <div>解包目录：{{ pushPackage.targetDir || pushPackage.displayPath || '—' }}</div>
+            <div>文件大小：{{ formatSize(pushPackage.size) }}</div>
+            <div>SHA-256：{{ pushPackage.sha256 || '—' }}</div>
+          </div>
+          <el-alert
+            v-if="pushTarget.packageId && pushTarget.packageId !== pushPackageId"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="该设备当前期望包与本次选择不同，下发成功后会把设备期望包改写为本次选择的包。"
+            style="margin-top: 8px"
+          />
+        </el-form-item>
+      </el-form>
+      <span slot="footer">
+        <el-button size="small" :disabled="pushingId !== ''" @click="pushVisible = false">取消</el-button>
+        <el-button type="primary" size="small" :loading="pushingId !== ''" @click="confirmPush">确认下发</el-button>
+      </span>
+    </el-dialog>
   </div>
 </template>
 
 <script>
 import {
   listCloudClients,
+  listCloudClientScopes,
   setCloudClientEnabled,
   setDefaultCloudClient,
   deleteCloudClient,
+  forceEndCloudClientSession,
+  restartCloudClientGame,
   reorderCloudClients,
   setCloudClientAllowSelect,
   createCloudClient,
@@ -276,7 +341,8 @@ import {
   refreshCloudClient,
   refreshAllCloudClients,
   updateCloudClientKey,
-  pushCloudClientUpdate
+  pushCloudClientUpdate,
+  listClientPackages
 } from '@/api/erp'
 import Sortable from 'sortablejs'
 
@@ -287,7 +353,8 @@ const emptyEditForm = () => ({
   mcVersion: '',
   enabled: true,
   aliasesText: '',
-  pool: ''
+  pool: '',
+  adminScope: ''
 })
 
 export default {
@@ -302,19 +369,43 @@ export default {
       refreshingAll: false,
       refreshingId: '',
       pushingId: '',
+      scope: 'all',
+      scopes: [],
       sortable: null,
       editVisible: false,
       editEditing: false,
       editSaving: false,
-      editForm: emptyEditForm()
+      editForm: emptyEditForm(),
+      cloudPackages: [],
+      pushVisible: false,
+      pushTarget: {},
+      pushPackageId: ''
     }
   },
   computed: {
     entryUrl() {
       return window.location.origin + '/web/plugins/WebGame/cloud/'
+    },
+    scopeOptions() {
+      const list = this.scopes.slice()
+      const cur = this.scope
+      if (cur && cur !== 'all' && !list.some(s => s.value === cur)) {
+        list.unshift({
+          value: cur,
+          label: cur === '__unassigned__' ? '未分配' : cur,
+          count: 0
+        })
+      }
+      return list
+    },
+    pushPackage() {
+      return this.cloudPackages.find(p => p.id === this.pushPackageId) || null
     }
   },  created() {
+    const q = this.$route && this.$route.query ? this.$route.query.scope : ''
+    this.scope = typeof q === 'string' && q ? q : 'all'
     this.getList()
+    this.loadPackages()
   },
   beforeDestroy() {
     this.destroySortable()
@@ -322,7 +413,8 @@ export default {
   methods: {
     getList() {
       this.loading = true
-      listCloudClients().then(res => {
+      this.loadScopes()
+      listCloudClients(this.scope).then(res => {
         const data = res.data || {}
         this.destroySortable()
         this.rows = data.rows || []
@@ -332,6 +424,38 @@ export default {
       }).finally(() => {
         this.loading = false
       })
+    },
+    loadScopes() {
+      listCloudClientScopes().then(res => {
+        this.scopes = (res.data && res.data.scopes) || []
+      }).catch(() => {})
+    },
+    loadPackages() {
+      listClientPackages('cloud').then(res => {
+        const data = res.data || {}
+        this.cloudPackages = data.rows || data.packages || []
+      }).catch(() => {})
+    },
+    formatSize(n) {
+      if (!n) return '0 B'
+      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+      if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
+      if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
+      return n + ' B'
+    },
+    pushPackageLabel(pkg) {
+      const version = pkg.version ? ` · ${pkg.version}` : ''
+      return `${pkg.name}${version}${pkg.enabled ? '' : '（已停用）'}`
+    },
+    onScopeChange(val) {
+      const query = Object.assign({}, this.$route.query)
+      if (val && val !== 'all') {
+        query.scope = val
+      } else {
+        delete query.scope
+      }
+      this.$router.replace({ path: this.$route.path, query })
+      this.getList()
     },
     initSortable() {
       this.destroySortable()
@@ -406,29 +530,34 @@ export default {
         mcVersion: row.mcVersion,
         enabled: row.enabled,
         aliasesText: (row.aliases || []).join(', '),
-        pool: row.pool || ''
+        pool: row.pool || '',
+        adminScope: row.adminScope || ''
       }
       this.editVisible = true
     },
     async submitEdit() {
-      if (!this.editForm.path) {
+      const path = (this.editForm.path || '').trim()
+      if (!path) {
         this.$message.error('请填写客户端路径')
         return
       }
-      if (this.editForm.path.endsWith('/') || this.editForm.path.endsWith('\\')) {
-        this.$message.error('请填写具体的入口文件路径，例如 index.html')
+      // URL 是云机基础地址，结尾带 / 是合法写法；只有本地页面路径才要求写到具体文件。
+      const isUrl = /^https?:\/\//i.test(path)
+      if (!isUrl && (path.endsWith('/') || path.endsWith('\\'))) {
+        this.$message.error('本地页面请填写具体的入口文件路径，例如 index.html')
         return
       }
       const payload = {
         name: this.editForm.name,
-        path: this.editForm.path,
+        path,
         mcVersion: this.editForm.mcVersion,
         enabled: this.editForm.enabled,
         aliases: (this.editForm.aliasesText || '')
           .split(/[,，\s]+/)
           .map(s => s.trim())
           .filter(s => s.length > 0),
-        pool: (this.editForm.pool || '').trim()
+        pool: (this.editForm.pool || '').trim(),
+        adminScope: (this.editForm.adminScope || '').trim()
       }
       this.editSaving = true
       try {
@@ -470,21 +599,44 @@ export default {
     rootEntry(alias) {
       return window.location.origin + '/cloud/' + alias
     },
-    handlePushUpdate(row) {
-      this.$confirm(
-        `把 config.yml 里的期望版本推送给 ${row.id}（${row.name}）？` +
-          '机器会后台下载并解包，期间该机器不可起新会话。',
-        '下发客户端更新',
-        { type: 'warning', confirmButtonText: '下发', cancelButtonText: '取消' }
-      ).then(() => {
-        this.pushingId = String(row.id)
-        pushCloudClientUpdate(row.id).then(res => {
-          this.$modal.msgSuccess(res.msg || '已开始下发')
-          setTimeout(this.getList, 3000)
-        }).catch(() => {}).finally(() => {
-          this.pushingId = ''
-        })
-      }).catch(() => {})
+    handleMore(command, row) {
+      switch (command) {
+        case 'push': this.openPush(row); break
+        case 'default': this.handleSetDefault(row); break
+        case 'key': this.handleUpdateKey(row); break
+        case 'forceEnd': this.handleForceEnd(row); break
+        case 'restart': this.handleRestart(row); break
+        case 'openPage': this.openPage(row); break
+        case 'copyEntry': this.copyText(liveUrl(row)); break
+        default: break
+      }
+    },
+    openPush(row) {
+      this.pushTarget = row
+      const enabled = this.cloudPackages.filter(p => p.enabled)
+      const preferred = enabled.find(p => p.id === row.packageId)
+      const preselect = enabled.find(p => p.preselect)
+      this.pushPackageId = (preferred || preselect || enabled[0] || {}).id || ''
+      this.pushVisible = true
+      if (this.cloudPackages.length === 0) this.loadPackages()
+    },
+    confirmPush() {
+      if (!this.pushPackageId) {
+        this.$message.warning('请选择要下发的客户端包')
+        return
+      }
+      if (!this.pushPackage) {
+        this.$message.warning('选择的客户端包不存在或已停用')
+        return
+      }
+      this.pushingId = String(this.pushTarget.id)
+      pushCloudClientUpdate(this.pushTarget.id, this.pushPackageId).then(res => {
+        this.$modal.msgSuccess(res.msg || '已开始下发')
+        this.pushVisible = false
+        setTimeout(this.getList, 3000)
+      }).catch(() => {}).finally(() => {
+        this.pushingId = ''
+      })
     },
     handleRefresh(row) {
       if (!row.address) {
@@ -502,7 +654,7 @@ export default {
     },
     handleRefreshAll() {
       this.refreshingAll = true
-      refreshAllCloudClients().then(res => {
+      refreshAllCloudClients(this.scope).then(res => {
         this.$modal.msgSuccess(res.msg || '全部刷新完成')
         this.getList()
       }).catch(() => {
@@ -542,16 +694,65 @@ export default {
         this.getList()
       })
     },
-    handleDelete(row) {
-      this.$confirm(
-        `确认删除云游戏客户端 ${row.id}（${row.name}）？`,
-        '删除确认',
-        { type: 'warning' }
-      ).then(() => {
-        deleteCloudClient(row.id).then(res => {
-          this.$modal.msgSuccess(res.msg || '已删除')
+    handleForceEnd(row) {
+      this.$prompt(
+        `强制结束 ${row.id}（${row.name}）当前的全部会话，并让云机停止游戏。原因可留空：`,
+        '强制结束会话',
+        {
+          confirmButtonText: '强制结束',
+          cancelButtonText: '取消',
+          inputPlaceholder: '可留空',
+          inputType: 'textarea'
+        }
+      ).then(({ value }) => {
+        forceEndCloudClientSession(row.id, (value || '').trim()).then(res => {
+          const data = res.data || {}
+          if (data.partial) {
+            this.$message.warning(res.msg || '远端未确认，删除/重启已被锁定')
+          } else {
+            this.$modal.msgSuccess(res.msg || '已强制结束')
+          }
           this.getList()
         })
+      }).catch(() => {})
+    },
+    handleRestart(row) {
+      this.$confirm(
+        `确认重启 ${row.id}（${row.name}）上的游戏？` +
+          '该机器必须处于空闲且没有“结束未确认”标记。',
+        '重启游戏',
+        { type: 'warning', confirmButtonText: '重启', cancelButtonText: '取消' }
+      ).then(() => {
+        restartCloudClientGame(row.id).then(res => {
+          this.$modal.msgSuccess(res.msg || '重启指令已发送')
+          setTimeout(this.getList, 3000)
+        })
+      }).catch(() => {})
+    },
+    handleDelete(row) {
+      if (row.busy || row.endUnconfirmed) {
+        this.$message.error('云机占用中或上一轮结束未确认，不能删除')
+        return
+      }
+      this.$prompt(
+        `删除 ${row.id}（${row.name}）后，该 ID 不会复用；云机重新上报会生成新 ID 并进入“未分配”。` +
+          '请输入删除原因（可留空）：',
+        '删除确认',
+        {
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          inputPlaceholder: '可留空',
+          inputType: 'textarea'
+        }
+      ).then(({ value }) => {
+        return this.$confirm(
+          '确认删除旧记录？旧 ID 的页面/别名/直播前缀会一并清理。',
+          '再次确认',
+          { type: 'warning', confirmButtonText: '删除旧记录', cancelButtonText: '取消' }
+        ).then(() => deleteCloudClient(row.id, (value || '').trim()))
+      }).then(res => {
+        this.$modal.msgSuccess(res.msg || '已删除')
+        this.getList()
       }).catch(() => {})
     },
     openPage(row) {
@@ -655,5 +856,15 @@ export default {
   color: #606266;
   line-height: 20px;
   text-align: left;
+}
+.push-detail {
+  padding: 8px 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  background: #fafafa;
+  font-size: 12px;
+  line-height: 20px;
+  color: #606266;
+  word-break: break-all;
 }
 </style>

@@ -1,0 +1,19 @@
+# WebGame 统一客户端制品表（YAML 模式）
+# 根节点 = 表名；键 = 主键 id。内置 Eagler 制品使用 eagler-1，旧云游戏包迁移为 cloud-1。
+client-packages:
+  'eagler-1':
+    id: "eagler-1"
+    package_type: "eagler"
+    name: "1.12.2 内置客户端包"
+    version: "1.12.2"
+    file: "eagler-clients/1.12.2"
+    entry_path: "index.html"
+    target_dir: ""
+    external_url: ""
+    sha256: ""
+    size: 0
+    files: 0
+    uploaded_at: ""
+    enabled: true
+    source: "builtin"
+    notes: "随插件内置的 Eagler 1.12.2 客户端"

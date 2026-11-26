@@ -12,7 +12,11 @@ public class ClientVersionVo {
 
     private String id;
     private String name;
-    /** 客户端入口路径（URL 或本地文件）。 */
+    /** 引用的客户端制品 id。 */
+    private String packageId;
+    /** 引用的客户端制品展示名。 */
+    private String packageName;
+    /** 客户端入口路径（URL 或本地文件，由制品解析）。 */
     private String path;
     /** 支持的 Minecraft 版本（版本名 + 协议号）。 */
     private List<McVersionOption> mcVersions = new ArrayList<>();
@@ -45,6 +49,22 @@ public class ClientVersionVo {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public String getPackageId() {
+        return packageId == null ? "" : packageId;
+    }
+
+    public void setPackageId(String packageId) {
+        this.packageId = packageId == null ? "" : packageId;
+    }
+
+    public String getPackageName() {
+        return packageName == null ? "" : packageName;
+    }
+
+    public void setPackageName(String packageName) {
+        this.packageName = packageName == null ? "" : packageName;
     }
 
     public String getPath() {

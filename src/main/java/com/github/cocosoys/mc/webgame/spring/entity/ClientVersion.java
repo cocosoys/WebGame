@@ -1,5 +1,10 @@
 package com.github.cocosoys.mc.webgame.spring.entity;
 
+import com.dlz.db.annotation.IdType;
+import com.dlz.db.annotation.TableField;
+import com.dlz.db.annotation.TableId;
+import com.dlz.db.annotation.TableName;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -10,16 +15,19 @@ import java.util.List;
  * 元数据集中在 {@code plugins/WebGame/eagler-clients.yml}（不放进版本目录，
  * 避免被页面托管直接暴露）。</p>
  */
+@TableName("eagler-clients")
 public class ClientVersion {
 
     /** 内置版本 id（与 jar 内 eagler-clients/1.12.2/index.html 对应）。 */
     public static final String BUILTIN_ID = "1.12.2";
+    public static final String BUILTIN_PACKAGE_ID = "eagler-1";
     public static final String SOURCE_BUILTIN = "builtin";
     public static final String SOURCE_UPLOADED = "uploaded";
     public static final String SOURCE_URL = "url";
     public static final String SOURCE_LOCAL = "local";
 
     /** 版本标识，同时是页面子路径 /eagler/<id>/ 与 WS 子路径 /eagler/<id>。 */
+    @TableId(value = "id", type = IdType.INPUT)
     private String id = "";
     /** 展示名称。 */
     private String name = "";
@@ -28,8 +36,15 @@ public class ClientVersion {
      * （相对插件数据目录 / 服务器根目录，或绝对路径）。
      */
     private String path = "";
-    /** 支持的 Minecraft 版本（版本名 + 协议号，仅展示/记录，不参与协议协商）。 */
+    /** 引用的客户端制品 id（client-packages），路径由服务端解析，前端不再手填。 */
+    @TableField("package_id")
+    private String packageId = "";
+    /** 支持的 Minecraft 版本（运行时视图；持久化用 mcVersionData）。 */
+    @TableField(exist = false)
     private List<McVersionOption> mcVersions = new ArrayList<>();
+    /** 持久化列 mc_versions：version|protocol 逗号分隔，避免 ORM 对 List 类型在 SQL 端的反序列化限制。 */
+    @TableField("mc_versions")
+    private String mcVersionData = "";
     /** Eaglercraft 协议版本（3/4，0 表示自适应）。 */
     private int eaglerProtocol;
 
@@ -39,6 +54,14 @@ public class ClientVersion {
 
     public void setMcVersions(List<McVersionOption> mcVersions) {
         this.mcVersions = mcVersions == null ? new ArrayList<>() : mcVersions;
+    }
+
+    public String getMcVersionData() {
+        return mcVersionData == null ? "" : mcVersionData;
+    }
+
+    public void setMcVersionData(String mcVersionData) {
+        this.mcVersionData = mcVersionData == null ? "" : mcVersionData;
     }
 
     /** 选择页展示用的版本名拼接（如 "1.8.9 / 1.12.2"）。 */
@@ -65,6 +88,7 @@ public class ClientVersion {
     /** 上传/登记时间（epoch millis）。 */
     private long uploadedAt;
     /** 运行时：目录或 index.html 缺失。 */
+    @TableField(exist = false)
     private boolean missing;
 
     public String getId() {
@@ -89,6 +113,14 @@ public class ClientVersion {
 
     public void setPath(String path) {
         this.path = path == null ? "" : path;
+    }
+
+    public String getPackageId() {
+        return packageId == null ? "" : packageId;
+    }
+
+    public void setPackageId(String packageId) {
+        this.packageId = packageId == null ? "" : packageId.trim();
     }
 
     /** 是否为远程 URL（http/https）。 */

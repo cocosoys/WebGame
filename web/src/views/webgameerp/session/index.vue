@@ -17,16 +17,10 @@
     </el-row>
 
     <el-table v-loading="loading" :data="filteredSessions" size="small">
-      <el-table-column label="用户名" align="center" width="140">
+      <el-table-column label="用户名" align="center" min-width="140">
         <template slot-scope="scope">
           <span v-if="scope.row.username">{{ scope.row.username }}</span>
           <span v-else style="color: #909399">（握手未完成）</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="UUID" align="center" prop="uuid" width="330" show-overflow-tooltip>
-        <template slot-scope="scope">
-          <span v-if="scope.row.uuid">{{ scope.row.uuid }}</span>
-          <span v-else style="color: #909399">—</span>
         </template>
       </el-table-column>
       <el-table-column label="IP" align="center" prop="ip" width="140" />
@@ -38,12 +32,6 @@
             :type="scope.row.clientType === 'cloud' ? 'success' : 'warning'"
             :title="scope.row.clientId"
           >{{ scope.row.clientName || scope.row.clientId }}</el-tag>
-          <span v-else style="color: #909399">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="协议" align="center" width="80">
-        <template slot-scope="scope">
-          <el-tag v-if="scope.row.protocolVersion" size="mini">V{{ scope.row.protocolVersion }}</el-tag>
           <span v-else style="color: #909399">—</span>
         </template>
       </el-table-column>
@@ -71,7 +59,6 @@
       <el-table-column label="在线时长" align="center" width="120">
         <template slot-scope="scope">{{ formatDuration(scope.row.durationSeconds) }}</template>
       </el-table-column>
-      <el-table-column label="会话 ID" align="center" prop="sessionId" show-overflow-tooltip />
       <el-table-column label="操作" align="center" width="110" fixed="right">
         <template slot-scope="scope">
           <el-button type="text" size="mini" style="color: #f56c6c" @click="handleKick(scope.row)">

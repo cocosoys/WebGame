@@ -37,10 +37,10 @@ public final class CloudClientProbe {
     /**
      * 显式放行的信任策略（仅当 {@code cloud.probe.trust-all=true} 时使用）。
      *
-     * <p>默认<b>不</b>放行：插件走 JVM 的信任库（服务端已用 {@code -Djavax.net.ssl.trustStore}
-     * 指向 trust-cloud.jks），证书链与主机名照常校验。全部放行意味着任何能劫持内网流量的人
-     * 都可以伪造一台"健康"的云机（探针只读版本号，不校验身份），所以它必须是显式开关，
-     * 而不是默认行为。</p>
+     * <p>默认<b>不</b>放行：优先使用 {@code cloud.probe.trust-store} 指定的独立信任库
+     * （未配置时退回 JVM 默认信任库），证书链与主机名照常校验。全部放行意味着任何能劫持
+     * 内网流量的人都可以伪造一台"健康"的云机（探针只读版本号，不校验身份），所以它必须
+     * 是显式开关，而不是默认行为。</p>
      */
     private static final SSLSocketFactory TRUST_ALL = buildTrustAll();
 
@@ -111,7 +111,35 @@ public final class CloudClientProbe {
      * @param tls       true = 走 HTTPS
      * @param trustAll  true = 跳过证书链与主机名校验（仅 {@code cloud.probe.trust-all=true}）
      */
+    /**
+     * 一次探测：不启用独立 truststore（沿用旧行为，由 JVM 默认信任库校验）。
+     */
     public static Result probe(String host, int port, String key, int timeoutMs, boolean tls, boolean trustAll) {
+        return probe(host, port, key, timeoutMs, tls, trustAll, "", "", "");
+    }
+
+    /**
+     * 一次探测。
+     *
+     * @param trustStorePath     独立 truststore 绝对路径；空=沿用 JVM 默认信任库
+     * @param trustStorePassword truststore 口令
+     * @param trustStoreType     JKS / PKCS12
+     */
+    public static Result probe(String host, int port, String key, int timeoutMs, boolean tls, boolean trustAll,
+                               String trustStorePath, String trustStorePassword, String trustStoreType) {
+        return probe(host, port, key, timeoutMs, tls, trustAll,
+                trustStorePath, trustStorePassword, trustStoreType, "", "");
+    }
+
+    /**
+     * 一次探测，带按设备证书 pin。
+     *
+     * @param pinnedCertPem 该设备上报时登记的证书 PEM；空=没有 pin，走旧信任库
+     * @param pinnedSha256  该设备上报时登记的 DER SHA-256；空=从 PEM 现算
+     */
+    public static Result probe(String host, int port, String key, int timeoutMs, boolean tls, boolean trustAll,
+                               String trustStorePath, String trustStorePassword, String trustStoreType,
+                               String pinnedCertPem, String pinnedSha256) {
         long start = System.nanoTime();
         HttpURLConnection conn = null;
         try {
@@ -119,7 +147,20 @@ public final class CloudClientProbe {
             conn = (HttpURLConnection) url.openConnection();
             if (tls && conn instanceof HttpsURLConnection) {
                 HttpsURLConnection https = (HttpsURLConnection) conn;
-                if (trustAll) {
+                boolean pinned = false;
+                if (pinnedCertPem != null && !pinnedCertPem.trim().isEmpty()) {
+                    SSLSocketFactory factory = CloudPinnedCert.factory(pinnedCertPem, pinnedSha256);
+                    if (factory != null) {
+                        String pin = CloudPinnedCert.normalizePin(pinnedSha256);
+                        if (pin.isEmpty()) {
+                            pin = CloudPinnedCert.sha256(pinnedCertPem);
+                        }
+                        https.setSSLSocketFactory(factory);
+                        https.setHostnameVerifier(CloudPinnedCert.hostnameVerifier(pin));
+                        pinned = true;
+                    }
+                }
+                if (!pinned && trustAll) {
                     if (TRUST_ALL != null) {
                         https.setSSLSocketFactory(TRUST_ALL);
                     }
@@ -130,8 +171,15 @@ public final class CloudClientProbe {
                             return true;
                         }
                     });
+                } else if (!pinned) {
+                    SSLSocketFactory factory = CloudTrustStore.factory(
+                            trustStorePath, trustStorePassword, trustStoreType);
+                    if (factory != null) {
+                        https.setSSLSocketFactory(factory);
+                        // 不覆盖 HostnameVerifier：证书 SAN 仍必须匹配 ip/域名。
+                    }
                 }
-                // trustAll=false：不覆盖任何 SSL 设置 —— 交给 JVM 信任库与默认主机名校验
+                // trust-all=false 且未配置独立 truststore：不覆盖任何 SSL 设置 —— 交给 JVM 信任库。
             }
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(timeoutMs);
@@ -172,8 +220,10 @@ public final class CloudClientProbe {
             if (t.getMessage() != null && !t.getMessage().isEmpty()) {
                 msg = msg + ": " + t.getMessage();
             }
-            // 证书问题与"网络不通"必须能分辨：前者要导证书/改信任库，后者查网线/防火墙
-            if (t instanceof javax.net.ssl.SSLHandshakeException
+            // 证书问题与"网络不通"必须能分辨：前者要检查 pin/信任库，后者查网线/防火墙
+            if (msg.toLowerCase(java.util.Locale.ROOT).contains("pinned certificate")) {
+                msg = "TLS 证书 pin 不匹配：" + msg;
+            } else if (t instanceof javax.net.ssl.SSLHandshakeException
                     || t instanceof java.security.cert.CertificateException
                     || msg.contains("PKIX")
                     || msg.toLowerCase(java.util.Locale.ROOT).contains("certificate")) {

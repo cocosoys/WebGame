@@ -4,10 +4,16 @@ import com.github.cocosoys.mc.soyshttpovermc.util.AjaxResult;
 import com.github.cocosoys.mc.webgame.WebGame;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
+import com.github.cocosoys.mc.webgame.spring.entity.ClientPackage;
 import com.github.cocosoys.mc.webgame.spring.service.CloudClientService;
+import com.github.cocosoys.mc.webgame.spring.service.ClientPackageService;
+import com.github.cocosoys.mc.webgame.spring.support.CloudTrustStore;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -45,6 +51,7 @@ public final class CloudPlayService {
     private static final Pattern PLAYER_RE = Pattern.compile("^[A-Za-z0-9_]{3,16}$");
     private static final Pattern STATE_RE = Pattern.compile("\"state\"\\s*:\\s*\"([^\"]*)\"");
     private static final Pattern OK_RE = Pattern.compile("\"ok\"\\s*:\\s*(true|false)");
+    private static final Pattern ENDED_RE = Pattern.compile("\"ended\"\\s*:\\s*(true|false)");
     private static final Pattern ERROR_RE = Pattern.compile("\"error\"\\s*:\\s*\"([^\"]*)\"");
     private static final Pattern SESSION_RE = Pattern.compile("\"session\"\\s*:\\s*\"([^\"]*)\"");
     private static final Pattern PLAYER_RE_JSON = Pattern.compile("\"player\"\\s*:\\s*\"([^\"]*)\"");
@@ -54,6 +61,7 @@ public final class CloudPlayService {
 
     private final WebGame plugin;
     private final CloudClientService clients;
+    private final ClientPackageService packages;
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();
     /** clientId → sessionId（槽位占用表，一台机器一个槽）。 */
     private final Map<String, String> slots = new ConcurrentHashMap<>();
@@ -63,6 +71,11 @@ public final class CloudPlayService {
     private final Map<String, String> updateErrors = new ConcurrentHashMap<>();
     /** clientId → 最近一次被池挑中/起会话的时刻（"最久未用"策略用）。 */
     private final Map<String, Long> lastUsed = new ConcurrentHashMap<>();
+    /** clientId → 远端 /session/end 未确认的原因；存在时禁止删除/重启，直到再次确认成功。 */
+    private final Map<String, String> unconfirmedEnds = new ConcurrentHashMap<>();
+    /** clientId 级互斥：强制结束与重启不能并发落到同一台云机。 */
+    private final java.util.Set<String> adminOps = java.util.Collections.newSetFromMap(
+            new ConcurrentHashMap<String, Boolean>());
     /** 玩家名 → 最近一次上报的 MC|Brand（只用于日志审计，不参与判定）。 */
     private final Map<String, String> brands = new ConcurrentHashMap<>();
     /**
@@ -82,9 +95,10 @@ public final class CloudPlayService {
     /** 一次包更新最多等多久（毫秒）；超时就允许下一次点击重新发起。 */
     private static final long UPDATE_MAX_MS = 15 * 60 * 1000L;
 
-    public CloudPlayService(WebGame plugin, CloudClientService clients) {
+    public CloudPlayService(WebGame plugin, CloudClientService clients, ClientPackageService packages) {
         this.plugin = plugin;
         this.clients = clients;
+        this.packages = packages;
     }
 
     // ===== 对外 =====
@@ -243,22 +257,27 @@ public final class CloudPlayService {
         lastUsed.put(c.getId(), s.createdAt);
 
         try {
-            // 客户端版本是唯一的更新触发器：代理只在"我这儿版本不对"时才去下载解包，
-            // 从不主动更新（包由 WebGame 托管，地址与 sha256 一并下发，代理据此校验）
+            // 客户端版本是唯一的更新触发器：代理只在"我这儿版本/sha 不对"时才去下载解包，
+            // 从不主动更新（包由 WebGame 托管，地址、sha256、解包目录一并下发）
             String wantVersion = "";
             String pkgUrl = "";
             String pkgSha = "";
-            if (plugin.getCloudClientPages() != null) {
-                wantVersion = plugin.getCloudClientPages().clientPackageVersion();
-                if (clientUpdateEnabled() && !wantVersion.isEmpty()) {
-                    pkgUrl = plugin.getCloudClientPages().clientPackageUrl();
-                    pkgSha = plugin.getCloudClientPages().clientPackageSha();
+            String pkgTarget = "";
+            ClientPackage pkg = desiredPackage(c);
+            if (pkg != null && pkg.isEnabled()) {
+                String url = packages.urlOf(pkg);
+                if (!url.isEmpty()) {
+                    wantVersion = pkg.getVersion();
+                    pkgUrl = url;
+                    pkgSha = pkg.getSha256();
+                    pkgTarget = pkg.getTargetDir();
                 }
             }
             String body = "{\"sessionId\":\"" + sessionId + "\",\"player\":\"" + name + "\""
                     + ",\"clientVersion\":\"" + jsonEscape(wantVersion) + "\""
                     + ",\"clientUrl\":\"" + jsonEscape(pkgUrl) + "\""
-                    + ",\"clientSha256\":\"" + jsonEscape(pkgSha) + "\"}";
+                    + ",\"clientSha256\":\"" + jsonEscape(pkgSha) + "\""
+                    + ",\"clientTargetDir\":\"" + jsonEscape(pkgTarget) + "\"}";
             String resp = http(s.agentBase + "/session/prepare", "POST", body, key, 120_000);
             if (!ok(resp)) {
                 slots.remove(c.getId(), sessionId);
@@ -315,13 +334,15 @@ public final class CloudPlayService {
      * 所以这里只负责"发起"，下载放在后台任务里跑。</p>
      */
     private String ensureClientVersion(CloudClient c) {
-        if (!clientUpdateEnabled()) {
+        ClientPackage pkg = desiredPackage(c);
+        if (pkg == null || !pkg.isEnabled()) {
+            return "ok"; // 设备没有期望包 = 不自动更新，只允许管理员手动下发
+        }
+        String want = pkg.getVersion();
+        if (want == null || want.trim().isEmpty()) {
             return "ok";
         }
-        String want = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageVersion();
-        if (want.isEmpty()) {
-            return "ok"; // 没配版本号 = 不校验
-        }
+        String url = packages.urlOf(pkg);
         Long started = updatingClients.get(c.getId());
         if (started != null) {
             if (System.currentTimeMillis() - started < UPDATE_MAX_MS) {
@@ -333,30 +354,38 @@ public final class CloudPlayService {
         if (err != null) {
             return "err:" + err;
         }
-        String local = verifyClientVersion(c, want);
+        String local = verifyClientState(c, want, pkg.getSha256());
         if (local == null) {
             // 代理没回话：不拦人，进到 prepare 才知道真相；真有问题那里会报
             return "ok";
         }
-        if (local.equals(want)) {
+        if (local.equals(want + "|" + pkg.getSha256())) {
             return "ok";
         }
-        String url = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageUrl();
         if (url.isEmpty()) {
-            return "err:客户端版本不符（期望 " + want + "，实际 " + (local.isEmpty() ? "未知" : local)
-                    + "），且 config.yml 没配 cloud.client-update.base-url";
+            return "err:客户端版本/sha 不符（期望 " + want + "，实际 " + local
+                    + "），且还没有设备上报过 WebGame 基址（report_base）";
         }
-        startAsyncUpdate(c, want, url);
+        startAsyncUpdate(c, want, url, pkg.getSha256(), pkg.getTargetDir());
         return "updating";
     }
 
-    /** 读代理的本地版本；请求失败返回 null（与"版本是空串"区分开）。 */
-    private String verifyClientVersion(CloudClient c, String want) {
+    /** 读代理的本地版本 + sha；请求失败返回 null（与"版本是空串"区分开）。 */
+    private String verifyClientState(CloudClient c, String want, String sha) {
         try {
-            String resp = http(agentBase(c) + "/client/verify?version=" + URLEncoder.encode(want, "UTF-8"),
-                    "GET", null, c.getCloudKey(), 8_000L);
+            String q = "/client/verify?version=" + URLEncoder.encode(want, "UTF-8");
+            if (sha != null && !sha.isEmpty()) {
+                q += "&sha256=" + URLEncoder.encode(sha, "UTF-8");
+            }
+            String resp = http(agentBase(c) + q, "GET", null, c.getCloudKey(), 8_000L);
             Matcher m = Pattern.compile("\"version\"\\s*:\\s*\"([^\"]*)\"").matcher(resp);
-            return m.find() ? m.group(1) : null;
+            String localVersion = m.find() ? m.group(1) : null;
+            if (localVersion == null) {
+                return null;
+            }
+            Matcher sm = Pattern.compile("\"sha256\"\\s*:\\s*\"([^\"]*)\"").matcher(resp);
+            String localSha = sm.find() ? sm.group(1) : "";
+            return localVersion + "|" + localSha;
         } catch (Throwable t) {
             LOG.log(Level.FINE, "版本校验失败 " + c.getId() + ": " + t.getMessage());
             return null;
@@ -364,14 +393,14 @@ public final class CloudPlayService {
     }
 
     /** 后台更新：下载 → 校验 → 解包 → 换目录，全程不碰玩家的请求线程。 */
-    private void startAsyncUpdate(CloudClient c, String want, String url) {
+    private void startAsyncUpdate(CloudClient c, String want, String url, String sha, String targetDir) {
         final String clientId = c.getId();
         updatingClients.put(clientId, System.currentTimeMillis());
-        String sha = plugin.getCloudClientPages() == null ? "" : plugin.getCloudClientPages().clientPackageSha();
         final String token = c.getCloudKey();
         final String base = agentBase(c);
         final String body = "{\"url\":\"" + jsonEscape(url) + "\",\"sha256\":\"" + jsonEscape(sha)
-                + "\",\"version\":\"" + jsonEscape(want) + "\"}";
+                + "\",\"version\":\"" + jsonEscape(want)
+                + "\",\"targetDir\":\"" + jsonEscape(targetDir) + "\"}";
         LOG.info("客户端 " + clientId + " 版本不符，开始后台更新到 " + want + "：" + url);
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
@@ -410,6 +439,10 @@ public final class CloudPlayService {
      * 已经在更新、以及没配包地址。</p>
      */
     public AjaxResult pushUpdate(String clientId) {
+        return AjaxResult.error("请选择要下发的客户端包");
+    }
+
+    public AjaxResult pushUpdate(String clientId, String packageId) {
         CloudClient c = findClient(clientId);
         if (c == null) {
             return AjaxResult.error("云游戏客户端不存在: " + clientId);
@@ -428,21 +461,26 @@ public final class CloudPlayService {
             data.put("updating", true);
             return AjaxResult.success("该机器正在更新中，请稍候", data);
         }
-        String want = plugin.getCloudClientPages() == null
-                ? "" : plugin.getCloudClientPages().clientPackageVersion();
-        String url = plugin.getCloudClientPages() == null
-                ? "" : plugin.getCloudClientPages().clientPackageUrl();
+        ClientPackage pkg = packageId == null || packageId.trim().isEmpty()
+                ? null : (packages == null ? null : packages.find(packageId.trim()));
+        if (pkg == null || !pkg.isCloud() || !pkg.isEnabled()) {
+            return AjaxResult.error("请选择可用的云游戏客户端包（客户端管理 → 客户端库）");
+        }
+        String want = pkg.getVersion();
+        String url = packages.urlOf(pkg);
         if (want.isEmpty()) {
-            return AjaxResult.error("config.yml 未配置 cloud.client-update.version");
+            return AjaxResult.error("客户端包没有版本号，无法比对");
         }
         if (url.isEmpty()) {
-            return AjaxResult.error("config.yml 未配置 cloud.client-update.base-url（代理拿不到包地址）");
+            return AjaxResult.error("还没有设备上报过 WebGame 基址（report_base），代理拿不到包地址");
         }
         // 手动下发是"我就是要现在更新"：先清掉上次的失败记录，否则 ensureClientVersion 会一直拦着
         updateErrors.remove(clientId);
-        startAsyncUpdate(c, want, url);
+        startAsyncUpdate(c, want, url, pkg.getSha256(), pkg.getTargetDir());
+        clients.setPackageReference(clientId, pkg.getId());
         data.put("updating", true);
         data.put("version", want);
+        data.put("packageId", pkg.getId());
         data.put("url", url);
         return AjaxResult.success("已开始向 " + c.getName() + " 下发版本 " + want, data);
     }
@@ -567,6 +605,228 @@ public final class CloudPlayService {
     /** 某客户端是否正被占用（ERP/选择页展示用）。 */
     public boolean isBusy(String clientId) {
         return slots.containsKey(clientId);
+    }
+
+    /** 是否存在未结束的会话（比槽位表更保守，供删除/重启这类破坏性操作判断）。 */
+    public boolean hasActiveSessions(String clientId) {
+        if (clientId == null) {
+            return false;
+        }
+        for (Session s : sessions.values()) {
+            if (clientId.equals(s.clientId) && !Session.STATE_ENDED.equals(s.state)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 该云机是否有"上一轮结束没被远端确认"的残留（删除/重启必须先清掉）。 */
+    public boolean hasUnconfirmedEnd(String clientId) {
+        return clientId != null && unconfirmedEnds.containsKey(clientId);
+    }
+
+    /**
+     * 管理员强制结束该云机的所有活动会话。
+     *
+     * <p>与玩家点“结束”的区别：这里等远端 /session/end 的结果，失败会在
+     * {@link #unconfirmedEnds} 留标记，后续删除/重启一律拒绝，避免出现
+     * “本地以为空了、云机游戏还在跑”的幽灵桌面。无活动会话时不调用远端，
+     * 按用户规则直接视为已关闭；但若存在旧的未确认记录，会重试一次 /session/end。</p>
+     */
+    public AjaxResult forceEnd(String clientId, String reason) {
+        String id = clientId == null ? "" : clientId.trim();
+        if (id.isEmpty()) {
+            return AjaxResult.error("缺少云机 ID");
+        }
+        CloudClient target = findClient(id);
+        if (target == null) {
+            return AjaxResult.error("客户端不存在: " + id);
+        }
+        if (!acquireAdminOp(id)) {
+            return AjaxResult.error("该云机已有管理操作在进行，请稍后重试");
+        }
+        try {
+            List<Session> active = new ArrayList<>();
+            Session last = null;
+            for (Session s : sessions.values()) {
+                if (id.equals(s.clientId)) {
+                    last = s;
+                    if (!Session.STATE_ENDED.equals(s.state)) {
+                        active.add(s);
+                    }
+                }
+            }
+            List<Map<String, Object>> result = new ArrayList<>();
+            boolean partial = false;
+            boolean retried = false;
+            if (!active.isEmpty()) {
+                for (Session s : active) {
+                    boolean ok = finishWithResult(s, "admin-forced:" + (reason == null ? "" : reason));
+                    if (!ok) {
+                        partial = true;
+                    }
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("sessionId", s.sessionId);
+                    row.put("ended", true);
+                    row.put("remoteConfirmed", ok);
+                    result.add(row);
+                }
+            } else if (last != null && hasUnconfirmedEnd(id)) {
+                retried = true;
+                boolean ok = tryRemoteEnd(last);
+                if (ok) {
+                    unconfirmedEnds.remove(id);
+                } else {
+                    partial = true;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("sessionId", last.sessionId);
+                row.put("ended", true);
+                row.put("remoteConfirmed", ok);
+                result.add(row);
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("clientId", id);
+            data.put("alreadyClosed", active.isEmpty() && !retried);
+            data.put("partial", partial);
+            data.put("sessions", result);
+            String message;
+            if (partial) {
+                message = "强制结束已下发，但远端未确认；删除/重启仍被锁定";
+            } else if (active.isEmpty() && !retried) {
+                message = "该云机当前没有活动会话（按已关闭处理）";
+            } else if (retried) {
+                message = "上一次未确认的结束已重试并确认";
+            } else {
+                message = "已强制结束 " + active.size() + " 个会话";
+            }
+            CloudAdminAudit.log(plugin, "force-end", id, clientName(id), "", partial ? "partial" : "success",
+                    reason == null ? "" : reason);
+            return AjaxResult.success(message, data);
+        } catch (Throwable t) {
+            return AjaxResult.error("强制结束失败：" + t.getMessage());
+        } finally {
+            releaseAdminOp(id);
+        }
+    }
+
+    /** 空闲时重启云机游戏；占用中或上一轮结束未确认时拒绝。 */
+    public AjaxResult restartGame(String clientId) {
+        String id = clientId == null ? "" : clientId.trim();
+        if (id.isEmpty()) {
+            return AjaxResult.error("缺少云机 ID");
+        }
+        if (!acquireAdminOp(id)) {
+            return AjaxResult.error("该云机已有管理操作在进行，请稍后重试");
+        }
+        try {
+            CloudClient c = findClient(id);
+            if (c == null) {
+                return AjaxResult.error("客户端不存在: " + id);
+            }
+            if (isBusy(id)) {
+                return AjaxResult.error("云机占用中，不能重启；请先强制结束会话");
+            }
+            if (hasActiveSessions(id)) {
+                return AjaxResult.error("云机仍有未结束会话，请先强制结束会话");
+            }
+            if (hasUnconfirmedEnd(id)) {
+                return AjaxResult.error("上一轮结束未确认，请先重试强制结束");
+            }
+            if (c.getIp().isEmpty() || c.getPort() <= 0) {
+                return AjaxResult.error("该云机未上报有效地址，无法重启");
+            }
+            CloudControlClient.Result r = CloudControlClient.restart(
+                    c, trustAllCerts(), trustStorePath(), trustStorePassword(), trustStoreType());
+            if (!r.ok) {
+                CloudAdminAudit.log(plugin, "restart", id, c.getName(), "", "failed", r.error);
+                return AjaxResult.error("重启失败：" + r.error);
+            }
+            CloudAdminAudit.log(plugin, "restart", id, c.getName(), "", "success", "");
+            return AjaxResult.success("重启指令已发送", null);
+        } catch (Throwable t) {
+            return AjaxResult.error("重启失败：" + t.getMessage());
+        } finally {
+            releaseAdminOp(id);
+        }
+    }
+
+    private boolean acquireAdminOp(String clientId) {
+        return adminOps.add(clientId);
+    }
+
+    private void releaseAdminOp(String clientId) {
+        adminOps.remove(clientId);
+    }
+
+    private String clientName(String id) {
+        CloudClient c = findClient(id);
+        return c == null ? "" : c.getName();
+    }
+
+    private boolean trustAllCerts() {
+        try {
+            return plugin.getConfig().getBoolean("cloud.probe.trust-all", false);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 与健康探针共用同一份独立 truststore；相对路径按服务端根目录解析。 */
+    private String trustStorePath() {
+        try {
+            String raw = plugin.getConfig().getString("cloud.probe.trust-store", "");
+            if (raw == null || raw.trim().isEmpty()) {
+                return "";
+            }
+            java.io.File f = new java.io.File(raw.trim());
+            if (!f.isAbsolute()) {
+                java.io.File serverRoot = plugin.getDataFolder().getParentFile().getParentFile();
+                f = new java.io.File(serverRoot, raw.trim());
+            }
+            return f.getAbsolutePath();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private String trustStorePassword() {
+        try {
+            String v = plugin.getConfig().getString("cloud.probe.trust-store-password", "");
+            return v == null ? "" : v;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private String trustStoreType() {
+        try {
+            String v = plugin.getConfig().getString("cloud.probe.trust-store-type", "JKS");
+            return v == null || v.trim().isEmpty() ? "JKS" : v.trim();
+        } catch (Throwable t) {
+            return "JKS";
+        }
+    }
+
+    /**
+     * 把独立云机信任库安装为 JVM 默认 HTTPS 工厂。
+     *
+     * <p>SOYS 的 HTTP upstream 不走本插件的探针/控制客户端，而是直接
+     * {@code new URL(...).openConnection()}；不给它默认工厂，就会在转播第一跳
+     * 报 {@code PKIX path building failed}。这里只在注册内网自签上游前安装，
+     * 公开目标不受影响。安装后仍保留默认主机名校验（证书 SAN 必须匹配）。</p>
+     */
+    public void installDefaultHttpsTrust() {
+        try {
+            SSLSocketFactory factory = CloudTrustStore.factory(
+                    trustStorePath(), trustStorePassword(), trustStoreType());
+            if (factory == null) {
+                return;
+            }
+            HttpsURLConnection.setDefaultSSLSocketFactory(factory);
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "安装 SOYS upstream 默认信任库失败: " + t.getMessage());
+        }
     }
 
     /**
@@ -1149,8 +1409,29 @@ public final class CloudPlayService {
     }
 
     private void finish(Session s, String reason) {
-        if (s == null || Session.STATE_ENDED.equals(s.state)) {
-            return;
+        finishWithResult(s, reason);
+    }
+
+    /**
+     * 结束会话并返回远端是否确认。
+     *
+     * <p>本地状态先释放（页面/槽位不能等远端），然后同步调代理 /session/end。
+     * 代理返回 ok=true 且 ended!=false 才算确认；失败记入 unconfirmedEnds，
+     * 后续删除/重启会被拒绝。</p>
+     */
+    private boolean finishWithResult(Session s, String reason) {
+        if (s == null) {
+            return true;
+        }
+        if (Session.STATE_ENDED.equals(s.state)) {
+            if (unconfirmedEnds.containsKey(s.clientId)) {
+                boolean ok = tryRemoteEnd(s);
+                if (ok) {
+                    unconfirmedEnds.remove(s.clientId);
+                }
+                return ok;
+            }
+            return true;
         }
         s.state = Session.STATE_ENDED;
         s.endReason = reason;
@@ -1163,10 +1444,28 @@ public final class CloudPlayService {
         } catch (Throwable t) {
             LOG.log(Level.FINE, "关闸失败 " + s.sessionId + ": " + t.getMessage());
         }
+        boolean ok = tryRemoteEnd(s);
+        if (!ok) {
+            unconfirmedEnds.put(s.clientId, "session/end 未确认");
+        } else {
+            unconfirmedEnds.remove(s.clientId);
+        }
+        return ok;
+    }
+
+    /** 调一次代理 /session/end，并把响应里的 ok/ended 当作确认依据。 */
+    private boolean tryRemoteEnd(Session s) {
         try {
-            http(s.agentBase + "/session/end", "POST", "{}", s.token, 60_000);
+            String resp = http(s.agentBase + "/session/end", "POST", "{}", s.token, 60_000);
+            String ok = group(OK_RE, resp);
+            String ended = group(ENDED_RE, resp);
+            if ("false".equals(ended)) {
+                return false;
+            }
+            return "true".equals(ok);
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "会话收尾失败 " + s.sessionId + ": " + t.getMessage());
+            return false;
         }
     }
 
@@ -1248,21 +1547,18 @@ public final class CloudPlayService {
         return v < 0 ? 0 : (v > 120 ? 120 : v);
     }
 
-    /** 期望的云游戏客户端版本（prepare 时发给代理做比对，空 = 不比对）。 */
-    public String clientVersion() {
-        try {
-            return plugin.getConfig().getString("cloud.client-update.version", "").trim();
-        } catch (Throwable t) {
-            return "";
+    /** 设备自己的期望包；没有或已停用/删除就返回 null（不做自动更新）。 */
+    private ClientPackage desiredPackage(CloudClient c) {
+        if (c == null || packages == null || c.getPackageId().isEmpty()) {
+            return null;
         }
+        ClientPackage p = packages.find(c.getPackageId());
+        return p != null && p.isCloud() && p.isEnabled() ? p : null;
     }
 
-    private boolean clientUpdateEnabled() {
-        try {
-            return plugin.getConfig().getBoolean("cloud.client-update.enabled", true);
-        } catch (Throwable t) {
-            return true;
-        }
+    /** 期望的云游戏客户端版本（设备维度；空 = 不比对）。 */
+    public String clientVersion() {
+        return "";
     }
 
     private static String jsonEscape(String s) {
@@ -1367,6 +1663,11 @@ public final class CloudPlayService {
         }
         Matcher m = STATE_RE.matcher(resp);
         return m.find() ? m.group(1) : null;
+    }
+
+    private static String group(Pattern p, String resp) {
+        Matcher m = p.matcher(resp == null ? "" : resp);
+        return m.find() ? m.group(1) : "";
     }
 
     /** 最小 HTTP 客户端：只给会话代理用，不引入额外依赖。 */

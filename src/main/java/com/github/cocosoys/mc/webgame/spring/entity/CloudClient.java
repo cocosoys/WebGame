@@ -1,11 +1,11 @@
 package com.github.cocosoys.mc.webgame.spring.entity;
 
-/**
- * 云游戏客户端条目（cloud-clients.yml 里的条目 + 运行时状态）。
- *
- * <p>与 eagler 客户端共用路径解析规则，但不涉及上传与 WS 协议：
- * id 由服务端自增生成，MC 版本为管理员自由填写的文本。</p>
- */
+import com.dlz.db.annotation.IdType;
+import com.dlz.db.annotation.TableField;
+import com.dlz.db.annotation.TableId;
+import com.dlz.db.annotation.TableName;
+
+@TableName("cloud-clients")
 public class CloudClient {
 
     public static final String SOURCE_URL = "url";
@@ -30,6 +30,7 @@ public class CloudClient {
     public static final String STATUS_DEGRADED = "degraded";
 
     /** 自增数字 id，同时是页面子路径 /cloud/&lt;id&gt;/。 */
+    @TableId(value = "id", type = IdType.INPUT)
     private String id = "";
     /** 展示名称。 */
     private String name = "";
@@ -38,6 +39,9 @@ public class CloudClient {
      * （相对插件数据目录 / 服务器根目录，或绝对路径）。
      */
     private String path = "";
+    /** 管理员最近一次成功下发/期望的客户端制品 id（client-packages），用于玩家进入时版本闸门。 */
+    @TableField("package_id")
+    private String packageId = "";
     /** Minecraft 版本描述（自由文本，仅展示）。 */
     private String mcVersion = "";
     /** 是否启用。 */
@@ -47,6 +51,7 @@ public class CloudClient {
     /** 数据来源：url / local。 */
     private String source = SOURCE_LOCAL;
     /** 运行时：入口文件不存在。 */
+    @TableField(exist = false)
     private boolean missing;
 
     /**
@@ -56,12 +61,22 @@ public class CloudClient {
      * <p>别名是"玩家看到的名字"，id 是"系统内部编号"——玩家不该记 {@code /cloud/1/}。
      * 同一客户端可以有多个别名；全局唯一（冲突时按 order+id 先到先得，其余记警告）。</p>
      */
+    @TableField(exist = false)
     private java.util.List<String> aliases = new java.util.ArrayList<>();
+    /** 持久化列 aliases：逗号分隔，避免 SQL 端 List 反序列化限制。 */
+    @TableField("aliases")
+    private String aliasesData = "";
     /**
      * 预留：逻辑池名（未来"唯一入口、不选设备、点击自动匹配"时，alias/池 映射到多台机器）。
      * P0 一律为空字符串 = 该客户端自成一池。
      */
     private String pool = "";
+
+    /**
+     * ERP 管理范围：纯展示/过滤字段，不参与玩家调度，也不作为授权边界。
+     * 空串 = 未分配；新设备上报时保持空串，由管理员重新连接后手工分配。
+     */
+    private String adminScope = "";
 
     // ===== 运行态（cloud-stream 客户端上报 + 服务端定时探测） =====
 
@@ -77,6 +92,19 @@ public class CloudClient {
      * 所以正式环境基本都会上证书。探针按这个开关选 scheme，不靠猜。</p>
      */
     private boolean tls;
+    /**
+     * 该设备 TLS 证书的 DER SHA-256（小写十六进制）。
+     *
+     * <p>由 cloud-stream 首次上报时带上，WebGame 只信任这张证书；换证书后同一
+     * cloud-key 的上报会刷新它。空 = 老客户端/没上报证书，仍走全局 truststore。</p>
+     */
+    private String tlsCertSha256 = "";
+    /** 该设备证书 PEM（只存公钥证书，不含私钥）；用于构建按设备 TrustManager。 */
+    private String tlsCertPem = "";
+    /** 证书 Subject（ERP 展示/排查用）。 */
+    private String tlsCertSubject = "";
+    /** 证书到期时间（ERP 展示/排查用）。 */
+    private String tlsCertExpiresAt = "";
     /** 见 STATUS_* 常量。 */
     private String status = STATUS_UNKNOWN;
     /** 客户端自报的版本（/health 的 server.version 回填）。 */
@@ -123,6 +151,14 @@ public class CloudClient {
 
     public void setPath(String path) {
         this.path = path == null ? "" : path;
+    }
+
+    public String getPackageId() {
+        return packageId == null ? "" : packageId;
+    }
+
+    public void setPackageId(String packageId) {
+        this.packageId = packageId == null ? "" : packageId.trim();
     }
 
     public String getMcVersion() {
@@ -173,12 +209,29 @@ public class CloudClient {
         this.aliases = aliases == null ? new java.util.ArrayList<>() : aliases;
     }
 
+    public String getAliasesData() {
+        return aliasesData == null ? "" : aliasesData;
+    }
+
+    public void setAliasesData(String aliasesData) {
+        this.aliasesData = aliasesData == null ? "" : aliasesData;
+    }
+
     public String getPool() {
         return pool == null ? "" : pool;
     }
 
     public void setPool(String pool) {
         this.pool = pool == null ? "" : pool.trim();
+    }
+
+    public String getAdminScope() {
+        return adminScope == null ? "" : adminScope;
+    }
+
+    public void setAdminScope(String adminScope) {
+        String s = adminScope == null ? "" : adminScope.trim();
+        this.adminScope = s.length() > 24 ? s.substring(0, 24) : s;
     }
 
     public String getIp() {
@@ -203,6 +256,52 @@ public class CloudClient {
 
     public void setTls(boolean tls) {
         this.tls = tls;
+    }
+
+    public String getTlsCertSha256() {
+        return tlsCertSha256 == null ? "" : tlsCertSha256;
+    }
+
+    public void setTlsCertSha256(String tlsCertSha256) {
+        if (tlsCertSha256 == null) {
+            this.tlsCertSha256 = "";
+            return;
+        }
+        String s = tlsCertSha256.replace(":", "").replace(" ", "").trim()
+                .toLowerCase(java.util.Locale.ROOT);
+        this.tlsCertSha256 = s.matches("[0-9a-f]{64}") ? s : "";
+    }
+
+    public String getTlsCertPem() {
+        return tlsCertPem == null ? "" : tlsCertPem;
+    }
+
+    public void setTlsCertPem(String tlsCertPem) {
+        if (tlsCertPem == null) {
+            this.tlsCertPem = "";
+            return;
+        }
+        String s = tlsCertPem.trim();
+        // 一张自签证书通常 1–2 KB；上限只是防止脏数据把 YAML/ERP 撑爆。
+        this.tlsCertPem = s.length() > 32768 ? "" : s;
+    }
+
+    public String getTlsCertSubject() {
+        return tlsCertSubject == null ? "" : tlsCertSubject;
+    }
+
+    public void setTlsCertSubject(String tlsCertSubject) {
+        String s = tlsCertSubject == null ? "" : tlsCertSubject.trim();
+        this.tlsCertSubject = s.length() > 256 ? s.substring(0, 256) : s;
+    }
+
+    public String getTlsCertExpiresAt() {
+        return tlsCertExpiresAt == null ? "" : tlsCertExpiresAt;
+    }
+
+    public void setTlsCertExpiresAt(String tlsCertExpiresAt) {
+        String s = tlsCertExpiresAt == null ? "" : tlsCertExpiresAt.trim();
+        this.tlsCertExpiresAt = s.length() > 64 ? s.substring(0, 64) : s;
     }
 
     public String getStatus() {
