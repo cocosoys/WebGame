@@ -71,9 +71,8 @@ public class WebGameCloudClientController {
     @ApiName("删除云游戏客户端")
     @ApiPermission("webgame.erp.cloudclients.delete")
     @PostMapping("/delete")
-    public AjaxResult delete(@RequestParam(name = "id", required = true) String id,
-                             @RequestParam(name = "reason", required = false, defaultValue = "") String reason) {
-        return cloudClientService.delete(id, reason);
+    public AjaxResult delete(@RequestParam(name = "id", required = true) String id) {
+        return cloudClientService.delete(id);
     }
 
     @ApiName("强制结束云机会话")

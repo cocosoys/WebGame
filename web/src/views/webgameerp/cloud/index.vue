@@ -694,23 +694,12 @@ export default {
         this.$message.error('云机占用中或上一轮结束未确认，不能删除')
         return
       }
-      this.$prompt(
+      this.$confirm(
         `删除 ${row.id}（${row.name}）后，该 ID 不会复用；云机重新上报会生成新 ID 并进入“未分配”。` +
-          '请输入删除原因（可留空）：',
+          '旧 ID 的页面/别名/直播前缀会一并清理。',
         '删除确认',
-        {
-          confirmButtonText: '删除',
-          cancelButtonText: '取消',
-          inputPlaceholder: '可留空',
-          inputType: 'textarea'
-        }
-      ).then(({ value }) => {
-        return this.$confirm(
-          '确认删除旧记录？旧 ID 的页面/别名/直播前缀会一并清理。',
-          '再次确认',
-          { type: 'warning', confirmButtonText: '删除旧记录', cancelButtonText: '取消' }
-        ).then(() => deleteCloudClient(row.id, (value || '').trim()))
-      }).then(res => {
+        { type: 'warning', confirmButtonText: '删除旧记录', cancelButtonText: '取消' }
+      ).then(() => deleteCloudClient(row.id)).then(res => {
         this.$modal.msgSuccess(res.msg || '已删除')
         this.getList()
       }).catch(() => {})

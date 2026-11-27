@@ -10,8 +10,8 @@ import java.util.Map;
  * 统一客户端制品库（Eagler 包 + 云游戏包）。
  *
  * <p>制品元数据统一存 {@code data/client-packages} / MySQL {@code client-packages}；
- * 文件统一托管在 {@code packages/}。主键直接用 SOYS {@code IdType.AUTO} 数字 id。
- * 旧的 {@code cloud-client-packages.yml} 已废弃，不再迁移或读取。</p>
+ * 文件统一托管在 {@code packages/}：云游戏包在 {@code packages/clients/<id>/}，
+ * Eagler 包在 {@code packages/eagler/<id>/}。主键直接用 SOYS {@code IdType.AUTO} 数字 id。</p>
  */
 public interface ClientPackageService {
 

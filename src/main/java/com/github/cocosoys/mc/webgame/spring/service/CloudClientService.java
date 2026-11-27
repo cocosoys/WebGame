@@ -38,11 +38,8 @@ public interface CloudClientService {
     /** 设置默认客户端。 */
     AjaxResult setDefault(String id);
 
-    /** 删除客户端（默认客户端删除后自动回退）。 */
+    /** 删除客户端（默认客户端删除后自动回退；占用中/结束未确认时拒绝）。 */
     AjaxResult delete(String id);
-
-    /** 删除客户端，并记录管理员给出的原因；占用中/结束未确认时拒绝。 */
-    AjaxResult delete(String id, String reason);
 
     /** 保存玩家选择页排序。 */
     AjaxResult reorder(List<String> ids);

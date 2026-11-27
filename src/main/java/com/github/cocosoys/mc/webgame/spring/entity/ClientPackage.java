@@ -10,7 +10,7 @@ import com.dlz.db.annotation.TableName;
  *
  * <p>包文件统一托管在 {@code plugins/WebGame/packages/}：</p>
  * <ul>
- *   <li>云游戏：{@code packages/cloud/cloud-2/client.zip}，{@code file} 为相对 packages 的路径；</li>
+ *   <li>云游戏：{@code packages/clients/<id>/<zip>}，{@code file} 为相对 packages 的路径；</li>
  *   <li>Eagler：{@code packages/eagler/<id>/}，{@code file} 为目录，{@code entryPath} 为入口；</li>
  *   <li>内置 Eagler：同样落在 {@code packages/eagler/<id>/}，首次启动从 jar 释放；</li>
  *   <li>外链 Eagler：不落盘，{@code externalUrl} 即客户端地址。</li>
@@ -34,7 +34,7 @@ public class ClientPackage {
     private String packageType = TYPE_CLOUD;
     private String name = "";
     private String version = "";
-    /** 相对 packages/ 的文件或目录；内置 Eagler 例外，相对插件数据目录。 */
+    /** 相对 packages/ 的文件或目录。 */
     private String file = "";
     /** Eagler 入口文件（相对 file 目录）。 */
     @TableField("entry_path")

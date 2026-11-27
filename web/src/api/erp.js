@@ -98,8 +98,8 @@ export function setDefaultCloudClient(id) {
   return request({ url: '/erp/cloud-clients/default', method: 'post', params: { id } })
 }
 
-export function deleteCloudClient(id, reason) {
-  return request({ url: '/erp/cloud-clients/delete', method: 'post', params: { id, reason } })
+export function deleteCloudClient(id) {
+  return request({ url: '/erp/cloud-clients/delete', method: 'post', params: { id } })
 }
 
 export function forceEndCloudClientSession(id, reason) {

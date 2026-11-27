@@ -700,8 +700,6 @@ public final class CloudPlayService {
             } else {
                 message = "已强制结束 " + active.size() + " 个会话";
             }
-            CloudAdminAudit.log(plugin, "force-end", id, clientName(id), "", partial ? "partial" : "success",
-                    reason == null ? "" : reason);
             return AjaxResult.success(message, data);
         } catch (Throwable t) {
             return AjaxResult.error("强制结束失败：" + t.getMessage());
@@ -739,10 +737,8 @@ public final class CloudPlayService {
             CloudControlClient.Result r = CloudControlClient.restart(
                     c, trustAllCerts(), trustStorePath(), trustStorePassword(), trustStoreType());
             if (!r.ok) {
-                CloudAdminAudit.log(plugin, "restart", id, c.getName(), "", "failed", r.error);
                 return AjaxResult.error("重启失败：" + r.error);
             }
-            CloudAdminAudit.log(plugin, "restart", id, c.getName(), "", "success", "");
             return AjaxResult.success("重启指令已发送", null);
         } catch (Throwable t) {
             return AjaxResult.error("重启失败：" + t.getMessage());
@@ -757,11 +753,6 @@ public final class CloudPlayService {
 
     private void releaseAdminOp(String clientId) {
         adminOps.remove(clientId);
-    }
-
-    private String clientName(String id) {
-        CloudClient c = findClient(id);
-        return c == null ? "" : c.getName();
     }
 
     private boolean trustAllCerts() {

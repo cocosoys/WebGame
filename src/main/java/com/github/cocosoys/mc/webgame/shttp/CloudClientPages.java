@@ -250,8 +250,8 @@ public final class CloudClientPages {
     }
 
     /**
-     * 客户端更新包托管：{@code plugins/WebGame/packages/} 整个目录登记成可下载目录，
-     * 同时把 {@code manifest.json}（version + 文件数 + sha256）放到同路径下。
+     * 客户端更新包托管：{@code plugins/WebGame/packages/} 登记成可下载目录，
+     * 云游戏 zip 位于 {@code packages/clients/<id>/}，同时把 {@code manifest.json} 放到同路径下。
      *
      * <p>代理只认这份 manifest：版本号来自 config.yml，sha256 由磁盘上的 zip 现算，
      * 所以"把新包丢进目录 + 改 version"就是一次发布，不需要重启插件。</p>
@@ -264,6 +264,7 @@ public final class CloudClientPages {
         packagePages = pages;
         String rel = "/cloud/client";
         try {
+            // 递归登记 packages 目录：兼容根目录旧 zip、eagler/<id>/ 与 clients/<id>/。
             Set<WebRegistry.Entry> entries = pages.registerDirectory(plugin, rel, dir);
             tag(entries);
         } catch (Throwable t) {
@@ -310,8 +311,7 @@ public final class CloudClientPages {
         }
     }
 
-    /** 上传/删除制品后重扫 packages 目录：新子目录也要能被 /cloud/client/<id>/ 取到。 */
-    public void refreshClientPackages() {
+    /** 上传/删除制品后重扫 packages 目录：clients/&lt;id&gt;/ 新目录也要能被 /cloud/client/ 取到。 */    public void refreshClientPackages() {
         WebPageApi pages = packagePages;
         if (pages == null) {
             return;

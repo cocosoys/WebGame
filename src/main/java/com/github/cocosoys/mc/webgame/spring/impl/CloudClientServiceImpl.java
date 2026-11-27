@@ -306,11 +306,6 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     @Override
     public AjaxResult delete(String id) {
-        return delete(id, "");
-    }
-
-    @Override
-    public AjaxResult delete(String id, String reason) {
         try {
             CloudClient c = id == null ? null : clients.get(id);
             if (c == null) {
@@ -341,9 +336,6 @@ public class CloudClientServiceImpl implements CloudClientService {
             store.delete(CloudClient.class, id);
             defaultId = pickFallbackDefault();
             publishPages();
-            com.github.cocosoys.mc.webgame.web.cloud.CloudAdminAudit.log(
-                    plugin, "delete", id, c.getName(), "", "success",
-                    reason == null ? "" : reason);
             return AjaxResult.success("已删除 " + id + "；云机重新上报后会生成新 ID", null);
         } catch (Throwable t) {
             return AjaxResult.error("删除失败：" + t.getMessage());

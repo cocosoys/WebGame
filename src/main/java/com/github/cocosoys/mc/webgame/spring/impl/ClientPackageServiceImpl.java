@@ -38,7 +38,7 @@ import java.util.zip.ZipInputStream;
  * 统一客户端制品库实现。
  *
  * <p>元数据统一走 {@link WebGameDataStore}，文件仍在 {@code packages/}：
- * 云游戏包 {@code packages/cloud/<id>/<zip>}；Eagler 包（含内置）{@code packages/eagler/<id>/}。</p>
+ * 云游戏包统一 {@code packages/clients/<id>/<zip>}；Eagler 包（含内置）{@code packages/eagler/<id>/}。</p>
  */
 public class ClientPackageServiceImpl implements ClientPackageService {
 
@@ -391,12 +391,12 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 // 先落元数据拿 AUTO 数字主键，再用主键生成文件目录。
                 String id = saveWithAutoId(p);
                 created = p;
-                File dir = new File(packagesDir(), "cloud/" + id);
+                File dir = new File(packagesDir(), "clients/" + id);
                 ensureDir(dir);
                 File target = new File(dir, session.fileName);
                 Files.move(session.part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 moved = target;
-                p.setFile("cloud/" + id + "/" + session.fileName);
+                p.setFile("clients/" + id + "/" + session.fileName);
                 p.setSize(target.length());
                 store.save(p);
                 packages.put(id, p);
@@ -515,6 +515,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                     continue;
                 }
                 normalize(p);
+                normalizeCloudStorage(p);
                 loaded.put(p.getId(), p);
             }
         } catch (Throwable t) {
@@ -527,6 +528,48 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             seedLegacyZip();
         }
         refreshPages();
+    }
+
+    /**
+     * 云游戏压缩包统一迁到 {@code packages/clients/<id>/}。
+     *
+     * <p>兼容两类旧位置：{@code packages/cloud/<id>/<zip>} 与根目录
+     * {@code packages/cloud-client.zip}。只在启动加载时执行，失败则保留原路径。</p>
+     */
+    private void normalizeCloudStorage(ClientPackage p) {
+        if (p == null || !p.isCloud() || p.isExternal()) {
+            return;
+        }
+        String file = p.getFile();
+        if (file.isEmpty() || file.startsWith("clients/")) {
+            return;
+        }
+        File source = new File(packagesDir(), file);
+        if (!source.isFile()) {
+            return;
+        }
+        try {
+            String fileName = source.getName();
+            File dir = new File(packagesDir(), "clients/" + p.getId());
+            ensureDir(dir);
+            File target = new File(dir, fileName);
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            p.setFile("clients/" + p.getId() + "/" + fileName);
+            p.setSize(target.length());
+            store.save(p);
+
+            File parent = source.getParentFile();
+            if (parent != null && !parent.equals(packagesDir())
+                    && parent.getAbsolutePath().startsWith(packagesDir().getAbsolutePath() + File.separator)) {
+                File[] left = parent.listFiles();
+                if (left != null && left.length == 0) {
+                    deleteRecursively(parent);
+                }
+            }
+            LOG.info("云游戏包 " + p.getId() + " 已迁入 packages/clients/" + p.getId() + "/");
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "迁移云游戏包目录失败 " + p.getId() + ": " + t);
+        }
     }
 
     /** 保证内置 Eagler 制品存在；文件统一释放到 packages/eagler/&lt;数字 id&gt;/。 */
@@ -619,7 +662,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
     }
 
-    /** 没有云游戏包但存在 packages/cloud-client.zip 时，登记为云游戏包。 */
+    /** 没有云游戏包但存在 packages/cloud-client.zip 时，登记并迁入 packages/clients/&lt;id&gt;/。 */
     private void seedLegacyZip() {
         File legacy = new File(packagesDir(), "cloud-client.zip");
         if (!legacy.isFile()) {
@@ -631,7 +674,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setName("旧 cloud-client.zip");
             p.setVersion(DEFAULT_TARGET_DIR);
             p.setTargetDir(DEFAULT_TARGET_DIR);
-            p.setFile("cloud-client.zip");
             p.setSha256(sha256(legacy));
             p.setSize(legacy.length());
             p.setFiles(countZipEntries(legacy));
@@ -639,8 +681,15 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setEnabled(true);
             p.setSource(ClientPackage.SOURCE_UPLOADED);
             String id = saveWithAutoId(p);
+            File dir = new File(packagesDir(), "clients/" + id);
+            ensureDir(dir);
+            File target = new File(dir, "cloud-client.zip");
+            Files.move(legacy.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            p.setFile("clients/" + id + "/cloud-client.zip");
+            p.setSize(target.length());
+            store.save(p);
             packages.put(id, p);
-            plugin.getLogger().info("已把既有 packages/cloud-client.zip 登记为云游戏客户端包 " + id);
+            plugin.getLogger().info("已把既有 cloud-client.zip 迁入 packages/clients/" + id + "/");
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "登记既有 cloud-client.zip 失败: " + t);
         }
