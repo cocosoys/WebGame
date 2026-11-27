@@ -520,8 +520,8 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             v.setMissing(!entryExists(v));
         }
 
-        String def = plugin.getWebGameConfig().getEaglerDefaultId();
-        allowPlayerSelect = plugin.getWebGameConfig().isEaglerAllowPlayerSelect();
+        String def = plugin.getRuntimeState().getEaglerDefaultId();
+        allowPlayerSelect = plugin.getRuntimeState().isEaglerAllowPlayerSelect();
         if (!loaded.containsKey(def)) {
             def = pickFallbackDefault(loaded);
         }
@@ -579,10 +579,10 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         return sb.toString();
     }
 
-    /** 把 default-id / allow-player-select 回写到 config.yml。 */
+    /** 把默认客户端与玩家自选开关写入运行态文件，不再回写 config.yml。 */
     private void persistSettings() {
-        plugin.getWebGameConfig().setEaglerDefaultId(defaultId);
-        plugin.getWebGameConfig().setEaglerAllowPlayerSelect(allowPlayerSelect);
+        plugin.getRuntimeState().setEaglerDefaultId(defaultId);
+        plugin.getRuntimeState().setEaglerAllowPlayerSelect(allowPlayerSelect);
     }
 
     /** 首次启用时从 jar 释放内置客户端（已存在则不覆盖，避免抹掉管理员替换的文件）。 */

@@ -7,7 +7,6 @@ import com.github.cocosoys.mc.soyshttpovermc.orm.SQL;
 import com.github.cocosoys.mc.soyshttpovermc.orm.YamlPojo;
 import com.github.cocosoys.mc.soyshttpovermc.orm.executor.SqlBackendExecutor;
 import com.github.cocosoys.mc.webgame.WebGame;
-import com.github.cocosoys.mc.webgame.config.WebGameConfig;
 import com.github.cocosoys.mc.webgame.spring.entity.ClientVersion;
 import com.github.cocosoys.mc.webgame.spring.entity.ClientPackage;
 import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
@@ -46,10 +45,10 @@ public final class WebGameDataBootstrap {
         }
     }
 
-    public static WebGameDataStore initialize(WebGame plugin, WebGameConfig config) {
-        String mode = config.getDataMode();
-        if ("mysql".equalsIgnoreCase(mode)) {
-            return mysql(plugin, config);
+    public static WebGameDataStore initialize(WebGame plugin) {
+        String mode = System.getProperty("webgame.data.mode", "yaml");
+        if ("mysql".equalsIgnoreCase(mode) || "sql".equalsIgnoreCase(mode)) {
+            return mysql(plugin);
         }
         return yaml(plugin);
     }
@@ -89,20 +88,20 @@ public final class WebGameDataBootstrap {
         return new WebGameDataStore(WebGameDataStore.Mode.YAML, yaml);
     }
 
-    private static WebGameDataStore mysql(WebGame plugin, WebGameConfig config) {
+    private static WebGameDataStore mysql(WebGame plugin) {
         if (!SQL.Pojo.isAvailable()) {
             throw new IllegalStateException(
-                    "data.mode=mysql，但 SOYS 的 storage.backends.mysql 未启用或装配失败");
+                    "webgame.data.mode=mysql，但 SOYS 的 storage.backends.mysql 未启用或装配失败");
         }
 
         // 先用 init.sql 保证 tls_cert_pem 等长文本列是 TEXT；ORM 的自动建表会把 String 当 VARCHAR(255)。
         SqlBackendExecutor sql = SqlBackendExecutor.get();
         if (sql == null) {
-            throw new IllegalStateException("data.mode=mysql，但无法取得 SOYS SQL 执行器");
+            throw new IllegalStateException("webgame.data.mode=mysql，但无法取得 SOYS SQL 执行器");
         }
         if (!"mysql".equalsIgnoreCase(sql.name())) {
             throw new IllegalStateException(
-                    "data.mode=mysql，但当前 SOYS SQL 方言是 " + sql.name() + "，请启用 storage.backends.mysql");
+                    "webgame.data.mode=mysql，但当前 SOYS SQL 方言是 " + sql.name() + "，请启用 storage.backends.mysql");
         }
         execSqlResource(plugin, sql, "sql/init.sql");
         ensurePackageColumns(plugin, sql);

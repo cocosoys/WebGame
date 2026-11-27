@@ -1,44 +1,13 @@
-# WebGame 配置（前端统一托管在 /web/plugins/WebGame/）
-data:
-  # 数据后端：yaml = plugins/WebGame/data/*.yml；mysql = SOYS DataSpec（需启用 storage.backends.mysql）
-  mode: "yaml"
-client-packages:
-  # 云游戏“下发更新”弹窗的预选制品；只做预选，不自动下发
-  preselect-cloud-id: ""
-  next-eagler-id: 2
-  next-cloud-id: 2
-eagler:
-  # 默认 Eagler 客户端 id（对应 /eagler/<id>/）；allow-player-select=false 时只进默认版本
-  default-id: "1.12.2"
-  allow-player-select: true
-page:
-  # 游戏页所在目录（相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾）。
-  # 页面文件：src/main/resources/eagler-clients/1.12.2/（构建期打进 jar），
-  # 运行时不再拷贝/改写；磁盘目录 plugins/WebGame/dist（若存在）会覆盖 jar 内的页面。
-  # 打开 http://127.0.0.1:25574/web/plugins/WebGame/eagler/?user=Tom 直接进入服务器。
-  path: "/eagler/"
-  # 玩家浏览器访问地址（第一版 localhost；后续改公网 IP/域名）
-  public-host: "127.0.0.1"
-  # 0 = 跟随 server.properties 的 server-port
-  public-port: 0
+# WebGame 可维护配置。
+#
+# 页面路径、WS 路径、回环地址、协议范围、数据后端、默认客户端、
+# 玩家自选开关、客户端制品序号等属于代码常量或内部运行态，
+# 不再放在这里；内部状态见 plugins/WebGame/data/runtime-state.yml。
 tunnel:
-  # WebSocket 隧道入口路径（必须与游戏页内 eagler 地址的 /eagler 一致）
-  ws-path: "/eagler"
-  # MC 回环连接目标（同机回环登录）
-  loopback-host: "127.0.0.1"
-  # 0 = 跟随 server-port（回环 MC 客户端连本服自身端口）
-  loopback-port: 0
-  # EaglerX 握手协议版本支持范围（V3=协议 2/3，V4=协议 4）
-  allow-v3: true
-  allow-v4: true
-  # 服务端 MC 协议版本范围（1.12.2 = 340）
-  min-mc-protocol: 340
-  max-mc-protocol: 340
-  # SERVER_VERSION 帧中的服务器品牌与版本（供客户端显示）
+  # SERVER_VERSION 帧中的服务器品牌（供客户端显示）；版本号直接取插件自身版本。
   server-brand: "WebGame"
-  server-version: "1.0.0"
-  # 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数（默认 2）
-  # 用于防止单台设备开过多浏览器标签占满服务器名额
+  # 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数（默认 2）。
+  # 用于防止单台设备开过多浏览器标签占满服务器名额。
   max-connections-per-device: 2
 auto-join:
   # 自动进服（服务端口径，页面通过 GET /api/plugins/WebGame/cloud/page-config 读取）：
@@ -50,14 +19,6 @@ auto-join:
   # 弹框默认用户名，可被 URL 参数覆盖：.../eagler/?user=Tom
   default-username: "WebPlayer"
 cloud:
-  # 默认云客户端 id（空 = 由服务端从可用条目里挑）；allow-player-select=false 时只进默认客户端
-  default-id: ""
-  allow-player-select: true
-  # 下一个云客户端 id；删除后不复用，新增/上报时自动递增并回写
-  next-id: 1
-  # 云游戏客户端包不再写在这里：见 ERP「客户端 → 客户端管理」。
-  # 下载预选只影响“下发更新”弹窗的默认选中项，不再参与玩家进入时的自动更新；
-  # 设备是否自动更新由 cloud-clients 的 package_id（管理员下发成功后回写）决定。
   # 云游戏客户端（cloud-stream）运行态探测周期（秒）。
   # 每轮向 cloud-clients.yml 里登记的设备请求 GET /api/v1/health，
   # 带 Authorization: Bearer <cloud-key>（= stream-server 的 auth_token）。
@@ -115,8 +76,6 @@ cloud:
     join-window-seconds: 30
     # 揭幕下限（秒）：进服后页面至少再压这么久才揭开遮罩，避免画面闪一下又黑屏。
     min-hold-seconds: 15
-  # 云游戏客户端包不再写在这里：见 ERP「客户端管理 → 云游戏客户端包」，
-  # 制品元数据在 cloud-client-packages.yml，文件仍托管在 packages/。
   # 池（一组同配置的机器，玩家只认池名 /cloud/pool/<池名>，由服务端挑一台空闲的）。
   # 选机前提永远是"在线 + 健康 + 空闲 + 口令一致"，策略只决定在合格机器里挑哪一台：
   #   order   = 按 ERP 里的排序取第一台（默认，行为最可预期）

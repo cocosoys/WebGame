@@ -589,7 +589,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             importLegacyCloudPackages();
             seedLegacyZip();
         }
-        preselectId = plugin.getWebGameConfig().getPackagePreselectCloudId();
+        preselectId = plugin.getRuntimeState().getPackagePreselectCloudId();
         if (preselectId.isEmpty() || !isUsablePreselect(preselectId)) {
             preselectId = "";
             for (ClientPackage p : packages(ClientPackage.TYPE_CLOUD)) {
@@ -599,8 +599,8 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 }
             }
         }
-        nextEaglerId = Math.max(plugin.getWebGameConfig().getPackageNextEaglerId(), maxSuffix(ClientPackage.TYPE_EAGLER) + 1);
-        nextCloudId = Math.max(plugin.getWebGameConfig().getPackageNextCloudId(), maxSuffix(ClientPackage.TYPE_CLOUD) + 1);
+        nextEaglerId = Math.max(plugin.getRuntimeState().getPackageNextEaglerId(), maxSuffix(ClientPackage.TYPE_EAGLER) + 1);
+        nextCloudId = Math.max(plugin.getRuntimeState().getPackageNextCloudId(), maxSuffix(ClientPackage.TYPE_CLOUD) + 1);
         persistSettings();
         persistNextIds();
         refreshPages();
@@ -720,12 +720,12 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     }
 
     private void persistSettings() {
-        plugin.getWebGameConfig().setPackagePreselectCloudId(preselectId);
+        plugin.getRuntimeState().setPackagePreselectCloudId(preselectId);
     }
 
     private void persistNextIds() {
-        plugin.getWebGameConfig().setPackageNextEaglerId(nextEaglerId);
-        plugin.getWebGameConfig().setPackageNextCloudId(nextCloudId);
+        plugin.getRuntimeState().setPackageNextEaglerId(nextEaglerId);
+        plugin.getRuntimeState().setPackageNextCloudId(nextCloudId);
     }
 
     private void refreshPages() {

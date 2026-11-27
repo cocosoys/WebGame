@@ -1260,7 +1260,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 maxId = n;
             }
         }
-        nextId = Math.max(Math.max(plugin.getWebGameConfig().getCloudNextId(), maxId + 1), 1);
+        nextId = Math.max(Math.max(plugin.getRuntimeState().getCloudNextId(), maxId + 1), 1);
 
         for (CloudClient c : loaded.values()) {
             c.setMissing(!entryExists(c));
@@ -1279,8 +1279,8 @@ public class CloudClientServiceImpl implements CloudClientService {
             }
         }
 
-        String def = plugin.getWebGameConfig().getCloudDefaultId();
-        allowPlayerSelect = plugin.getWebGameConfig().isCloudAllowPlayerSelect();
+        String def = plugin.getRuntimeState().getCloudDefaultId();
+        allowPlayerSelect = plugin.getRuntimeState().isCloudAllowPlayerSelect();
         if (!loaded.containsKey(def)) {
             def = pickFallbackDefault(loaded);
         }
@@ -1332,12 +1332,11 @@ public class CloudClientServiceImpl implements CloudClientService {
         return sb.toString();
     }
 
-    /** 把 default-id / allow-player-select / next-id 回写到 config.yml。 */
+    /** 把默认设备、玩家自选开关与下一个设备号写入运行态文件，不再回写 config.yml。 */
     private void persistSettings() {
-        WebGameConfig cfg = plugin.getWebGameConfig();
-        cfg.setCloudDefaultId(defaultId);
-        cfg.setCloudAllowPlayerSelect(allowPlayerSelect);
-        cfg.setCloudNextId(nextId);
+        plugin.getRuntimeState().setCloudDefaultId(defaultId);
+        plugin.getRuntimeState().setCloudAllowPlayerSelect(allowPlayerSelect);
+        plugin.getRuntimeState().setCloudNextId(nextId);
     }
 
     // ===== 辅助 =====

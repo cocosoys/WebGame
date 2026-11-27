@@ -430,7 +430,7 @@ public final class GameHubPages {
         return GamePageTheme.shell("WebGame · 选择游戏方式", extraCss, body.toString());
     }
 
-    /** eagler 选择页地址：跟随 {@code page.path} 配置，配置不可用时退回默认值。 */
+    /** eagler 选择页地址：固定 /web/plugins/WebGame/eagler/，异常时退回同一常量。 */
     private String eaglerPageUrl() {
         try {
             if (plugin.getWebGameConfig() != null) {

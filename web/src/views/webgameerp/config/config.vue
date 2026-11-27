@@ -9,115 +9,21 @@
         type="info"
         :closable="false"
         show-icon
-        title="本页覆盖 config.yml 的全部参数：加载时会自动补齐缺失键，保存时整文件写回。"
+        title="本页只保留管理员可维护的运行参数；页面路径、协议、默认客户端与内部编号不在 config.yml 中。"
         style="margin-bottom: 14px"
       />
-
-      <!-- ============ 数据存储 ============ -->
-      <el-card shadow="never" class="mb">
-        <div slot="header">数据存储 (data)</div>
-        <el-form label-width="170px" size="small">
-          <el-form-item label="数据后端">
-            <el-select v-model="model.data.mode" style="width: 260px">
-              <el-option label="YAML（插件本地 data 目录）" value="yaml" />
-              <el-option label="MySQL（SOYS DataSpec）" value="mysql" />
-            </el-select>
-            <div class="hint">yaml = plugins/WebGame/data/*.yml；mysql = SOYS DataSpec，需在 SOYS 启用 MySQL 存储后端。</div>
-          </el-form-item>
-        </el-form>
-      </el-card>
-
-      <!-- ============ 页面托管 ============ -->
-      <el-card shadow="never" class="mb">
-        <div slot="header">页面托管 (page)</div>
-        <el-form label-width="170px" size="small">
-          <el-form-item label="游戏页目录">
-            <el-input v-model="model.page.path" placeholder="/eagler/" style="width: 320px" />
-            <div class="hint">相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾；页面文件为 dist/eagler/index.html。</div>
-          </el-form-item>
-          <el-form-item label="对外地址">
-            <el-input v-model="model.page['public-host']" placeholder="127.0.0.1" style="width: 320px" />
-            <div class="hint">玩家浏览器访问使用的主机名/IP；页面内 WS 地址取浏览器当前 host，此值仅用于展示与日志。</div>
-          </el-form-item>
-          <el-form-item label="对外端口">
-            <el-input-number v-model="model.page['public-port']" :min="0" :max="65535" controls-position="right" />
-            <div class="hint">0 = 跟随 server.properties 的 server-port。</div>
-          </el-form-item>
-        </el-form>
-      </el-card>
 
       <!-- ============ WS 隧道 ============ -->
       <el-card shadow="never" class="mb">
         <div slot="header">WS 隧道 (tunnel)</div>
         <el-form label-width="170px" size="small">
-          <el-form-item label="WS 路径">
-            <el-input v-model="model.tunnel['ws-path']" placeholder="/eagler" style="width: 320px" />
-            <div class="hint">必须与静态游戏页内写死的 /eagler 一致，修改后需同步重新构建前端资源。</div>
-          </el-form-item>
-          <el-form-item label="回环目标地址">
-            <el-input v-model="model.tunnel['loopback-host']" placeholder="127.0.0.1" style="width: 320px" />
-            <div class="hint">隧道转发的 MC 服务器地址（同机回环即 127.0.0.1）。</div>
-          </el-form-item>
-          <el-form-item label="回环端口">
-            <el-input-number v-model="model.tunnel['loopback-port']" :min="0" :max="65535" controls-position="right" />
-            <div class="hint">0 = 跟随 server-port（回环 MC 客户端连本服自身端口）。</div>
-          </el-form-item>
-          <el-form-item label="协议版本">
-            <el-checkbox v-model="model.tunnel['allow-v3']">支持 EaglerX V3</el-checkbox>
-            <el-checkbox v-model="model.tunnel['allow-v4']">支持 EaglerX V4</el-checkbox>
-            <div class="hint">EaglerX 握手协议版本支持范围（V3=协议 2/3，V4=协议 4）。</div>
-          </el-form-item>
-          <el-form-item label="MC 协议范围">
-            <el-input-number v-model="model.tunnel['min-mc-protocol']" :min="1" :max="999" controls-position="right" />
-            <span style="margin: 0 8px">~</span>
-            <el-input-number v-model="model.tunnel['max-mc-protocol']" :min="1" :max="999" controls-position="right" />
-            <div class="hint">服务端 MC 协议版本范围，1.12.2 = 340。</div>
-          </el-form-item>
           <el-form-item label="服务器品牌">
             <el-input v-model="model.tunnel['server-brand']" placeholder="WebGame" style="width: 320px" />
-            <div class="hint">SERVER_VERSION 帧中的服务器品牌，供客户端显示。</div>
-          </el-form-item>
-          <el-form-item label="服务器版本">
-            <el-input v-model="model.tunnel['server-version']" placeholder="1.0.0" style="width: 320px" />
-            <div class="hint">SERVER_VERSION 帧中的服务器版本，供客户端显示。</div>
+            <div class="hint">SERVER_VERSION 帧中的服务器品牌，供客户端显示；服务器版本直接取插件自身版本。</div>
           </el-form-item>
           <el-form-item label="每设备并发上限">
             <el-input-number v-model="model.tunnel['max-connections-per-device']" :min="1" :max="64" controls-position="right" />
             <div class="hint">同一来源 IP 最多同时进入游戏的浏览器会话数，防止单设备占满名额。</div>
-          </el-form-item>
-        </el-form>
-      </el-card>
-
-      <!-- ============ Eagler 客户端 ============ -->
-      <el-card shadow="never" class="mb">
-        <div slot="header">Eagler 客户端 (eagler)</div>
-        <el-form label-width="170px" size="small">
-          <el-form-item label="Eagler 默认 id">
-            <el-input v-model="model.eagler['default-id']" placeholder="1.12.2" style="width: 320px" />
-            <div class="hint">对应 /eagler/&lt;id&gt;/；玩家访问 /eagler/ 时进入这个客户端版本。</div>
-          </el-form-item>
-          <el-form-item label="Eagler 允许自选">
-            <el-switch v-model="model.eagler['allow-player-select']" />
-            <div class="hint">关闭后玩家访问 /eagler/ 只能进入默认版本，其他客户端页面不可访问。</div>
-          </el-form-item>
-        </el-form>
-      </el-card>
-
-      <!-- ============ 客户端制品序号 ============ -->
-      <el-card shadow="never" class="mb">
-        <div slot="header">客户端制品 (client-packages)</div>
-        <el-form label-width="170px" size="small">
-          <el-form-item label="下发预选制品 id">
-            <el-input v-model="model['client-packages']['preselect-cloud-id']" placeholder="cloud-1（留空 = 不预选）" style="width: 320px" />
-            <div class="hint">只用于「云游戏设备 → 更多操作 → 下发更新」弹窗的默认选中项，不会自动下发。</div>
-          </el-form-item>
-          <el-form-item label="下一个 Eagler 序号">
-            <el-input-number v-model="model['client-packages']['next-eagler-id']" :min="1" :max="999999" controls-position="right" />
-            <div class="hint">上传新的 Eagler 制品时自动分配；正常不需要手动修改。</div>
-          </el-form-item>
-          <el-form-item label="下一个云游戏序号">
-            <el-input-number v-model="model['client-packages']['next-cloud-id']" :min="1" :max="999999" controls-position="right" />
-            <div class="hint">上传新的云游戏制品时自动分配；正常不需要手动修改。</div>
           </el-form-item>
         </el-form>
       </el-card>
@@ -136,25 +42,6 @@
             <el-input v-model="model['auto-join']['default-username']" placeholder="WebPlayer" style="width: 320px" />
             <div class="hint">仅在<b>没有记住游戏名</b>时用来预填输入框；<b>不是</b>所有人共用的登录名——
               离线模式下同名会把彼此踢下线。也可用 URL 参数强制指定：…/web/plugins/WebGame/eagler/?user=Tom。</div>
-          </el-form-item>
-        </el-form>
-      </el-card>
-
-      <!-- ============ 云游戏接入 ============ -->
-      <el-card shadow="never" class="mb">
-        <div slot="header">云游戏接入 (cloud)</div>
-        <el-form label-width="170px" size="small">
-          <el-form-item label="云游戏默认设备 id">
-            <el-input v-model="model.cloud['default-id']" placeholder="留空 = 由服务端挑可用设备" style="width: 320px" />
-            <div class="hint">对应 cloud-clients.yml 里的设备 id；allow-player-select=false 时只进这台设备。</div>
-          </el-form-item>
-          <el-form-item label="云游戏允许自选">
-            <el-switch v-model="model.cloud['allow-player-select']" />
-            <div class="hint">关闭后 /cloud/ 直接进入默认设备，不再显示设备选择页。</div>
-          </el-form-item>
-          <el-form-item label="下一个云设备 id">
-            <el-input-number v-model="model.cloud['next-id']" :min="1" :max="999999" controls-position="right" />
-            <div class="hint">新增/上报云设备时自动分配并回写；正常不需要手动修改。</div>
           </el-form-item>
         </el-form>
       </el-card>
@@ -285,28 +172,10 @@ export default {
       ready: false,
       fileId: 'config',
       helpMap: {
-        '数据后端': 'data.mode：yaml = plugins/WebGame/data/*.yml；mysql = SOYS DataSpec，需启用 SOYS MySQL 存储后端。',
-        'Eagler 默认 id': 'eagler.default-id：玩家访问 /eagler/ 时进入的客户端 id，对应 /eagler/<id>/。',
-        'Eagler 允许自选': 'eagler.allow-player-select：false = 只允许进入默认 Eagler 版本。',
-        '游戏页目录': 'page.path：游戏页所在目录（相对 /web/plugins/WebGame/，以 / 开头并以 / 结尾），页面文件为 dist/eagler/index.html。',
-        '对外地址': 'page.public-host：玩家浏览器访问使用的主机名/IP；页面内 WS 地址取浏览器当前 host，此值仅用于展示与日志。',
-        '对外端口': 'page.public-port：对外端口，0 = 跟随 server.properties 的 server-port。',
-        'WS 路径': 'tunnel.ws-path：WebSocket 隧道入口路径，必须与静态游戏页内写死的 /eagler 一致。',
-        '回环目标地址': 'tunnel.loopback-host：隧道转发的 MC 服务器地址，同机即 127.0.0.1。',
-        '回环端口': 'tunnel.loopback-port：MC 回环端口，0 = 跟随 server-port。',
-        '协议版本': 'tunnel.allow-v3 / tunnel.allow-v4：EaglerX 握手协议版本支持范围（V3=协议 2/3，V4=协议 4）。',
-        'MC 协议范围': 'tunnel.min-mc-protocol / tunnel.max-mc-protocol：服务端 MC 协议版本范围，1.12.2 = 340。',
-        '服务器品牌': 'tunnel.server-brand：SERVER_VERSION 帧中的服务器品牌，供客户端显示。',
-        '服务器版本': 'tunnel.server-version：SERVER_VERSION 帧中的服务器版本，供客户端显示。',
+        '服务器品牌': 'tunnel.server-brand：SERVER_VERSION 帧中的服务器品牌，供客户端显示；版本号取插件自身版本。',
         '每设备并发上限': 'tunnel.max-connections-per-device：同一来源 IP 最多同时进入游戏的浏览器会话数。',
-        '下发预选制品 id': 'client-packages.preselect-cloud-id：只用于“下发更新”弹窗的默认选中项，不会自动下发。',
-        '下一个 Eagler 序号': 'client-packages.next-eagler-id：上传新 Eagler 制品时自动分配，正常无需修改。',
-        '下一个云游戏序号': 'client-packages.next-cloud-id：上传新云游戏制品时自动分配，正常无需修改。',
         '启用自动进服': 'auto-join.enabled：记住过游戏名的浏览器打开页面即自动进服；没记过则弹框预填默认用户名。',
         '默认用户名': 'auto-join.default-username：只在没有记住游戏名时预填输入框，不是公共登录名（离线模式同名互踢）。',
-        '云游戏默认设备 id': 'cloud.default-id：默认云设备 id；留空 = 由服务端从可用设备里挑。',
-        '云游戏允许自选': 'cloud.allow-player-select：false = /cloud/ 直接进入默认设备，不显示选择页。',
-        '下一个云设备 id': 'cloud.next-id：新增/上报云设备时自动分配并回写，正常无需修改。',
         '探测周期（秒）': 'cloud.heartbeat-seconds：每轮请求登记设备 GET /api/v1/health 的周期。',
         '离线阈值（秒）': 'cloud.ttl-seconds：最近一次成功探测超过该时长才判离线，默认 3 个周期。',
         '探测超时（毫秒）': 'cloud.probe-timeout-ms：单次探测连接/读取超时，范围 500–15000。',
@@ -331,7 +200,7 @@ export default {
     }
   },
   watch: {
-    // mixin 异步 load 完成后整体替换 model；此时补齐全部配置键，再放行渲染
+    // mixin 异步 load 完成后整体替换 model；此时补齐保留键，再放行渲染
     model(d) {
       if (d && typeof d === 'object') {
         this.ensureConfigDefaults(d)
@@ -341,7 +210,7 @@ export default {
   },
   methods: {
     /**
-     * 补齐 config.yml 的全部参数。
+     * 补齐本页仍然保留的配置键。
      *
      * 只补 undefined/null，不覆盖已有值（false / 0 / 空字符串都是合法配置）；
      * 嵌套节缺失或类型不对时重建对象，保证表单深链访问永远有落脚点。
@@ -360,43 +229,15 @@ export default {
         }
       }
 
-      const data = ensure(d, 'data')
-      setDefault(data, 'mode', 'yaml')
-
-      const eagler = ensure(d, 'eagler')
-      setDefault(eagler, 'default-id', '1.12.2')
-      setDefault(eagler, 'allow-player-select', true)
-
-      const page = ensure(d, 'page')
-      setDefault(page, 'path', '/eagler/')
-      setDefault(page, 'public-host', '127.0.0.1')
-      setDefault(page, 'public-port', 0)
-
       const tunnel = ensure(d, 'tunnel')
-      setDefault(tunnel, 'ws-path', '/eagler')
-      setDefault(tunnel, 'loopback-host', '127.0.0.1')
-      setDefault(tunnel, 'loopback-port', 0)
-      setDefault(tunnel, 'allow-v3', true)
-      setDefault(tunnel, 'allow-v4', true)
-      setDefault(tunnel, 'min-mc-protocol', 340)
-      setDefault(tunnel, 'max-mc-protocol', 340)
       setDefault(tunnel, 'server-brand', 'WebGame')
-      setDefault(tunnel, 'server-version', '1.0.0')
       setDefault(tunnel, 'max-connections-per-device', 2)
 
       const autoJoin = ensure(d, 'auto-join')
       setDefault(autoJoin, 'enabled', true)
       setDefault(autoJoin, 'default-username', 'WebPlayer')
 
-      const clientPackages = ensure(d, 'client-packages')
-      setDefault(clientPackages, 'preselect-cloud-id', '')
-      setDefault(clientPackages, 'next-eagler-id', 2)
-      setDefault(clientPackages, 'next-cloud-id', 2)
-
       const cloud = ensure(d, 'cloud')
-      setDefault(cloud, 'default-id', '')
-      setDefault(cloud, 'allow-player-select', true)
-      setDefault(cloud, 'next-id', 1)
       setDefault(cloud, 'heartbeat-seconds', 90)
       setDefault(cloud, 'ttl-seconds', 270)
       setDefault(cloud, 'probe-timeout-ms', 3000)
