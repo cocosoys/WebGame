@@ -426,6 +426,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             ClientVersionVo vo = new ClientVersionVo();
             vo.setId(v.getId());
             vo.setName(v.getName());
+            vo.setAliases(v.getAliases());
             vo.setPackageId(v.getPackageId());
             ClientPackage pkg = v.getPackageId().isEmpty() ? null : packageService.find(v.getPackageId());
             vo.setPackageName(pkg == null ? "" : pkg.getName());
@@ -506,6 +507,9 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         if (!packageId.isEmpty()) {
             v.setPackageId(packageId);
         }
+        if (body.containsKey("aliases")) {
+            v.setAliases(parseAliases(body.get("aliases")));
+        }
         if (body.containsKey("mcVersions")) {
             v.setMcVersions(parseMcVersions(body.get("mcVersions")));
         }
@@ -579,6 +583,34 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 : (p.isExternal() ? ClientVersion.SOURCE_URL : ClientVersion.SOURCE_UPLOADED));
         v.setSha256(p.getSha256());
         v.setSize(p.getSize());
+    }
+
+    /** 解析前端提交的 aliases：数组或逗号分隔字符串，去空、去重并截断超长项。 */
+    private static List<String> parseAliases(Object raw) {
+        List<String> list = new ArrayList<>();
+        if (raw == null) {
+            return list;
+        }
+        if (raw instanceof List) {
+            for (Object item : (List<?>) raw) {
+                addAlias(list, item);
+            }
+        } else {
+            for (String part : String.valueOf(raw).split("[,，]+")) {
+                addAlias(list, part);
+            }
+        }
+        return list;
+    }
+
+    private static void addAlias(List<String> list, Object raw) {
+        String a = raw == null ? "" : String.valueOf(raw).trim();
+        if (a.isEmpty() || a.length() > 32) {
+            return;
+        }
+        if (!list.contains(a)) {
+            list.add(a);
+        }
     }
 
     /** 解析前端提交的 mcVersions（版本名数组或 {version,protocol} 数组），协议号以枚举为准。 */

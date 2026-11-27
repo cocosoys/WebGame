@@ -16,6 +16,8 @@ public class ClientVersionVo {
     private String packageId;
     /** 引用的客户端制品展示名。 */
     private String packageName;
+    /** 对外别名。 */
+    private List<String> aliases = new ArrayList<>();
     /** 客户端入口路径（URL 或本地文件，由制品解析）。 */
     private String path;
     /** 支持的 Minecraft 版本（版本名 + 协议号）。 */
@@ -65,6 +67,14 @@ public class ClientVersionVo {
 
     public void setPackageName(String packageName) {
         this.packageName = packageName == null ? "" : packageName;
+    }
+
+    public List<String> getAliases() {
+        return aliases == null ? new ArrayList<>() : aliases;
+    }
+
+    public void setAliases(List<String> aliases) {
+        this.aliases = aliases == null ? new ArrayList<>() : aliases;
     }
 
     public String getPath() {

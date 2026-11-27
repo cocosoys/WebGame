@@ -1216,7 +1216,7 @@ public final class CloudClientPages {
         }
 
         StringBuilder body = new StringBuilder(2048);
-        body.append(GamePageTheme.topbar(GameHubPages.PLAY_PATH))
+        body.append(GamePageTheme.topbar(GameHubPages.PLAY_URL))
                 .append("<h1>云游戏客户端</h1>\n")
                 .append("<p class=\"sub\">选一台云机，或直接自动匹配；每台云机独占使用，被占用时需要排队。</p>\n")
                 .append("<img class=\"banner\" src=\"").append(GamePageTheme.image("cloud.jpg"))

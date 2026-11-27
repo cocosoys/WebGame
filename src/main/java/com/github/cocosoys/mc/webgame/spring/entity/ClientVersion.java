@@ -11,7 +11,7 @@ import java.util.List;
 /**
  * 一个已启用的 Eaglercraft 客户端入口。
  *
- * <p>表里只保留“选哪个制品、是否启用、排序、协议”：名称、入口路径、来源、
+ * <p>表里只保留“选哪个制品、是否启用、排序、协议、别名”：名称、入口路径、来源、
  * SHA-256、体积、上传时间全部由 {@code client-packages} 解析，避免两处漂移。
  * 运行时字段用 {@code @TableField(exist=false)} 缓存。</p>
  */
@@ -37,6 +37,12 @@ public class ClientVersion {
     /** 引用的客户端制品 id（client-packages 数字主键）。 */
     @TableField("package_id")
     private String packageId = "";
+    /** 对外别名（展示/短地址用），持久化列为 aliases。 */
+    @TableField(exist = false)
+    private List<String> aliases = new ArrayList<>();
+    /** 持久化列 aliases：逗号分隔，避免 SQL 端 List 反序列化限制。 */
+    @TableField("aliases")
+    private String aliasesData = "";
     /** 支持的 Minecraft 版本（运行时视图；持久化用 mcVersionData）。 */
     @TableField(exist = false)
     private List<McVersionOption> mcVersions = new ArrayList<>();
@@ -123,6 +129,60 @@ public class ClientVersion {
 
     public void setPackageId(String packageId) {
         this.packageId = packageId == null ? "" : packageId.trim();
+    }
+
+    public List<String> getAliases() {
+        return aliases == null ? new ArrayList<>() : aliases;
+    }
+
+    /** 列表写入时同步持久化列；空值、重复值与空白字符在这里统一收敛。 */
+    public void setAliases(List<String> aliases) {
+        List<String> out = new ArrayList<>();
+        if (aliases != null) {
+            for (String a : aliases) {
+                String n = a == null ? "" : a.trim();
+                if (!n.isEmpty() && !out.contains(n)) {
+                    out.add(n);
+                }
+            }
+        }
+        this.aliases = out;
+        this.aliasesData = joinAliases(out);
+    }
+
+    public String getAliasesData() {
+        return aliasesData == null ? "" : aliasesData;
+    }
+
+    /** ORM 回填持久化列时同步解析成列表。 */
+    public void setAliasesData(String aliasesData) {
+        this.aliasesData = aliasesData == null ? "" : aliasesData;
+        this.aliases = splitAliases(this.aliasesData);
+    }
+
+    private static String joinAliases(List<String> aliases) {
+        StringBuilder sb = new StringBuilder();
+        for (String a : aliases) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(a);
+        }
+        return sb.toString();
+    }
+
+    private static List<String> splitAliases(String data) {
+        List<String> out = new ArrayList<>();
+        if (data == null || data.trim().isEmpty()) {
+            return out;
+        }
+        for (String part : data.split("[,，]+")) {
+            String n = part.trim();
+            if (!n.isEmpty() && !out.contains(n)) {
+                out.add(n);
+            }
+        }
+        return out;
     }
 
     /** 是否为远程 URL（http/https）。 */

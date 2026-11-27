@@ -239,6 +239,9 @@ public final class WebGameClientPages {
                 cards.append("<span>MC ").append(mc).append("</span>");
             }
             cards.append("<span>版本 ").append(id).append("</span>");
+            if (!v.getAliases().isEmpty()) {
+                cards.append("<span>别名 ").append(escape(String.join(" / ", v.getAliases()))).append("</span>");
+            }
             if (v.getSource() != null && ClientVersion.SOURCE_BUILTIN.equals(v.getSource())) {
                 cards.append("<span>内置</span>");
             }
@@ -250,7 +253,7 @@ public final class WebGameClientPages {
 
         StringBuilder body = new StringBuilder(1024);
         body.append(com.github.cocosoys.mc.webgame.shttp.GamePageTheme
-                .topbar(com.github.cocosoys.mc.webgame.shttp.GameHubPages.PLAY_PATH))
+                .topbar(com.github.cocosoys.mc.webgame.shttp.GameHubPages.PLAY_URL))
                 .append("<h1>Eagler 网页版</h1>\n")
                 .append("<p class=\"sub\">浏览器直连服务器，不需要云主机、也不用安装客户端。选择一个版本开始游戏。</p>\n")
                 .append("<img class=\"banner\" src=\"")

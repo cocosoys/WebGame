@@ -36,6 +36,14 @@
         </template>
       </el-table-column>
       <el-table-column label="名称" align="center" prop="name" min-width="150" show-overflow-tooltip />
+      <el-table-column label="别名" align="center" min-width="130">
+        <template slot-scope="scope">
+          <template v-if="scope.row.aliases && scope.row.aliases.length">
+            <el-tag v-for="a in scope.row.aliases" :key="a" size="mini" style="margin: 1px 2px">{{ a }}</el-tag>
+          </template>
+          <span v-else style="color: #909399">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="MC 版本" align="center" min-width="160">
         <template slot-scope="scope">
           <template v-if="scope.row.mcVersions && scope.row.mcVersions.length">
@@ -91,6 +99,16 @@
         <el-form-item label="客户端 id" required>
           <el-input v-model="editForm.id" maxlength="32" :disabled="editEditing" placeholder="如 1.8.9（同时作为 /eagler/<id>/ 路径）" />
         </el-form-item>
+        <el-form-item label="别名">
+          <el-input
+            v-model="editForm.aliasesText"
+            maxlength="200"
+            placeholder="如 经典版, classic（逗号分隔）"
+          />
+          <div class="form-hint">
+            展示与识别用的别名；留空表示不设置。
+          </div>
+        </el-form-item>
         <el-form-item label="客户端包" required>
           <el-select
             v-model="editForm.packageId"
@@ -140,6 +158,7 @@ import Sortable from 'sortablejs'
 
 const emptyEditForm = () => ({
   id: '',
+  aliasesText: '',
   packageId: '',
   enabled: true,
   source: ''
@@ -268,6 +287,7 @@ export default {
       this.editEditing = true
       this.editForm = {
         id: row.id,
+        aliasesText: (row.aliases || []).join(', '),
         packageId: row.packageId || '',
         enabled: row.enabled,
         source: row.source
@@ -288,6 +308,10 @@ export default {
       try {
         const payload = {
           id: this.editForm.id,
+          aliases: (this.editForm.aliasesText || '')
+            .split(/[,，]+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0),
           packageId: this.editForm.packageId,
           enabled: this.editForm.enabled
         }

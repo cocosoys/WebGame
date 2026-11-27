@@ -282,6 +282,7 @@ public final class WebGameDataBootstrap {
     private static void ensurePackageColumns(WebGame plugin, SqlBackendExecutor sql) {
         String[] sqls = {
                 "ALTER TABLE `eagler-clients` ADD COLUMN `package_id` BIGINT NULL",
+                "ALTER TABLE `eagler-clients` ADD COLUMN `aliases` TEXT NULL",
                 "ALTER TABLE `cloud-clients` ADD COLUMN `package_id` BIGINT NULL"
         };
         for (String statement : sqls) {

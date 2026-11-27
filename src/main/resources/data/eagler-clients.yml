@@ -1,10 +1,11 @@
 # WebGame Eagler 客户端表（YAML 模式）
 # 根节点 = 表名，键 = 主键 id 的 YAML 编码（点号替换为 ·，避免 Bukkit 按路径拆键）。
-# 只记录“引用哪个 client-packages 制品 + 启用 + 排序、协议”；名称/路径/SHA/体积均由制品表解析。
+# 只记录“引用哪个 client-packages 制品 + 别名 + 启用 + 排序、协议”；名称/路径/SHA/体积均由制品表解析。
 eagler-clients:
   '1·12·2':
     id: "1.12.2"
     package_id: "1"
+    aliases: ""
     mc_versions: "1.12.2|340"
     eagler_protocol: 4
     enabled: true

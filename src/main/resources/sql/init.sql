@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS `eagler-clients` (
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `order` INT NOT NULL DEFAULT 0,
   `package_id` BIGINT NULL,
+  `aliases` TEXT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

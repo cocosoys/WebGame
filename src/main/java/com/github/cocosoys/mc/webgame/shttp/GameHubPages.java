@@ -35,6 +35,9 @@ public final class GameHubPages {
     /** 统一入口路径（相对插件页面根，以 / 开头、以 / 结尾）。 */
     public static final String PLAY_PATH = "/play/";
 
+    /** 统一入口完整站内地址（含 /web/plugins/WebGame 前缀；页面链接必须用它）。 */
+    public static final String PLAY_URL = WebGameConfig.WEB_PLUGIN_PREFIX + PLAY_PATH;
+
     private static final String HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 
     private final WebGame plugin;
@@ -90,13 +93,20 @@ public final class GameHubPages {
         } catch (Throwable t) {
             LOG.log(Level.FINE, "登记统一入口目录别名失败 " + PLAY_PATH + ": " + t);
         }
-        // /play（无斜杠）
+        // /play（无斜杠）与 /play/（根路径别名）：玩家直接访问这两个短地址也能进
         try {
             WebRegistry.Entry e = pages.registerProxyPage(plugin,
                     PLAY_PATH.substring(0, PLAY_PATH.length() - 1), bytes, HTML_CONTENT_TYPE);
             tag(e);
         } catch (Throwable t) {
             LOG.log(Level.FINE, "登记统一入口无斜杠别名失败: " + t);
+        }
+        try {
+            WebRegistry.Entry e = pages.registerProxyPage(plugin,
+                    PLAY_PATH, bytes, HTML_CONTENT_TYPE);
+            tag(e);
+        } catch (Throwable t) {
+            LOG.log(Level.FINE, "登记统一入口根路径别名失败: " + t);
         }
     }
 
