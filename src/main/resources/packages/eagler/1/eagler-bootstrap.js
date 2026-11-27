@@ -108,7 +108,7 @@
                 if (document.getElementById("wg_overlay")) return;
                 var ov = document.createElement("div");
                 ov.id = "wg_overlay";
-                ov.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;";
+                ov.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:#070b16;display:flex;align-items:center;justify-content:center;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;";
                 ov.innerHTML = ""
                     + "<div style='color:#fff;font-size:20px;'>正在进入服务器<span id='wg_dots'></span></div>"
                     + "<div style='color:#8a8a8a;font-size:13px;margin-top:10px;'>用户名：" + username + "</div>";
@@ -126,6 +126,10 @@
                 setInterval(buildOverlay2, 1000);
             }
             guardOverlay2();
+            // 兜底：极端情况下 WebSocket 根本没建起来，也不能让玩家永远停在遮罩后。
+            setTimeout(function () {
+                if (window.__wgHideOverlay) window.__wgHideOverlay();
+            }, 25000);
             var n = 0;
             setInterval(function () {
                 n = (n % 3) + 1;
