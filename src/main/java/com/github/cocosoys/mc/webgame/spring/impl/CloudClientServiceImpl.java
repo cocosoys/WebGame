@@ -180,10 +180,6 @@ public class CloudClientServiceImpl implements CloudClientService {
     @Override
     public AjaxResult create(Map<String, Object> body) {
         try {
-            String path = str(body == null ? null : body.get("path")).trim();
-            if (path.isEmpty()) {
-                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
-            }
             String id = "";
             CloudClient c = new CloudClient();
             List<String> aliasOut = new ArrayList<>();
