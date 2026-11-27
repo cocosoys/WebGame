@@ -2,8 +2,9 @@ package com.github.cocosoys.mc.webgame.shttp;
 
 import com.github.cocosoys.mc.soyshttpovermc.api.SoysExpansion;
 import com.github.cocosoys.mc.webgame.WebGame;
+import com.github.cocosoys.mc.webgame.spring.controller.WebGamePlayStatsController;
 
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -45,15 +46,21 @@ public class WebGameExpansion extends SoysExpansion {
 
     @Override
     protected List<Object> buildControllers() {
+        List<Object> controllers = new ArrayList<>();
+        // 玩家入口统计与 ERP 无关：即使没装 MCERP，入口页也要能拉到表内实时数量
+        controllers.add(new WebGamePlayStatsController(plugin));
+
         // 上报端点与 ERP 无关：即使服务器没装 MCERP，云游戏客户端也要能上报
         if (plugin.getCloudClientService() == null || plugin.getCloudPlayService() == null) {
-            return Collections.emptyList();
+            return controllers;
         }
-        return java.util.Arrays.asList(
+        controllers.add(
                 new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudReportController(
-                        plugin, plugin.getCloudClientService()),
-                // 玩家"点一下就能玩"的会话端点（入口页/包装页都打这里）
+                        plugin, plugin.getCloudClientService()));
+        // 玩家"点一下就能玩"的会话端点（入口页/包装页都打这里）
+        controllers.add(
                 new com.github.cocosoys.mc.webgame.spring.controller.WebGameCloudSessionController(
                         plugin.getCloudPlayService()));
+        return controllers;
     }
 }

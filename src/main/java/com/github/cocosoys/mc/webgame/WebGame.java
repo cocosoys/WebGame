@@ -150,7 +150,7 @@ public final class WebGame extends JavaPlugin implements Listener {
             cloudPlayService = new CloudPlayService(this, cloudClientService, clientPackageService);
             cloudClientPages = new CloudClientPages(this, cloudClientService, cloudPlayService);
             // 玩家统一入口：先选方式（云游戏 / eagler），再进各自二级选择页
-            gameHubPages = new GameHubPages(this, clientService, cloudClientService);
+            gameHubPages = new GameHubPages(this);
             playerNamePage = new PlayerNamePage(this);
             // 90s 心跳：启动后立刻校准一轮，之后定时探测（离线阈值见 config.cloud.ttl-seconds）
             cloudClientService.startHeartbeat();
