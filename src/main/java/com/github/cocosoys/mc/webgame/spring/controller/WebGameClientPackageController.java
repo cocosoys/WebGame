@@ -40,13 +40,6 @@ public class WebGameClientPackageController {
         return packageService.update(id, body);
     }
 
-    @ApiName("设置云游戏下发预选")
-    @ApiPermission("webgame.erp.cloudpackages.edit")
-    @PostMapping("/default")
-    public AjaxResult setDefault(@RequestParam(name = "id", required = true) String id) {
-        return packageService.setDefault(id);
-    }
-
     @ApiName("启用/停用客户端制品")
     @ApiPermission("webgame.erp.cloudpackages.edit")
     @PostMapping("/enabled")

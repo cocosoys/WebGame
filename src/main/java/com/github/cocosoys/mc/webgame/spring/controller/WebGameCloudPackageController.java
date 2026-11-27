@@ -41,13 +41,6 @@ public class WebGameCloudPackageController {
         return packageService.update(id, body);
     }
 
-    @ApiName("设置下发预选（兼容）")
-    @ApiPermission("webgame.erp.cloudpackages.edit")
-    @PostMapping("/default")
-    public AjaxResult setDefault(@RequestParam(name = "id", required = true) String id) {
-        return packageService.setDefault(id);
-    }
-
     @ApiName("启用/停用云游戏客户端包（兼容）")
     @ApiPermission("webgame.erp.cloudpackages.edit")
     @PostMapping("/enabled")

@@ -23,7 +23,6 @@ public class ClientPackageVo {
     private boolean enabled;
     private String source;
     private String notes;
-    private boolean preselect;
     private String url;
     /** Eagler 包被多少个客户端条目引用；云游戏包恒为 0。 */
     private int referenceCount;
@@ -51,7 +50,6 @@ public class ClientPackageVo {
         this.enabled = p.isEnabled();
         this.source = p.getSource();
         this.notes = p.getNotes();
-        this.preselect = p.isPreselect();
         this.url = p.getPublicPath();
     }
 
@@ -181,14 +179,6 @@ public class ClientPackageVo {
 
     public void setNotes(String notes) {
         this.notes = notes;
-    }
-
-    public boolean isPreselect() {
-        return preselect;
-    }
-
-    public void setPreselect(boolean preselect) {
-        this.preselect = preselect;
     }
 
     public String getUrl() {

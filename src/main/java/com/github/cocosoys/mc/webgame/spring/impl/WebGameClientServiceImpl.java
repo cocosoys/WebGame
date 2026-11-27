@@ -61,8 +61,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     /** id → 版本（按 id 排序、并发安全）：WS 嗅探器会并发读取准入状态。 */
     private volatile Map<String, ClientVersion> versions = new ConcurrentSkipListMap<>();
     private volatile String defaultId = "";
-    /** 是否允许玩家自行选择版本；关闭时只允许进入默认版本。 */
-    private volatile boolean allowPlayerSelect = true;
 
     public WebGameClientServiceImpl(WebGame plugin) {
         this.plugin = plugin;
@@ -87,7 +85,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("defaultId", defaultId);
-            data.put("allowPlayerSelect", allowPlayerSelect);
+            data.put("allowPlayerSelect", allowPlayerSelect());
             data.put("rows", toVos());
             return AjaxResult.success(data);
         } catch (Throwable t) {
@@ -157,8 +155,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             if (!v.isEnabled()) {
                 return AjaxResult.error("该版本已关闭，无法设为默认");
             }
-            defaultId = id;
-            persistSettings();
+            int minOrder = Integer.MAX_VALUE;
+            for (ClientVersion item : versions.values()) {
+                minOrder = Math.min(minOrder, item.getOrder());
+            }
+            v.setOrder(minOrder == Integer.MAX_VALUE ? 0 : minOrder - 1);
             save();
             publishPages();
             return AjaxResult.success("默认版本已设为 " + id, null);
@@ -184,10 +185,7 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             }
             versions.remove(id);
             store.delete(ClientVersion.class, id);
-            if (id.equals(defaultId)) {
-                defaultId = pickFallbackDefault();
-            }
-            persistSettings();
+            defaultId = pickFallbackDefault();
             publishPages();
             return AjaxResult.success("已删除 " + id, null);
         } catch (Throwable t) {
@@ -231,10 +229,11 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     public AjaxResult setAllowPlayerSelect(boolean allow) {
         try {
             if (!allow && !isServableQuiet(defaultId)) {
-                return AjaxResult.error("默认版本不可用（已关闭或目录缺失），请先切换默认版本");
+                return AjaxResult.error("默认版本不可用（已关闭或目录缺失），请先在列表中调整排序");
             }
-            allowPlayerSelect = allow;
-            persistSettings();
+            if (plugin.getWebGameConfig() != null) {
+                plugin.getWebGameConfig().setEaglerAllowPlayerSelect(allow);
+            }
             save();
             publishPages();
             return AjaxResult.success(allow
@@ -269,10 +268,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             v.setUploadedAt(System.currentTimeMillis());
             v.setMissing(!entryExists(v));
             versions.put(id, v);
-            if (!isServableQuiet(defaultId)) {
-                defaultId = id;
-            }
-            persistSettings();
             save();
             publishPages();
             return AjaxResult.success("已新增 eagler 客户端 " + id, findVo(id));
@@ -458,12 +453,13 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             return false;
         }
         // 禁止自选版本时，新连接只允许默认版本（已建立的会话不受影响）
-        return allowPlayerSelect || id.equals(defaultId);
+        return allowPlayerSelect() || id.equals(defaultId);
     }
 
     @Override
     public boolean allowPlayerSelect() {
-        return allowPlayerSelect;
+        return plugin.getWebGameConfig() == null
+                || plugin.getWebGameConfig().isEaglerAllowPlayerSelect();
     }
 
     @Override
@@ -520,14 +516,8 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             v.setMissing(!entryExists(v));
         }
 
-        String def = plugin.getRuntimeState().getEaglerDefaultId();
-        allowPlayerSelect = plugin.getRuntimeState().isEaglerAllowPlayerSelect();
-        if (!loaded.containsKey(def)) {
-            def = pickFallbackDefault(loaded);
-        }
         this.versions = new ConcurrentSkipListMap<>(loaded);
-        this.defaultId = def;
-        persistSettings();
+        this.defaultId = pickFallbackDefault(loaded);
         save();
     }
 
@@ -537,6 +527,8 @@ public class WebGameClientServiceImpl implements WebGameClientService {
                 v.setMcVersionData(formatMcVersionData(v.getMcVersions()));
                 store.save(v);
             }
+            // 默认项永远取 order 最小的可用记录，不再单独保存默认 id。
+            defaultId = pickFallbackDefault();
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "写入 eagler 客户端数据失败: " + t);
         }
@@ -577,12 +569,6 @@ public class WebGameClientServiceImpl implements WebGameClientService {
             sb.append(option.getVersion()).append('|').append(option.getProtocol());
         }
         return sb.toString();
-    }
-
-    /** 把默认客户端与玩家自选开关写入运行态文件，不再回写 config.yml。 */
-    private void persistSettings() {
-        plugin.getRuntimeState().setEaglerDefaultId(defaultId);
-        plugin.getRuntimeState().setEaglerAllowPlayerSelect(allowPlayerSelect);
     }
 
     /** 首次启用时从 jar 释放内置客户端（已存在则不覆盖，避免抹掉管理员替换的文件）。 */
@@ -875,16 +861,18 @@ public class WebGameClientServiceImpl implements WebGameClientService {
     }
 
     private static String pickFallbackDefault(Map<String, ClientVersion> map) {
-        ClientVersion builtin = map.get(ClientVersion.BUILTIN_ID);
-        if (builtin != null && !builtin.isMissing()) {
-            return ClientVersion.BUILTIN_ID;
-        }
+        ClientVersion best = null;
         for (ClientVersion v : map.values()) {
-            if (v.isEnabled() && !v.isMissing()) {
-                return v.getId();
+            if (!v.isEnabled() || v.isMissing()) {
+                continue;
+            }
+            if (best == null
+                    || v.getOrder() < best.getOrder()
+                    || (v.getOrder() == best.getOrder() && v.getId().compareTo(best.getId()) < 0)) {
+                best = v;
             }
         }
-        return "";
+        return best == null ? "" : best.getId();
     }
 
     private File uploadDir() {

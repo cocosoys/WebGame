@@ -1,7 +1,8 @@
 # WebGame 统一客户端制品表（YAML 模式）
-# 根节点 = 表名；键 = 主键 id。内置 Eagler 制品使用 eagler-1，旧云游戏包迁移为 cloud-1。
+# 根节点 = 表名；键 = SOYS @TableId(AUTO) 的 seq 序号，业务 id 由 seq 生成（eagler-N / cloud-N）。
 client-packages:
-  'eagler-1':
+  '1':
+    seq: 1
     id: "eagler-1"
     package_type: "eagler"
     name: "1.12.2 内置客户端包"

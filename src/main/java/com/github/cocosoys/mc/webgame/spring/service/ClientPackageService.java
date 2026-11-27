@@ -24,19 +24,10 @@ public interface ClientPackageService {
     /** 按 id 找；没有返回 null。 */
     ClientPackage find(String id);
 
-    /** 云游戏“下发预选”制品；没有返回 null。 */
-    ClientPackage preselectPackage();
-
-    /** 兼容旧调用：等同于 {@link #preselectPackage()}。 */
-    ClientPackage defaultPackage();
-
-    /** 预选制品的下载 URL；基址未知或没有制品时返回空串。 */
-    String defaultUrl();
-
     /** 某云游戏制品的下载 URL；基址未知返回空串。 */
     String urlOf(ClientPackage p);
 
-    /** manifest.json 内容；按“默认包仅预选”口径，不再对外自动下发。 */
+    /** manifest.json 内容；不下发默认包，由管理员显式指定期望包。 */
     String manifestJson();
 
     /** ERP 列表；type 可空。 */
@@ -47,12 +38,6 @@ public interface ClientPackageService {
 
     /** 修改名称/版本/解包目录/备注/启用；Eagler 可改入口（必须仍在该包目录内）。 */
     AjaxResult update(String id, Map<String, Object> body);
-
-    /** 设置云游戏下发预选。 */
-    AjaxResult setDefault(String id);
-
-    /** 兼容旧命名：设置云游戏下发预选。 */
-    AjaxResult setPreselect(String id);
 
     /** 启用/停用；被 Eagler 客户端引用的 Eagler 包禁止停用。 */
     AjaxResult setEnabled(String id, boolean enabled);

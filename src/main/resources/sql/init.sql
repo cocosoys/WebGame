@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS `eagler-clients` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `client-packages` (
+  `seq` BIGINT NOT NULL AUTO_INCREMENT,
   `id` VARCHAR(64) NOT NULL,
   `package_type` VARCHAR(16) NOT NULL DEFAULT 'cloud',
   `name` VARCHAR(255) NULL,
@@ -34,11 +35,12 @@ CREATE TABLE IF NOT EXISTS `client-packages` (
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `source` VARCHAR(255) NULL,
   `notes` TEXT NULL,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`seq`),
+  UNIQUE KEY `uk_client_packages_id` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `cloud-clients` (
-  `id` VARCHAR(64) NOT NULL,
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
   `name` VARCHAR(255) NULL,
   `path` TEXT NULL,
   `mc_version` VARCHAR(255) NULL,

@@ -27,8 +27,11 @@ public class ClientPackage {
     public static final String SOURCE_UPLOADED = "uploaded";
     public static final String SOURCE_EXTERNAL = "external";
 
+    /** SOYS 自增序号（YAML 根键 / MySQL seq），只用于生成稳定业务 id。 */
+    @TableId(value = "seq", type = IdType.AUTO)
+    private Long seq;
     /** 服务端生成的稳定 id（如 eagler-1 / cloud-1），不展示给管理员。 */
-    @TableId(value = "id", type = IdType.INPUT)
+    @TableField("id")
     private String id = "";
     /** eagler / cloud。 */
     @TableField("package_type")
@@ -54,9 +57,6 @@ public class ClientPackage {
     private boolean enabled = true;
     private String source = SOURCE_UPLOADED;
     private String notes = "";
-    /** 当前是否“下发预选”（仅云游戏类型有意义；运行时字段，不落库）。 */
-    @TableField(exist = false)
-    private boolean preselect;
 
     public String getId() {
         return id == null ? "" : id;
@@ -64,6 +64,11 @@ public class ClientPackage {
 
     public void setId(String id) {
         this.id = id == null ? "" : id.trim();
+    }
+
+    /** 自增序号；0 表示尚未落库。 */
+    public long getSeq() {
+        return seq == null ? 0L : seq;
     }
 
     /** 对外 JSON 字段名用 type，数据库列名仍是 package_type。 */
@@ -201,14 +206,6 @@ public class ClientPackage {
 
     public void setNotes(String notes) {
         this.notes = notes == null ? "" : notes;
-    }
-
-    public boolean isPreselect() {
-        return preselect;
-    }
-
-    public void setPreselect(boolean preselect) {
-        this.preselect = preselect;
     }
 
     /**

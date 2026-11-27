@@ -13,6 +13,9 @@ import com.github.cocosoys.mc.webgame.spring.entity.CloudClient;
 import com.github.cocosoys.mc.webgame.spring.entity.McVersionOption;
 import com.github.cocosoys.mc.soyshttpovermc.web.DataHandle;
 
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
+
 import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +23,9 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * WebGame 数据初始化：YAML 落到 {@code plugins/WebGame/data}；MySQL 走 SOYS DataSpec。
@@ -61,6 +66,7 @@ public final class WebGameDataBootstrap {
         for (String resource : YAML_FILES) {
             copyIfMissing(plugin, resource);
         }
+        migrateClientPackages(dataDir, plugin);
 
         YamlPojo yaml = new YamlPojo();
         yaml.init(dataDir);
@@ -146,6 +152,64 @@ public final class WebGameDataBootstrap {
             plugin.getLogger().info("已释放默认数据文件: " + target.getPath());
         } catch (Throwable t) {
             plugin.getLogger().warning("释放默认数据文件失败 " + resourcePath + ": " + t);
+        }
+    }
+
+    /**
+     * 旧 client-packages.yml 的根键是 eagler-1/cloud-1 这类业务 id，没有 seq 列。
+     * 改用 @TableId(AUTO) 后，把根键改为数字 seq、保留原业务 id 到 id 字段。
+     * 已有新格式（数字根键 + seq）时直接跳过。
+     */
+    private static void migrateClientPackages(File dataDir, WebGame plugin) {
+        File file = new File(dataDir, "client-packages.yml");
+        if (!file.isFile()) {
+            return;
+        }
+        try {
+            YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
+            ConfigurationSection section = yaml.getConfigurationSection("client-packages");
+            if (section == null || section.getKeys(false).isEmpty()) {
+                return;
+            }
+            boolean needs = false;
+            for (String key : section.getKeys(false)) {
+                ConfigurationSection row = section.getConfigurationSection(key);
+                if (!key.matches("\\d+") || row == null || row.get("seq") == null) {
+                    needs = true;
+                    break;
+                }
+            }
+            if (!needs) {
+                return;
+            }
+
+            List<Map<String, Object>> rows = new ArrayList<>();
+            long seq = 1;
+            for (String key : section.getKeys(false)) {
+                ConfigurationSection row = section.getConfigurationSection(key);
+                if (row == null) {
+                    continue;
+                }
+                Map<String, Object> data = new LinkedHashMap<>(row.getValues(false));
+                String type = String.valueOf(data.get("package_type") == null ? "" : data.get("package_type"));
+                String code = String.valueOf(data.get("id") == null ? "" : data.get("id")).trim();
+                if (code.isEmpty()) {
+                    code = key.matches("\\d+") ? (type.isEmpty() ? "cloud" : type) + "-" + seq : key;
+                }
+                data.put("seq", seq++);
+                data.put("id", code);
+                rows.add(data);
+            }
+            yaml.set("client-packages", null);
+            ConfigurationSection out = yaml.createSection("client-packages");
+            for (Map<String, Object> row : rows) {
+                String key = String.valueOf(row.get("seq"));
+                out.createSection(key, row);
+            }
+            yaml.save(file);
+            plugin.getLogger().info("已迁移 client-packages.yml：业务 id 保留，主键改为 seq 自增序号");
+        } catch (Throwable t) {
+            plugin.getLogger().warning("迁移 client-packages.yml 失败: " + t);
         }
     }
 

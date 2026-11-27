@@ -1,14 +1,17 @@
 # WebGame 可维护配置。
 #
-# 页面路径、WS 路径、回环地址、协议范围、数据后端、默认客户端、
-# 玩家自选开关、客户端制品序号等属于代码常量或内部运行态，
-# 不再放在这里；内部状态见 plugins/WebGame/data/runtime-state.yml。
+# 页面路径、WS 路径、回环地址、协议范围、数据后端、默认客户端与制品序号
+# 都属于代码常量或由数据推导，不再放在这里；默认项取 order 最小的记录。
 tunnel:
   # SERVER_VERSION 帧中的服务器品牌（供客户端显示）；版本号直接取插件自身版本。
   server-brand: "WebGame"
   # 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数（默认 2）。
   # 用于防止单台设备开过多浏览器标签占满服务器名额。
   max-connections-per-device: 2
+eagler:
+  # 是否允许玩家在 /eagler/ 选择页自行选择客户端版本。
+  # false = 直接进入 order 最小的可用版本。
+  allow-player-select: true
 auto-join:
   # 自动进服（服务端口径，页面通过 GET /api/plugins/WebGame/cloud/page-config 读取）：
   #   enabled=true 且本机记住过用户名 → 打开页面直接用记住的名字进服，不再弹框；
@@ -19,6 +22,9 @@ auto-join:
   # 弹框默认用户名，可被 URL 参数覆盖：.../eagler/?user=Tom
   default-username: "WebPlayer"
 cloud:
+  # 是否允许玩家在 /cloud/ 选择页自行选择云游戏设备。
+  # false = 直接进入 order 最小的可用设备。
+  allow-player-select: true
   # 云游戏客户端（cloud-stream）运行态探测周期（秒）。
   # 每轮向 cloud-clients.yml 里登记的设备请求 GET /api/v1/health，
   # 带 Authorization: Bearer <cloud-key>（= stream-server 的 auth_token）。

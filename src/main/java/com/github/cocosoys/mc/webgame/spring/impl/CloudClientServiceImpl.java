@@ -36,7 +36,8 @@ import java.util.logging.Logger;
  * 云游戏客户端管理实现。
  *
  * <p>元数据：{@code cloud-clients.yml}（与 config.yml 同目录）；条目可直接指向
- * 外部 URL 或任意本地文件，不提供上传。id 由服务端自增，删除后不复用。</p>
+ * 外部 URL 或任意本地文件，不提供上传。id 由 SOYS @TableId(AUTO) 生成，
+ * 仅作为库内编号与页面路径，不承担外部永久引用。</p>
  */
 public class CloudClientServiceImpl implements CloudClientService {
 
@@ -50,8 +51,6 @@ public class CloudClientServiceImpl implements CloudClientService {
     /** 按数字 id 排序、并发安全。 */
     private volatile Map<String, CloudClient> clients = new ConcurrentSkipListMap<>();
     private volatile String defaultId = "";
-    private volatile boolean allowPlayerSelect = true;
-    private volatile int nextId = 1;
     /**
      * 客户端包下载的“外部基址”，由 cloud-stream 上报的 {@code report_base} 学习而来。
      * 例：{@code http://192.168.59.129:25574}。空 = 还没收到过新上报，包地址不可用。
@@ -111,7 +110,7 @@ public class CloudClientServiceImpl implements CloudClientService {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("defaultId", defaultId);
-            data.put("allowPlayerSelect", allowPlayerSelect);
+            data.put("allowPlayerSelect", allowPlayerSelect());
             data.put("scope", normalizeScopeValue(scope));
             data.put("rows", toVos(scope));
             return AjaxResult.success(data);
@@ -182,9 +181,8 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (path.isEmpty()) {
                 return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
             }
-            String id = String.valueOf(nextId++);
+            String id = "";
             CloudClient c = new CloudClient();
-            c.setId(id);
             List<String> aliasOut = new ArrayList<>();
             if (body != null && body.containsKey("aliases")) {
                 String err = validateAliases(body.get("aliases"), id, aliasOut);
@@ -203,11 +201,13 @@ public class CloudClientServiceImpl implements CloudClientService {
             c.setOrder(maxOrder() + 1);
             c.setSource(deriveSource(c));
             c.setMissing(!entryExists(c));
-            clients.put(id, c);
-            if (!isServableQuiet(defaultId)) {
-                defaultId = id;
+            // id 由 SOYS @TableId(AUTO) 生成；写入后回读数字 id。
+            store.save(c);
+            id = c.getId();
+            if (id.isEmpty()) {
+                return AjaxResult.error("新增失败：未能生成客户端 id");
             }
-            persistSettings();
+            clients.put(id, c);
             save();
             publishPages();
             return AjaxResult.success("已新增云游戏客户端 " + id, findVo(id));
@@ -288,8 +288,11 @@ public class CloudClientServiceImpl implements CloudClientService {
             if (!c.isEnabled()) {
                 return AjaxResult.error("该客户端已关闭，无法设为默认");
             }
-            defaultId = id;
-            persistSettings();
+            int minOrder = Integer.MAX_VALUE;
+            for (CloudClient item : clients.values()) {
+                minOrder = Math.min(minOrder, item.getOrder());
+            }
+            c.setOrder(minOrder == Integer.MAX_VALUE ? 0 : minOrder - 1);
             save();
             publishPages();
             return AjaxResult.success("默认客户端已设为 " + id, null);
@@ -333,10 +336,7 @@ public class CloudClientServiceImpl implements CloudClientService {
             }
             clients.remove(id);
             store.delete(CloudClient.class, id);
-            if (id.equals(defaultId)) {
-                defaultId = pickFallbackDefault();
-            }
-            persistSettings();
+            defaultId = pickFallbackDefault();
             publishPages();
             com.github.cocosoys.mc.webgame.web.cloud.CloudAdminAudit.log(
                     plugin, "delete", id, c.getName(), "", "success",
@@ -382,10 +382,11 @@ public class CloudClientServiceImpl implements CloudClientService {
     public AjaxResult setAllowPlayerSelect(boolean allow) {
         try {
             if (!allow && !isServableQuiet(defaultId)) {
-                return AjaxResult.error("默认客户端不可用（已关闭或入口缺失），请先切换默认客户端");
+                return AjaxResult.error("默认客户端不可用（已关闭或入口缺失），请先在列表中调整排序");
             }
-            allowPlayerSelect = allow;
-            persistSettings();
+            if (plugin.getWebGameConfig() != null) {
+                plugin.getWebGameConfig().setCloudAllowPlayerSelect(allow);
+            }
             save();
             publishPages();
             return AjaxResult.success(allow
@@ -420,7 +421,8 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     @Override
     public boolean allowPlayerSelect() {
-        return allowPlayerSelect;
+        return plugin.getWebGameConfig() == null
+                || plugin.getWebGameConfig().isCloudAllowPlayerSelect();
     }
 
     @Override
@@ -532,9 +534,7 @@ public class CloudClientServiceImpl implements CloudClientService {
             boolean created = false;
             if (target == null) {
                 // TOFU：首次上报直接登记（内网信任模型；之后以记录的密钥为准）
-                String id = String.valueOf(nextId++);
                 target = new CloudClient();
-                target.setId(id);
                 target.setName(name.isEmpty() ? (ip + ":" + port) : name);
                 target.setEnabled(true);
                 target.setOrder(maxOrder() + 1);
@@ -549,12 +549,15 @@ public class CloudClientServiceImpl implements CloudClientService {
                     applyTlsCert(target, certPem, certSha);
                 }
                 target.setMcVersion(mcVersion);
+                // id 由 SOYS @TableId(AUTO) 生成；写入后回读数字 id。
+                store.save(target);
+                String id = target.getId();
+                if (id.isEmpty()) {
+                    return AjaxResult.error("上报失败：未能生成设备 id");
+                }
                 clients.put(id, target);
                 created = true;
-                if (!isServableQuiet(defaultId)) {
-                    defaultId = id;
-                }
-                persistSettings();
+                save();
             } else {
                 // 已登记设备：密钥必须一致，否则拒绝（只能由管理员 applyKey 覆盖）
                 String recorded = target.getCloudKey();
@@ -1253,15 +1256,6 @@ public class CloudClientServiceImpl implements CloudClientService {
             LOG.log(Level.WARNING, "读取云客户端数据失败: " + t);
         }
 
-        int maxId = 0;
-        for (CloudClient c : loaded.values()) {
-            int n = toInt(c.getId(), 0);
-            if (n > maxId) {
-                maxId = n;
-            }
-        }
-        nextId = Math.max(Math.max(plugin.getRuntimeState().getCloudNextId(), maxId + 1), 1);
-
         for (CloudClient c : loaded.values()) {
             c.setMissing(!entryExists(c));
         }
@@ -1279,14 +1273,8 @@ public class CloudClientServiceImpl implements CloudClientService {
             }
         }
 
-        String def = plugin.getRuntimeState().getCloudDefaultId();
-        allowPlayerSelect = plugin.getRuntimeState().isCloudAllowPlayerSelect();
-        if (!loaded.containsKey(def)) {
-            def = pickFallbackDefault(loaded);
-        }
         this.clients = new ConcurrentSkipListMap<>(loaded);
-        this.defaultId = def;
-        persistSettings();
+        this.defaultId = pickFallbackDefault(loaded);
         save();
     }
 
@@ -1296,6 +1284,8 @@ public class CloudClientServiceImpl implements CloudClientService {
                 c.setAliasesData(formatAliases(c.getAliases()));
                 store.save(c);
             }
+            // 默认设备永远取 order 最小的可用记录，不再单独保存默认 id。
+            defaultId = pickFallbackDefault();
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "写入云客户端数据失败: " + t);
         }
@@ -1330,13 +1320,6 @@ public class CloudClientServiceImpl implements CloudClientService {
             sb.append(alias.trim());
         }
         return sb.toString();
-    }
-
-    /** 把默认设备、玩家自选开关与下一个设备号写入运行态文件，不再回写 config.yml。 */
-    private void persistSettings() {
-        plugin.getRuntimeState().setCloudDefaultId(defaultId);
-        plugin.getRuntimeState().setCloudAllowPlayerSelect(allowPlayerSelect);
-        plugin.getRuntimeState().setCloudNextId(nextId);
     }
 
     // ===== 辅助 =====

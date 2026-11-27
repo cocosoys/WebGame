@@ -4,7 +4,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="客户端管理：统一登记 Eagler 客户端包与云游戏客户端包。Eagler 客户端、云游戏设备都从这里选择制品；云游戏“下发更新”只把这里设置的包作为预选项，不再自动静默下发。"
+      title="客户端管理：统一登记 Eagler 客户端包与云游戏客户端包。Eagler 客户端、云游戏设备都从这里选择制品；云游戏“下发更新”由管理员在弹窗中自行选择包，不再维护预选项。"
       style="margin-bottom: 12px"
     />
 
@@ -43,7 +43,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" align="center" width="285">
+      <el-table-column label="操作" align="center" width="240">
         <template slot-scope="scope">
           <el-button
             v-if="scope.row.source === 'external' && scope.row.externalUrl"
@@ -51,13 +51,6 @@
             size="mini"
             @click="openExternal(scope.row)"
           >打开外链</el-button>
-          <el-button
-            v-if="scope.row.type === 'cloud' && !scope.row.preselect"
-            type="text"
-            size="mini"
-            :disabled="!scope.row.enabled"
-            @click="setPreselect(scope.row)"
-          >设为预选</el-button>
           <el-button type="text" size="mini" @click="openEdit(scope.row)">编辑</el-button>
           <el-button
             type="text"
@@ -175,7 +168,6 @@
 import {
   listClientPackages,
   updateClientPackage,
-  setPreselectClientPackage,
   setClientPackageEnabled,
   deleteClientPackage,
   initClientPackageUpload,
@@ -379,12 +371,6 @@ export default {
         }
         reader.onerror = reject
         reader.readAsDataURL(blob)
-      })
-    },
-    setPreselect(row) {
-      setPreselectClientPackage(row.id).then(() => {
-        this.$message.success('已设为下发预选')
-        this.getList()
       })
     },
     toggleEnabled(row) {

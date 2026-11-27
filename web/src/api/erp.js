@@ -171,10 +171,6 @@ export function updateClientPackage(id, payload) {
   return request({ url: '/erp/client-packages/update', method: 'post', params: { id }, data: payload })
 }
 
-export function setPreselectClientPackage(id) {
-  return request({ url: '/erp/client-packages/default', method: 'post', params: { id } })
-}
-
 export function setClientPackageEnabled(id, enabled) {
   return request({ url: '/erp/client-packages/enabled', method: 'post', params: { id, enabled } })
 }
@@ -216,10 +212,6 @@ export function listCloudPackages() {
 
 export function updateCloudPackage(id, payload) {
   return request({ url: '/erp/cloud-packages/update', method: 'post', params: { id }, data: payload })
-}
-
-export function setDefaultCloudPackage(id) {
-  return request({ url: '/erp/cloud-packages/default', method: 'post', params: { id } })
 }
 
 export function setCloudPackageEnabled(id, enabled) {

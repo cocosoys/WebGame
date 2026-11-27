@@ -35,6 +35,11 @@ export default {
         this.model = data
         this.original = JSON.stringify(this.model)
         this.loading = false
+        // 表单控件（数字框/开关）挂载时可能把 YAML 里的字符串值归一化，
+        // 等首次渲染稳定后再取一次基线，避免刚打开就误报“有未保存修改”。
+        this.$nextTick(() => {
+          this.original = JSON.stringify(this.model)
+        })
       }).catch(() => { this.loading = false })
     },
     save() {

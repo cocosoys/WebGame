@@ -7,8 +7,8 @@ import org.bukkit.plugin.java.JavaPlugin;
  * WebGame 的可维护配置（对应 config.yml）。
  *
  * <p>这里只保留管理员真正需要调整的运行参数。页面路径、WS 路径、回环地址、
- * 协议范围、数据后端、默认客户端、自选开关、制品序号等都属于代码常量或
- * 内部运行态，不再进入 config.yml。</p>
+ * 协议范围、数据后端、默认客户端、制品序号等都属于代码常量或由数据推导，
+ * 不再进入 config.yml；玩家自选开关由管理员在这里控制。</p>
  */
 public final class WebGameConfig {
 
@@ -116,5 +116,27 @@ public final class WebGameConfig {
     /** 同一设备（按来源 IP）最多同时进入游戏的浏览器会话数，默认 2。 */
     public int getMaxConnectionsPerDevice() {
         return maxConnectionsPerDevice;
+    }
+
+    /** 是否允许玩家在 /eagler/ 选择页自行选择客户端版本。 */
+    public boolean isEaglerAllowPlayerSelect() {
+        return plugin.getConfig().getBoolean("eagler.allow-player-select", true);
+    }
+
+    /** 是否允许玩家在 /cloud/ 选择页自行选择云游戏设备。 */
+    public boolean isCloudAllowPlayerSelect() {
+        return plugin.getConfig().getBoolean("cloud.allow-player-select", true);
+    }
+
+    /** 写回 eagler.allow-player-select；ERP 保存后立即生效，并在 config.yml 持久化。 */
+    public void setEaglerAllowPlayerSelect(boolean allow) {
+        plugin.getConfig().set("eagler.allow-player-select", allow);
+        plugin.saveConfig();
+    }
+
+    /** 写回 cloud.allow-player-select；ERP 保存后立即生效，并在 config.yml 持久化。 */
+    public void setCloudAllowPlayerSelect(boolean allow) {
+        plugin.getConfig().set("cloud.allow-player-select", allow);
+        plugin.saveConfig();
     }
 }

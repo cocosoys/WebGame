@@ -60,7 +60,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="云游戏设备的“期望客户端包”只在「更多操作 → 下发更新」时显式选择并回写；客户端管理里的“下发预选”只做弹窗默认值，不会自动静默下发。"
+      title="云游戏设备的“期望客户端包”只在「更多操作 → 下发更新」时由管理员在弹窗中显式选择并回写；系统不会替你预选任何包。"
       style="margin-bottom: 12px"
     />
 
@@ -285,7 +285,7 @@
       </el-form>
       <span slot="footer">
         <el-button size="small" :disabled="pushingId !== ''" @click="pushVisible = false">取消</el-button>
-        <el-button type="primary" size="small" :loading="pushingId !== ''" @click="confirmPush">确认下发</el-button>
+        <el-button type="primary" size="small" :disabled="!pushPackageId" :loading="pushingId !== ''" @click="confirmPush">确认下发</el-button>
       </span>
     </el-dialog>
   </div>
@@ -576,10 +576,8 @@ export default {
     },
     openPush(row) {
       this.pushTarget = row
-      const enabled = this.cloudPackages.filter(p => p.enabled)
-      const preferred = enabled.find(p => p.id === row.packageId)
-      const preselect = enabled.find(p => p.preselect)
-      this.pushPackageId = (preferred || preselect || enabled[0] || {}).id || ''
+      // 不预选任何包：下发哪个版本由管理员在弹窗里显式选择。
+      this.pushPackageId = ''
       this.pushVisible = true
       if (this.cloudPackages.length === 0) this.loadPackages()
     },

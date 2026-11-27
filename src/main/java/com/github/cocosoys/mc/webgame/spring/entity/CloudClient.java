@@ -29,9 +29,9 @@ public class CloudClient {
      */
     public static final String STATUS_DEGRADED = "degraded";
 
-    /** 自增数字 id，同时是页面子路径 /cloud/&lt;id&gt;/。 */
-    @TableId(value = "id", type = IdType.INPUT)
-    private String id = "";
+    /** 自增数字 id，同时是页面子路径 /cloud/&lt;id&gt;/；由 SOYS @TableId(AUTO) 生成。 */
+    @TableId(value = "id", type = IdType.AUTO)
+    private Long id;
     /** 展示名称。 */
     private String name = "";
     /**
@@ -130,15 +130,24 @@ public class CloudClient {
     private String healthReason = "";
 
     public String getId() {
-        return id;
+        return id == null || id <= 0 ? "" : String.valueOf(id);
     }
 
     public void setId(String id) {
-        this.id = id == null ? "" : id;
+        if (id == null || id.trim().isEmpty()) {
+            this.id = null;
+            return;
+        }
+        try {
+            long parsed = Long.parseLong(id.trim());
+            this.id = parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            this.id = null;
+        }
     }
 
     public String getName() {
-        return name == null || name.isEmpty() ? id : name;
+        return name == null || name.isEmpty() ? getId() : name;
     }
 
     public void setName(String name) {

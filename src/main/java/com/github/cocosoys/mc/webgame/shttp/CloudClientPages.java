@@ -568,17 +568,17 @@ public final class CloudClientPages {
         return sb.toString();
     }
 
-    /** 全局默认包已降级为“下发预选”，不再作为页面/自动更新基准；恒为空。 */
+    /** 全局默认包概念已移除（下发版本由管理员按次选择），恒为空。 */
     public String clientPackageVersion() {
         return "";
     }
 
-    /** 全局默认包已降级为“下发预选”，页面不再暴露默认下载地址；恒为空。 */
+    /** 全局默认包概念已移除，页面不再暴露默认下载地址；恒为空。 */
     public String clientPackageUrl() {
         return "";
     }
 
-    /** 全局默认包已降级为“下发预选”，页面不再暴露默认 sha；恒为空。 */
+    /** 全局默认包概念已移除，页面不再暴露默认 sha；恒为空。 */
     public String clientPackageSha() {
         return "";
     }

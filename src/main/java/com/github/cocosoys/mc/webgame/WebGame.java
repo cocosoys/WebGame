@@ -2,7 +2,6 @@ package com.github.cocosoys.mc.webgame;
 
 import com.github.cocosoys.mc.soyshttpovermc.api.event.SoysReadyEvent;
 import com.github.cocosoys.mc.webgame.config.WebGameConfig;
-import com.github.cocosoys.mc.webgame.config.WebGameRuntimeState;
 import com.github.cocosoys.mc.webgame.data.WebGameDataBootstrap;
 import com.github.cocosoys.mc.webgame.data.WebGameDataStore;
 import com.github.cocosoys.mc.webgame.spring.impl.WebGameClientServiceImpl;
@@ -45,8 +44,6 @@ import java.io.File;
 public final class WebGame extends JavaPlugin implements Listener {
 
     private WebGameConfig webGameConfig;
-    /** 内部运行态（默认客户端、自选开关、制品序号、预选），不进入 config.yml。 */
-    private WebGameRuntimeState runtimeState;
     /** 数据层：YAML 或 MySQL，所有实体读写都从这里走。 */
     private WebGameDataStore dataStore;
     private WsGateway wsGateway;
@@ -88,7 +85,6 @@ public final class WebGame extends JavaPlugin implements Listener {
         enabledAt = System.currentTimeMillis();
         saveDefaultConfig();
         webGameConfig = new WebGameConfig(this);
-        runtimeState = new WebGameRuntimeState(this);
 
         if (!Bukkit.getPluginManager().isPluginEnabled("SOYSHTTPOverMC")) {
             getLogger().severe("SOYSHTTPOverMC 未加载，WebGame 无法工作，已禁用自身。");
@@ -397,10 +393,6 @@ public final class WebGame extends JavaPlugin implements Listener {
 
     public WebGameConfig getWebGameConfig() {
         return webGameConfig;
-    }
-
-    public WebGameRuntimeState getRuntimeState() {
-        return runtimeState;
     }
 
     public WebGameDataStore getDataStore() {

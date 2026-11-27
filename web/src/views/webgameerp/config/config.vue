@@ -9,7 +9,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="本页只保留管理员可维护的运行参数；页面路径、协议、默认客户端与内部编号不在 config.yml 中。"
+        title="本页只保留管理员可维护的运行参数；页面路径、协议、默认项与内部编号不在 config.yml 中，默认项取排序最小的记录。"
         style="margin-bottom: 14px"
       />
 
@@ -24,6 +24,17 @@
           <el-form-item label="每设备并发上限">
             <el-input-number v-model="model.tunnel['max-connections-per-device']" :min="1" :max="64" controls-position="right" />
             <div class="hint">同一来源 IP 最多同时进入游戏的浏览器会话数，防止单设备占满名额。</div>
+          </el-form-item>
+        </el-form>
+      </el-card>
+
+      <!-- ============ Eagler 入口 ============ -->
+      <el-card shadow="never" class="mb">
+        <div slot="header">Eagler 入口 (eagler)</div>
+        <el-form label-width="170px" size="small">
+          <el-form-item label="允许玩家自选版本">
+            <el-switch v-model="model.eagler['allow-player-select']" />
+            <div class="hint">开启后玩家在 /eagler/ 选择页自行挑版本；关闭后直接进入排序最小的可用版本。</div>
           </el-form-item>
         </el-form>
       </el-card>
@@ -85,6 +96,10 @@
       <el-card shadow="never" class="mb">
         <div slot="header">云游戏页面与会话 (cloud.relay / heartbeat / progress)</div>
         <el-form label-width="170px" size="small">
+          <el-form-item label="允许玩家自选设备">
+            <el-switch v-model="model.cloud['allow-player-select']" />
+            <div class="hint">开启后玩家在 /cloud/ 选择页自行挑设备；关闭后直接进入排序最小的可用设备。</div>
+          </el-form-item>
           <el-form-item label="同端口转播">
             <el-switch v-model="model.cloud['same-port-relay']" />
             <div class="hint">开启后 URL 客户端的页面/资源/WebSocket 经 MC 端口转播，玩家不必直连云主机端口。</div>
@@ -174,8 +189,10 @@ export default {
       helpMap: {
         '服务器品牌': 'tunnel.server-brand：SERVER_VERSION 帧中的服务器品牌，供客户端显示；版本号取插件自身版本。',
         '每设备并发上限': 'tunnel.max-connections-per-device：同一来源 IP 最多同时进入游戏的浏览器会话数。',
+        '允许玩家自选版本': 'eagler.allow-player-select：开启玩家在 /eagler/ 自选版本；关闭直接进入排序最小的可用版本。',
         '启用自动进服': 'auto-join.enabled：记住过游戏名的浏览器打开页面即自动进服；没记过则弹框预填默认用户名。',
         '默认用户名': 'auto-join.default-username：只在没有记住游戏名时预填输入框，不是公共登录名（离线模式同名互踢）。',
+        '允许玩家自选设备': 'cloud.allow-player-select：开启玩家在 /cloud/ 自选设备；关闭直接进入排序最小的可用设备。',
         '探测周期（秒）': 'cloud.heartbeat-seconds：每轮请求登记设备 GET /api/v1/health 的周期。',
         '离线阈值（秒）': 'cloud.ttl-seconds：最近一次成功探测超过该时长才判离线，默认 3 个周期。',
         '探测超时（毫秒）': 'cloud.probe-timeout-ms：单次探测连接/读取超时，范围 500–15000。',
@@ -233,11 +250,15 @@ export default {
       setDefault(tunnel, 'server-brand', 'WebGame')
       setDefault(tunnel, 'max-connections-per-device', 2)
 
+      const eagler = ensure(d, 'eagler')
+      setDefault(eagler, 'allow-player-select', true)
+
       const autoJoin = ensure(d, 'auto-join')
       setDefault(autoJoin, 'enabled', true)
       setDefault(autoJoin, 'default-username', 'WebPlayer')
 
       const cloud = ensure(d, 'cloud')
+      setDefault(cloud, 'allow-player-select', true)
       setDefault(cloud, 'heartbeat-seconds', 90)
       setDefault(cloud, 'ttl-seconds', 270)
       setDefault(cloud, 'probe-timeout-ms', 3000)

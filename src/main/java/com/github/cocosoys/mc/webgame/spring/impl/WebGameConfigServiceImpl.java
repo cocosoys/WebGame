@@ -22,7 +22,8 @@ import java.util.Map;
  * <p>读写全部复用平台层：{@link PlatformYaml#load}/{@link PlatformYaml#save}
  * （统一接管编码差异，低版本 UTF-8 不乱码）+ {@link ConfigUtil#toMap}/{@link ConfigUtil#toYaml}
  * （YAML ↔ Map 递归转换）。本实现不做任何文件层解析，不绑定具体版本。
- * 全量写回（注释不保留）；隧道/页面参数在插件启用时装配，故提示重启服务器生效。</p>
+ * 全量写回（注释不保留）；两个自选开关由服务实时读 config，其余参数在插件启用时装配，
+ * 故提示重启服务器生效。</p>
  */
 public class WebGameConfigServiceImpl implements WebGameConfigService {
 
@@ -80,7 +81,7 @@ public class WebGameConfigServiceImpl implements WebGameConfigService {
             PlatformYaml.save(ConfigUtil.toYaml(data), file);
             plugin.reloadConfig();
             return AjaxResult.success(WebGameConfigSaveVo.of(f.getFile(),
-                    "已保存。隧道/页面参数在插件启用时装配，请重启服务器后生效"));
+                    "已保存。两个「允许玩家自选」开关即时生效；其余参数在插件启用时装配，请重启服务器后生效"));
         } catch (Throwable t) {
             return AjaxResult.error("配置保存失败：" + t.getMessage());
         }

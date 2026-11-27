@@ -54,9 +54,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     private final WebGameDataStore store;
     private final Map<String, ClientPackage> packages = new ConcurrentHashMap<>();
     private final Map<String, UploadSession> uploads = new ConcurrentHashMap<>();
-    private volatile String preselectId = "";
-    private volatile int nextEaglerId = 1;
-    private volatile int nextCloudId = 1;
 
     public ClientPackageServiceImpl(WebGame plugin) {
         this.plugin = plugin;
@@ -82,7 +79,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         List<ClientPackage> list = new ArrayList<>();
         for (ClientPackage p : packages.values()) {
             if (want.isEmpty() || want.equals(p.getType())) {
-                p.setPreselect(p.isCloud() && p.getId().equals(preselectId));
                 list.add(p);
             }
         }
@@ -99,25 +95,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     @Override
     public ClientPackage find(String id) {
         return id == null ? null : packages.get(id.trim());
-    }
-
-    @Override
-    public ClientPackage preselectPackage() {
-        ClientPackage p = find(preselectId);
-        if (p != null && p.isCloud() && p.isEnabled()) {
-            return p;
-        }
-        for (ClientPackage pkg : packages(ClientPackage.TYPE_CLOUD)) {
-            if (pkg.isEnabled()) {
-                return pkg;
-            }
-        }
-        return null;
-    }
-
-    @Override
-    public ClientPackage defaultPackage() {
-        return preselectPackage();
     }
 
     @Override
@@ -142,13 +119,8 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     }
 
     @Override
-    public String defaultUrl() {
-        return urlOf(preselectPackage());
-    }
-
-    @Override
     public String manifestJson() {
-        // “默认包只作为下发更新的预选项”：不再通过 manifest 让代理自动拉包。
+        // 不再存在全局默认包：代理只能收到管理员显式下发的期望包，manifest 不含默认包。
         return "{\"enabled\":false,\"version\":\"\",\"package\":\"\",\"size\":0,\"files\":0,"
                 + "\"sha256\":\"\",\"targetDir\":\"\",\"url\":\"\"}";
     }
@@ -160,8 +132,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("rows", rows);
             data.put("packages", rows);
-            data.put("preselectId", preselectId);
-            data.put("defaultId", preselectId); // 兼容旧前端/接口命名
             return AjaxResult.success(data);
         } catch (Throwable t) {
             return AjaxResult.error("客户端制品查询失败：" + t.getMessage());
@@ -239,28 +209,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     }
 
     @Override
-    public AjaxResult setDefault(String id) {
-        ClientPackage p = find(id);
-        if (p == null) {
-            return AjaxResult.error("制品不存在：" + id);
-        }
-        if (!p.isCloud()) {
-            return AjaxResult.error("只有云游戏客户端包可以设为下发预选");
-        }
-        if (!p.isEnabled()) {
-            return AjaxResult.error("停用的制品不能设为下发预选");
-        }
-        preselectId = p.getId();
-        persistSettings();
-        return AjaxResult.success("已设为下发预选：" + p.getName());
-    }
-
-    @Override
-    public AjaxResult setPreselect(String id) {
-        return setDefault(id);
-    }
-
-    @Override
     public AjaxResult setEnabled(String id, boolean enabled) {
         ClientPackage p = find(id);
         if (p == null) {
@@ -274,10 +222,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
         p.setEnabled(enabled);
         store.save(p);
-        if (!enabled && id.equals(preselectId)) {
-            preselectId = "";
-            persistSettings();
-        }
         refreshPages();
         return AjaxResult.success(enabled ? "已启用" : "已停用");
     }
@@ -310,17 +254,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 }
             }
             packages.remove(id);
-            store.delete(ClientPackage.class, id);
-            if (id.equals(preselectId)) {
-                preselectId = "";
-                for (ClientPackage candidate : packages(ClientPackage.TYPE_CLOUD)) {
-                    if (candidate.isEnabled()) {
-                        preselectId = candidate.getId();
-                        break;
-                    }
-                }
-                persistSettings();
-            }
+            store.delete(ClientPackage.class, p.getSeq());
             if (p.isCloud() && plugin.getCloudClientService() != null) {
                 plugin.getCloudClientService().clearPackageReference(id);
             }
@@ -432,6 +366,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
         File moved = null;
         File createdDir = null;
+        ClientPackage created = null;
         try {
             if (!session.part.isFile() || session.part.length() == 0) {
                 deleteQuietly(session.part);
@@ -445,37 +380,44 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             long uploadedSize = session.part.length();
             if (ClientPackage.TYPE_CLOUD.equals(session.type)) {
                 int files = validateCloudZip(session.part);
-                String id = "cloud-" + nextCloudId++;
+                ClientPackage p = new ClientPackage();
+                p.setType(ClientPackage.TYPE_CLOUD);
+                p.setName(session.name);
+                p.setVersion(session.version);
+                p.setTargetDir(session.targetDir);
+                p.setSha256(sha);
+                p.setSize(uploadedSize);
+                p.setFiles(files);
+                p.setUploadedAt(now());
+                p.setEnabled(true);
+                p.setSource(ClientPackage.SOURCE_UPLOADED);
+                // 先落元数据拿 AUTO 序号，再用序号生成 cloud-N 与文件目录。
+                String id = assignBusinessId(p);
+                created = p;
                 File dir = new File(packagesDir(), "cloud/" + id);
                 ensureDir(dir);
                 File target = new File(dir, session.fileName);
                 Files.move(session.part.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 moved = target;
-                ClientPackage p = new ClientPackage();
-                p.setId(id);
-                p.setType(ClientPackage.TYPE_CLOUD);
-                p.setName(session.name);
-                p.setVersion(session.version);
-                p.setTargetDir(session.targetDir);
                 p.setFile("cloud/" + id + "/" + session.fileName);
-                p.setSha256(sha);
                 p.setSize(target.length());
-                p.setFiles(files);
-                p.setUploadedAt(now());
-                p.setEnabled(true);
-                p.setSource(ClientPackage.SOURCE_UPLOADED);
-                packages.put(id, p);
                 store.save(p);
-                if (preselectId.isEmpty()) {
-                    preselectId = id;
-                    persistSettings();
-                }
-                persistNextIds();
+                packages.put(id, p);
                 refreshPages();
                 return AjaxResult.success("云游戏客户端包已上传：" + p.getName(), vo(p));
             }
 
-            String id = "eagler-" + nextEaglerId++;
+            ClientPackage p = new ClientPackage();
+            p.setType(ClientPackage.TYPE_EAGLER);
+            p.setName(session.name);
+            p.setVersion(session.version);
+            p.setSha256(sha);
+            p.setSize(uploadedSize);
+            p.setUploadedAt(now());
+            p.setEnabled(true);
+            p.setSource(ClientPackage.SOURCE_UPLOADED);
+            String id = assignBusinessId(p);
+            created = p;
             File dir = new File(packagesDir(), "eagler/" + id);
             ensureDir(dir);
             createdDir = dir;
@@ -486,8 +428,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 entry = findEaglerEntry(dir);
                 deleteQuietly(session.part);
                 if (entry.isEmpty()) {
-                    deleteRecursively(dir);
-                    return AjaxResult.error("Eagler 压缩包里找不到 index.html 或唯一的 .html 入口");
+                    throw new IllegalStateException("Eagler 压缩包里找不到 index.html 或唯一的 .html 入口");
                 }
             } else {
                 File target = new File(dir, session.fileName);
@@ -496,22 +437,11 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 entry = session.fileName;
                 files = 1;
             }
-            ClientPackage p = new ClientPackage();
-            p.setId(id);
-            p.setType(ClientPackage.TYPE_EAGLER);
-            p.setName(session.name);
-            p.setVersion(session.version);
             p.setFile("eagler/" + id);
             p.setEntryPath(entry);
-            p.setSha256(sha);
-            p.setSize(uploadedSize);
             p.setFiles(files);
-            p.setUploadedAt(now());
-            p.setEnabled(true);
-            p.setSource(ClientPackage.SOURCE_UPLOADED);
-            packages.put(id, p);
             store.save(p);
-            persistNextIds();
+            packages.put(id, p);
             refreshPages();
             return AjaxResult.success("Eagler 客户端包已上传：" + p.getName(), vo(p));
         } catch (Throwable t) {
@@ -521,9 +451,28 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             if (createdDir != null) {
                 deleteRecursively(createdDir);
             }
+            if (created != null && created.getSeq() > 0) {
+                store.delete(ClientPackage.class, created.getSeq());
+            }
             deleteQuietly(session.part);
             return AjaxResult.error("上传完成失败：" + t.getMessage());
         }
+    }
+
+    /**
+     * 落元数据并用 SOYS AUTO 序号生成业务 id：Eagler → eagler-N，云游戏 → cloud-N。
+     * 序号由 ORM 分配，不再维护 next-*-number 计数器。
+     */
+    private String assignBusinessId(ClientPackage p) {
+        if (!store.save(p) || p.getSeq() <= 0) {
+            throw new IllegalStateException("客户端包元数据写入失败：未生成自增序号");
+        }
+        String id = (p.isEagler() ? "eagler-" : "cloud-") + p.getSeq();
+        p.setId(id);
+        if (!store.save(p)) {
+            throw new IllegalStateException("客户端包业务 id 写入失败：" + id);
+        }
+        return id;
     }
 
     @Override
@@ -546,9 +495,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             if (name.isEmpty()) {
                 return AjaxResult.error("请填写客户端名称");
             }
-            String id = "eagler-" + nextEaglerId++;
             ClientPackage p = new ClientPackage();
-            p.setId(id);
             p.setType(ClientPackage.TYPE_EAGLER);
             p.setName(name);
             p.setVersion(str(body == null ? null : body.get("version")).trim());
@@ -557,9 +504,8 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setSource(ClientPackage.SOURCE_EXTERNAL);
             p.setEnabled(body == null || body.get("enabled") == null || toBool(body.get("enabled"), true));
             p.setUploadedAt(now());
+            String id = assignBusinessId(p);
             packages.put(id, p);
-            store.save(p);
-            persistNextIds();
             refreshPages();
             return AjaxResult.success("已登记外链客户端：" + name, vo(p));
         } catch (Throwable t) {
@@ -589,20 +535,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             importLegacyCloudPackages();
             seedLegacyZip();
         }
-        preselectId = plugin.getRuntimeState().getPackagePreselectCloudId();
-        if (preselectId.isEmpty() || !isUsablePreselect(preselectId)) {
-            preselectId = "";
-            for (ClientPackage p : packages(ClientPackage.TYPE_CLOUD)) {
-                if (p.isEnabled()) {
-                    preselectId = p.getId();
-                    break;
-                }
-            }
-        }
-        nextEaglerId = Math.max(plugin.getRuntimeState().getPackageNextEaglerId(), maxSuffix(ClientPackage.TYPE_EAGLER) + 1);
-        nextCloudId = Math.max(plugin.getRuntimeState().getPackageNextCloudId(), maxSuffix(ClientPackage.TYPE_CLOUD) + 1);
-        persistSettings();
-        persistNextIds();
         refreshPages();
     }
 
@@ -642,10 +574,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
         try {
             YamlConfiguration y = YamlConfiguration.loadConfiguration(meta);
-            String legacyDefault = y.getString("default-id", "");
-            int storedNext = y.getInt("next-id", 1);
             ConfigurationSection sec = y.getConfigurationSection("packages");
-            int max = 0;
             if (sec != null) {
                 for (String oldId : sec.getKeys(false)) {
                     ConfigurationSection c = sec.getConfigurationSection(oldId);
@@ -653,8 +582,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                         continue;
                     }
                     ClientPackage p = new ClientPackage();
-                    String id = "cloud-" + sanitizeLegacyId(oldId);
-                    p.setId(id);
                     p.setType(ClientPackage.TYPE_CLOUD);
                     p.setName(c.getString("name", "旧云游戏客户端包"));
                     p.setVersion(c.getString("version", DEFAULT_TARGET_DIR));
@@ -667,17 +594,10 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                     p.setEnabled(c.getBoolean("enabled", true));
                     p.setNotes(c.getString("notes", ""));
                     p.setSource(ClientPackage.SOURCE_UPLOADED);
+                    // AUTO 序号生成 cloud-N，不再沿用旧文件的 next-id/default-id。
+                    String id = assignBusinessId(p);
                     packages.put(id, p);
-                    store.save(p);
-                    max = Math.max(max, suffix(id));
-                    if (oldId.equals(legacyDefault)) {
-                        preselectId = id;
-                    }
                 }
-            }
-            nextCloudId = Math.max(storedNext, max + 1);
-            if (!preselectId.isEmpty()) {
-                persistSettings();
             }
             plugin.getLogger().info("已迁移旧云游戏客户端包元数据 " + LEGACY_META_FILE + " → client-packages");
         } catch (Throwable t) {
@@ -693,7 +613,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
         try {
             ClientPackage p = new ClientPackage();
-            p.setId("cloud-1");
             p.setType(ClientPackage.TYPE_CLOUD);
             p.setName("旧 cloud-client.zip");
             p.setVersion(DEFAULT_TARGET_DIR);
@@ -705,27 +624,12 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setUploadedAt(now());
             p.setEnabled(true);
             p.setSource(ClientPackage.SOURCE_UPLOADED);
-            packages.put(p.getId(), p);
-            store.save(p);
-            if (preselectId.isEmpty()) {
-                preselectId = p.getId();
-            }
-            nextCloudId = Math.max(nextCloudId, 2);
-            persistSettings();
-            persistNextIds();
-            plugin.getLogger().info("已把既有 packages/cloud-client.zip 登记为云游戏客户端包 cloud-1");
+            String id = assignBusinessId(p);
+            packages.put(id, p);
+            plugin.getLogger().info("已把既有 packages/cloud-client.zip 登记为云游戏客户端包 " + id);
         } catch (Throwable t) {
             LOG.log(Level.WARNING, "登记既有 cloud-client.zip 失败: " + t);
         }
-    }
-
-    private void persistSettings() {
-        plugin.getRuntimeState().setPackagePreselectCloudId(preselectId);
-    }
-
-    private void persistNextIds() {
-        plugin.getRuntimeState().setPackageNextEaglerId(nextEaglerId);
-        plugin.getRuntimeState().setPackageNextCloudId(nextCloudId);
     }
 
     private void refreshPages() {
@@ -779,11 +683,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                     + " 个 Eagler 客户端引用，不能停用";
         }
         return "";
-    }
-
-    private boolean isUsablePreselect(String id) {
-        ClientPackage p = find(id);
-        return p != null && p.isCloud() && p.isEnabled();
     }
 
     private void normalize(ClientPackage p) {
@@ -1099,16 +998,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
         }
         String u = url.trim().toLowerCase();
         return u.startsWith("http://") || u.startsWith("https://");
-    }
-
-    private int maxSuffix(String type) {
-        int max = 0;
-        for (ClientPackage p : packages.values()) {
-            if (type.equals(p.getType())) {
-                max = Math.max(max, suffix(p.getId()));
-            }
-        }
-        return max;
     }
 
     private static int suffix(String id) {
