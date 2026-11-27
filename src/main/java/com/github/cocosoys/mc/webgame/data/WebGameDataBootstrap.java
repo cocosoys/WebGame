@@ -70,6 +70,17 @@ public final class WebGameDataBootstrap {
 
         YamlPojo yaml = new YamlPojo();
         yaml.init(dataDir);
+        ClientPackage builtinPkg = null;
+        for (ClientPackage p : yaml.select(ClientPackage.class)) {
+            if (p != null && ClientPackage.SOURCE_BUILTIN.equals(p.getSource())) {
+                builtinPkg = p;
+                break;
+            }
+        }
+        if (builtinPkg == null) {
+            builtinPkg = builtinPackage();
+            yaml.updateById(builtinPkg);
+        }
         boolean hasValidClient = false;
         for (ClientVersion v : yaml.select(ClientVersion.class)) {
             if (v != null && v.getId() != null && !v.getId().trim().isEmpty()) {
@@ -78,17 +89,7 @@ public final class WebGameDataBootstrap {
             }
         }
         if (!hasValidClient) {
-            yaml.updateById(builtinClient());
-        }
-        boolean hasBuiltinPackage = false;
-        for (ClientPackage p : yaml.select(ClientPackage.class)) {
-            if (p != null && builtinPackage().getId().equals(p.getId())) {
-                hasBuiltinPackage = true;
-                break;
-            }
-        }
-        if (!hasBuiltinPackage) {
-            yaml.updateById(builtinPackage());
+            yaml.updateById(builtinClient(builtinPkg.getId()));
         }
         plugin.getLogger().info("WebGame 数据模式: YAML（" + dataDir.getPath() + "）");
         return new WebGameDataStore(WebGameDataStore.Mode.YAML, yaml);
@@ -122,7 +123,7 @@ public final class WebGameDataBootstrap {
         spec.setDataRoots(null); // 不把 YAML 默认文件复制到 SOYS 的全局 data
         spec.setSqlRoots(new String[]{"sql"});
         spec.setTableClasses(new Class<?>[]{ClientVersion.class, CloudClient.class, ClientPackage.class});
-        spec.setSeedData(Arrays.asList(builtinClient(), builtinPackage()));
+        spec.setSeedData(Arrays.asList(builtinPackage(), builtinClient("1")));
         DataHandle handle = api.getDataRegistration().register(plugin, spec);
         if (handle == null) {
             throw new IllegalStateException("WebGame MySQL 数据表登记失败（检查 SOYS auto.ops 与 MySQL 配置）");
@@ -156,9 +157,9 @@ public final class WebGameDataBootstrap {
     }
 
     /**
-     * 旧 client-packages.yml 的根键是 eagler-1/cloud-1 这类业务 id，没有 seq 列。
-     * 改用 @TableId(AUTO) 后，把根键改为数字 seq、保留原业务 id 到 id 字段。
-     * 已有新格式（数字根键 + seq）时直接跳过。
+     * 把旧 client-packages.yml 统一成“数字主键”格式：
+     * 根键 eagler-1/cloud-1 或旧的 seq 列都会改写为纯数字 id，不再保留业务编号。
+     * 同时把 eagler-clients / cloud-clients 里的 package_id 引用改到新数字 id。
      */
     private static void migrateClientPackages(File dataDir, WebGame plugin) {
         File file = new File(dataDir, "client-packages.yml");
@@ -174,7 +175,16 @@ public final class WebGameDataBootstrap {
             boolean needs = false;
             for (String key : section.getKeys(false)) {
                 ConfigurationSection row = section.getConfigurationSection(key);
-                if (!key.matches("\\d+") || row == null || row.get("seq") == null) {
+                if (row == null) {
+                    continue;
+                }
+                Object id = row.get("id");
+                String source = row.getString("source", "");
+                String fileValue = row.getString("file", "");
+                if (!key.matches("\\d+")
+                        || row.get("seq") != null
+                        || id == null || !String.valueOf(id).matches("\\d+")
+                        || ("builtin".equals(source) && fileValue.startsWith("eagler-clients/"))) {
                     needs = true;
                     break;
                 }
@@ -183,41 +193,96 @@ public final class WebGameDataBootstrap {
                 return;
             }
 
+            Map<String, String> remap = new LinkedHashMap<>();
+            java.util.Set<Long> used = new java.util.HashSet<>();
+            for (String key : section.getKeys(false)) {
+                if (key.matches("\\d+")) {
+                    used.add(Long.parseLong(key));
+                }
+            }
+            long next = 1;
             List<Map<String, Object>> rows = new ArrayList<>();
-            long seq = 1;
             for (String key : section.getKeys(false)) {
                 ConfigurationSection row = section.getConfigurationSection(key);
                 if (row == null) {
                     continue;
                 }
                 Map<String, Object> data = new LinkedHashMap<>(row.getValues(false));
-                String type = String.valueOf(data.get("package_type") == null ? "" : data.get("package_type"));
-                String code = String.valueOf(data.get("id") == null ? "" : data.get("id")).trim();
-                if (code.isEmpty()) {
-                    code = key.matches("\\d+") ? (type.isEmpty() ? "cloud" : type) + "-" + seq : key;
+                long id;
+                if (key.matches("\\d+")) {
+                    id = Long.parseLong(key);
+                } else {
+                    while (used.contains(next)) {
+                        next++;
+                    }
+                    id = next++;
+                    used.add(id);
                 }
-                data.put("seq", seq++);
-                data.put("id", code);
+                String oldCode = String.valueOf(data.get("id") == null ? "" : data.get("id")).trim();
+                if (!oldCode.isEmpty()) {
+                    remap.put(oldCode, String.valueOf(id));
+                }
+                remap.put(key, String.valueOf(id));
+                data.remove("seq");
+                data.put("id", id);
+                String source = String.valueOf(data.get("source") == null ? "" : data.get("source"));
+                String stored = String.valueOf(data.get("file") == null ? "" : data.get("file"));
+                if ("builtin".equals(source) && stored.startsWith("eagler-clients/")) {
+                    data.put("file", "eagler/" + id);
+                }
                 rows.add(data);
             }
             yaml.set("client-packages", null);
             ConfigurationSection out = yaml.createSection("client-packages");
             for (Map<String, Object> row : rows) {
-                String key = String.valueOf(row.get("seq"));
-                out.createSection(key, row);
+                out.createSection(String.valueOf(row.get("id")), row);
             }
             yaml.save(file);
-            plugin.getLogger().info("已迁移 client-packages.yml：业务 id 保留，主键改为 seq 自增序号");
+
+            rewritePackageRefs(new File(dataDir, "eagler-clients.yml"), "eagler-clients", remap);
+            rewritePackageRefs(new File(dataDir, "cloud-clients.yml"), "cloud-clients", remap);
+            plugin.getLogger().info("已迁移 client-packages.yml：主键统一为 AUTO 数字 id，并更新引用");
         } catch (Throwable t) {
             plugin.getLogger().warning("迁移 client-packages.yml 失败: " + t);
+        }
+    }
+
+    /** 把表内 package_id 的旧业务编号替换为新的数字 id；只改引用，不动其它列。 */
+    private static void rewritePackageRefs(File file, String table, Map<String, String> remap) {
+        if (!file.isFile() || remap.isEmpty()) {
+            return;
+        }
+        try {
+            YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
+            ConfigurationSection section = yaml.getConfigurationSection(table);
+            if (section == null) {
+                return;
+            }
+            boolean changed = false;
+            for (String key : section.getKeys(false)) {
+                ConfigurationSection row = section.getConfigurationSection(key);
+                if (row == null) {
+                    continue;
+                }
+                String ref = row.getString("package_id", "");
+                if (!ref.isEmpty() && remap.containsKey(ref)) {
+                    row.set("package_id", remap.get(ref));
+                    changed = true;
+                }
+            }
+            if (changed) {
+                yaml.save(file);
+            }
+        } catch (Throwable ignored) {
+            // 引用文件损坏不应阻断启动；后续由服务层的 missing 判定兜底。
         }
     }
 
     /** 已有 MySQL 表补列；重复列错误直接忽略（新库由 init.sql 直接建好）。 */
     private static void ensurePackageColumns(WebGame plugin, SqlBackendExecutor sql) {
         String[] sqls = {
-                "ALTER TABLE `eagler-clients` ADD COLUMN `package_id` VARCHAR(64) NULL",
-                "ALTER TABLE `cloud-clients` ADD COLUMN `package_id` VARCHAR(64) NULL"
+                "ALTER TABLE `eagler-clients` ADD COLUMN `package_id` BIGINT NULL",
+                "ALTER TABLE `cloud-clients` ADD COLUMN `package_id` BIGINT NULL"
         };
         for (String statement : sqls) {
             try {
@@ -274,11 +339,11 @@ public final class WebGameDataBootstrap {
         return out;
     }
 
-    public static ClientVersion builtinClient() {
+    /** 内置 Eagler 客户端条目：只保留版本 id、制品引用、协议与排序。 */
+    public static ClientVersion builtinClient(String packageId) {
         ClientVersion v = new ClientVersion();
         v.setId(ClientVersion.BUILTIN_ID);
-        v.setName("1.12.2 内置客户端");
-        v.setPath("eagler-clients/" + ClientVersion.BUILTIN_ID + "/index.html");
+        v.setPackageId(packageId == null ? "" : packageId);
         List<McVersionOption> versions = new ArrayList<>();
         McVersionOption option = McVersionOption.of(ClientVersion.BUILTIN_ID, 340);
         versions.add(option);
@@ -287,26 +352,21 @@ public final class WebGameDataBootstrap {
         v.setEaglerProtocol(4);
         v.setEnabled(true);
         v.setOrder(0);
-        v.setSource(ClientVersion.SOURCE_BUILTIN);
-        v.setPackageId("eagler-1");
-        v.setSha256("");
-        v.setSize(0L);
-        v.setUploadedAt(0L);
         return v;
     }
 
-    /** 内置 Eagler 制品：不复制文件，入口仍指向 eagler-clients/1.12.2/index.html。 */
+    /** 内置 Eagler 制品：文件由首次启动从 jar 释放到 packages/eagler/&lt;id&gt;/。 */
     public static ClientPackage builtinPackage() {
         ClientPackage p = new ClientPackage();
-        p.setId("eagler-1");
         p.setType(ClientPackage.TYPE_EAGLER);
         p.setName("1.12.2 内置客户端包");
         p.setVersion(ClientVersion.BUILTIN_ID);
-        p.setFile("eagler-clients/" + ClientVersion.BUILTIN_ID);
+        p.setFile("eagler/1");
         p.setEntryPath("index.html");
         p.setSource(ClientPackage.SOURCE_BUILTIN);
         p.setEnabled(true);
         p.setUploadedAt("");
+        p.setNotes("随插件内置的 Eagler 1.12.2 客户端");
         return p;
     }
 }

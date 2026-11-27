@@ -7,10 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Eaglercraft 客户端版本管理：列表、开关、默认版本、删除、排序、分块上传。
+ * Eaglercraft 客户端入口管理：列表、开关、默认版本、删除、排序。
  *
- * <p>版本文件落在 {@code plugins/WebGame/eagler-clients/<id>/index.html}，元数据集中在
- * {@code plugins/WebGame/eagler-clients.yml}；页面登记由 {@code WebGameClientPages} 消费本服务的版本列表。</p>
+ * <p>文件与名称/SHA/体积统一由 {@code client-packages} 持有；本表只记录
+ * “哪个版本入口引用哪个制品、是否启用、排序”。</p>
  */
 public interface WebGameClientService {
 
@@ -38,20 +38,8 @@ public interface WebGameClientService {
     /** 新增一个 eagler 客户端条目（body: id/name/path/mcVersions/eaglerProtocol/enabled）。 */
     AjaxResult create(Map<String, Object> body);
 
-    /** 修改一个 eagler 客户端条目（id 不可变；内置客户端不可改路径）。 */
+    /** 修改一个 eagler 客户端条目（id 不可变；内置客户端不可换包）。 */
     AjaxResult update(String id, Map<String, Object> body);
-
-    /** 开启一次上传（body: id/fileName）。 */
-    AjaxResult uploadInit(Map<String, Object> body);
-
-    /** 写入一个分块（body: index/data(base64)）。 */
-    AjaxResult uploadChunk(String uploadId, Map<String, Object> body);
-
-    /** 结束上传：校验、落盘、登记元数据并发布页面。 */
-    AjaxResult uploadFinish(String uploadId);
-
-    /** 取消上传并清理临时文件。 */
-    AjaxResult uploadAbort(String uploadId);
 
     // ===== 供页面登记 / WS 嗅探器使用 =====
 

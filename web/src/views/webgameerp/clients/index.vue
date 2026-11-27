@@ -91,9 +91,6 @@
         <el-form-item label="客户端 id" required>
           <el-input v-model="editForm.id" maxlength="32" :disabled="editEditing" placeholder="如 1.8.9（同时作为 /eagler/<id>/ 路径）" />
         </el-form-item>
-        <el-form-item label="名称">
-          <el-input v-model="editForm.name" maxlength="64" placeholder="展示名称，默认同客户端 id" />
-        </el-form-item>
         <el-form-item label="客户端包" required>
           <el-select
             v-model="editForm.packageId"
@@ -143,7 +140,6 @@ import Sortable from 'sortablejs'
 
 const emptyEditForm = () => ({
   id: '',
-  name: '',
   packageId: '',
   enabled: true,
   source: ''
@@ -272,7 +268,6 @@ export default {
       this.editEditing = true
       this.editForm = {
         id: row.id,
-        name: row.name,
         packageId: row.packageId || '',
         enabled: row.enabled,
         source: row.source
@@ -293,7 +288,6 @@ export default {
       try {
         const payload = {
           id: this.editForm.id,
-          name: this.editForm.name,
           packageId: this.editForm.packageId,
           enabled: this.editForm.enabled
         }

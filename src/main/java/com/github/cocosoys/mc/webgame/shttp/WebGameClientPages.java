@@ -96,6 +96,15 @@ public final class WebGameClientPages {
                 } catch (Throwable t) {
                     LOG.log(Level.WARNING, "登记客户端目录失败 " + id + ": " + t);
                 }
+                try {
+                    // 目录登记只覆盖 index.html，不处理 /eagler/<id>/ 尾斜杠；补一个跳转页
+                    byte[] redirect = buildRedirectPage(entry + INDEX_FILE)
+                            .getBytes(StandardCharsets.UTF_8);
+                    tag(java.util.Collections.singleton(
+                            pages.registerPage(plugin, entry, redirect, TAG)));
+                } catch (Throwable t) {
+                    LOG.log(Level.FINE, "登记客户端入口别名失败 " + id + ": " + t);
+                }
             } else {
                 try {
                     registerPage(pages, entry, new String(

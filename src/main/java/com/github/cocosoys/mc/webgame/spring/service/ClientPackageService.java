@@ -10,8 +10,8 @@ import java.util.Map;
  * 统一客户端制品库（Eagler 包 + 云游戏包）。
  *
  * <p>制品元数据统一存 {@code data/client-packages} / MySQL {@code client-packages}；
- * 文件仍托管在 {@code packages/}。旧的 {@code cloud-client-packages.yml} 在首次启动时
- * 自动迁移成云游戏制品。</p>
+ * 文件统一托管在 {@code packages/}。主键直接用 SOYS {@code IdType.AUTO} 数字 id。
+ * 旧的 {@code cloud-client-packages.yml} 已废弃，不再迁移或读取。</p>
  */
 public interface ClientPackageService {
 
@@ -23,6 +23,9 @@ public interface ClientPackageService {
 
     /** 按 id 找；没有返回 null。 */
     ClientPackage find(String id);
+
+    /** 内置 Eagler 制品的数字 id；不存在返回空串。 */
+    String builtinPackageId();
 
     /** 某云游戏制品的下载 URL；基址未知返回空串。 */
     String urlOf(ClientPackage p);

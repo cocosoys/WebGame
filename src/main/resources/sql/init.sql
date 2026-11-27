@@ -4,23 +4,16 @@
 
 CREATE TABLE IF NOT EXISTS `eagler-clients` (
   `id` VARCHAR(64) NOT NULL,
-  `name` VARCHAR(255) NULL,
-  `path` TEXT NULL,
   `mc_versions` TEXT NULL,
   `eagler_protocol` INT NOT NULL DEFAULT 0,
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `order` INT NOT NULL DEFAULT 0,
-  `source` VARCHAR(255) NULL,
-  `sha256` VARCHAR(255) NULL,
-  `size` BIGINT NOT NULL DEFAULT 0,
-  `uploaded_at` BIGINT NOT NULL DEFAULT 0,
-  `package_id` VARCHAR(64) NULL,
+  `package_id` BIGINT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `client-packages` (
-  `seq` BIGINT NOT NULL AUTO_INCREMENT,
-  `id` VARCHAR(64) NOT NULL,
+  `id` BIGINT NOT NULL AUTO_INCREMENT,
   `package_type` VARCHAR(16) NOT NULL DEFAULT 'cloud',
   `name` VARCHAR(255) NULL,
   `version` VARCHAR(255) NULL,
@@ -35,18 +28,14 @@ CREATE TABLE IF NOT EXISTS `client-packages` (
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `source` VARCHAR(255) NULL,
   `notes` TEXT NULL,
-  PRIMARY KEY (`seq`),
-  UNIQUE KEY `uk_client_packages_id` (`id`)
+  PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `cloud-clients` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `name` VARCHAR(255) NULL,
-  `path` TEXT NULL,
-  `mc_version` VARCHAR(255) NULL,
   `enabled` TINYINT NOT NULL DEFAULT 1,
   `order` INT NOT NULL DEFAULT 0,
-  `source` VARCHAR(255) NULL,
   `aliases` TEXT NULL,
   `pool` VARCHAR(255) NULL,
   `admin_scope` VARCHAR(255) NULL,
@@ -67,6 +56,6 @@ CREATE TABLE IF NOT EXISTS `cloud-clients` (
   `cloud_key` VARCHAR(255) NULL,
   `latency_ms` BIGINT NOT NULL DEFAULT 0,
   `health_reason` TEXT NULL,
-  `package_id` VARCHAR(64) NULL,
+  `package_id` BIGINT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

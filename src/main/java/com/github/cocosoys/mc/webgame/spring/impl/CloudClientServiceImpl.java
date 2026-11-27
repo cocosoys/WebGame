@@ -47,6 +47,7 @@ public class CloudClientServiceImpl implements CloudClientService {
 
     private final WebGame plugin;
     private final WebGameDataStore store;
+    private final com.github.cocosoys.mc.webgame.spring.service.ClientPackageService packageService;
 
     /** 按数字 id 排序、并发安全。 */
     private volatile Map<String, CloudClient> clients = new ConcurrentSkipListMap<>();
@@ -89,8 +90,10 @@ public class CloudClientServiceImpl implements CloudClientService {
         return cmp != 0 ? cmp : String.valueOf(a).compareTo(String.valueOf(b));
     };
 
-    public CloudClientServiceImpl(WebGame plugin) {
+    public CloudClientServiceImpl(WebGame plugin,
+                                  com.github.cocosoys.mc.webgame.spring.service.ClientPackageService packageService) {
         this.plugin = plugin;
+        this.packageService = packageService;
         this.store = plugin.getDataStore();
         if (this.store == null) {
             throw new IllegalStateException("WebGameDataStore 未初始化，无法加载云客户端数据");
@@ -244,7 +247,7 @@ public class CloudClientServiceImpl implements CloudClientService {
                 c.setAliases(aliasOut);
             }
             if (c.getPath().isEmpty()) {
-                return AjaxResult.error("请填写客户端路径（URL 或本地文件）");
+                return AjaxResult.error("请填写设备 IP 与端口");
             }
             c.setSource(deriveSource(c));
             c.setMissing(!entryExists(c));
@@ -1232,8 +1235,14 @@ public class CloudClientServiceImpl implements CloudClientService {
                 if (c.getName() == null || c.getName().isEmpty()) {
                     c.setName(c.getId());
                 }
-                c.setPath(c.getPath());
-                c.setMcVersion(c.getMcVersion());
+                c.setPath(c.pageUrl());
+                if (packageService != null && !c.getPackageId().isEmpty()) {
+                    com.github.cocosoys.mc.webgame.spring.entity.ClientPackage pkg =
+                            packageService.find(c.getPackageId());
+                    if (pkg != null) {
+                        c.setMcVersion(pkg.getVersion());
+                    }
+                }
                 c.setSource(c.getSource());
                 c.setAliases(parseAliases(c.getAliasesData()));
                 c.setPool(c.getPool());
@@ -1341,7 +1350,16 @@ public class CloudClientServiceImpl implements CloudClientService {
             vo.setName(c.getName());
             vo.setPath(c.getPath());
             vo.setPackageId(c.getPackageId());
-            vo.setMcVersion(c.getMcVersion());
+            String mcVersion = c.getMcVersion();
+            String packageId = c.getPackageId();
+            if (!packageId.isEmpty() && packageService != null) {
+                com.github.cocosoys.mc.webgame.spring.entity.ClientPackage pkg = packageService.find(packageId);
+                if (pkg != null) {
+                    mcVersion = pkg.getVersion();
+                    vo.setPackageName(pkg.getName());
+                }
+            }
+            vo.setMcVersion(mcVersion);
             vo.setEnabled(c.isEnabled());
             vo.setOrder(c.getOrder());
             vo.setDefaultVersion(c.getId().equals(defaultId));
@@ -1454,19 +1472,11 @@ public class CloudClientServiceImpl implements CloudClientService {
         }
         String name = str(body.get("name")).trim();
         c.setName(name);
-        String path = str(body.get("path")).trim();
-        if (!path.isEmpty()) {
-            c.setPath(path);
-        }
-        if (body.containsKey("mcVersion")) {
-            c.setMcVersion(str(body.get("mcVersion")).trim());
-        }
         Boolean enabled = toBool(body.get("enabled"));
         if (enabled != null) {
             c.setEnabled(enabled);
         }
         // 设备地址与协议允许管理员手填（客户端上报时也会覆盖成自报值）
-        String oldAddress = c.address();
         String ip = str(body.get("ip")).trim();
         if (!ip.isEmpty()) {
             c.setIp(ip);
@@ -1479,20 +1489,8 @@ public class CloudClientServiceImpl implements CloudClientService {
         if (tls != null) {
             c.setTls(tls);
         }
-        // 入口地址是"自动拼出来的"（空，或者就指向旧 ip:port 根路径）时跟着一起换；
-        // 管理员手填过业务路径的，只换 scheme。
-        String newAddress = c.address();
-        if (!newAddress.isEmpty() && !newAddress.equals(oldAddress)) {
-            String auto = (c.isTls() ? "https://" : "http://") + oldAddress + "/";
-            if (c.getPath().isEmpty() || c.getPath().equals(auto)
-                    || c.getPath().equals("http://" + oldAddress + "/")
-                    || c.getPath().equals("https://" + oldAddress + "/")) {
-                c.setPath(c.pageUrl());
-            }
-        }
-        if (tls != null) {
-            c.setPath(rewriteScheme(c.getPath(), tls));
-        }
+        // 入口地址不再落盘，完全由 ip/port/tls 拼出
+        c.setPath(c.pageUrl());
     }
 
     /**

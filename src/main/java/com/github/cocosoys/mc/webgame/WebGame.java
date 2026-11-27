@@ -54,7 +54,7 @@ public final class WebGame extends JavaPlugin implements Listener {
     /** MCERP 管理面扩展（ERP 菜单 + /erp/* 端点；未装 MCERP 时为 null）。 */
     private WebGameErpExpansion erpExpansion;
 
-    /** 客户端版本服务（eagler-clients.yml + 上传）；WS 准入与会话归属都依赖它。 */
+    /** 客户端版本服务（eagler-clients 引用表）；WS 准入与会话归属都依赖它。 */
     private WebGameClientService clientService;
 
     /** 客户端版本页面热登记器（/eagler/ 选择页 + /eagler/&lt;id&gt;/）。 */
@@ -121,17 +121,16 @@ public final class WebGame extends JavaPlugin implements Listener {
             t.printStackTrace();
         }
 
-        // 云游戏客户端：独立元数据，仅页面托管，不接入 WS 网关
+        // 统一制品库必须先于设备表构造：云设备与 Eagler 条目都要按 packageId 解析版本信息
         try {
-            cloudClientService = new CloudClientServiceImpl(this);
-            // 统一制品库必须先于 Eagler 客户端服务构造：Eagler 条目要按 packageId 解析路径
             clientPackageService = new ClientPackageServiceImpl(this);
+            cloudClientService = new CloudClientServiceImpl(this, clientPackageService);
         } catch (Throwable t) {
             getLogger().severe("WebGame 客户端制品库初始化失败：");
             t.printStackTrace();
         }
 
-        // 客户端版本：释放内置客户端、读取 eagler-clients，并把准入判定挂到 WS 网关
+        // 客户端版本：读取 eagler-clients 引用表，并把准入判定挂到 WS 网关
         try {
             clientService = new WebGameClientServiceImpl(this);
             clientPages = new WebGameClientPages(this, clientService);

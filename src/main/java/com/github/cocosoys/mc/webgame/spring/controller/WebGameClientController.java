@@ -113,33 +113,4 @@ public class WebGameClientController {
                              @RequestBody Map<String, Object> body) {
         return clientService.update(id, body);
     }
-
-    @ApiName("开始上传客户端")
-    @ApiPermission("webgame.erp.clients.upload")
-    @PostMapping("/upload/init")
-    public AjaxResult uploadInit(@RequestBody Map<String, Object> body) {
-        return clientService.uploadInit(body);
-    }
-
-    @ApiName("上传客户端分块")
-    @ApiPermission("webgame.erp.clients.upload")
-    @PostMapping("/upload/chunk")
-    public AjaxResult uploadChunk(@RequestParam(name = "uploadId", required = true) String uploadId,
-                                  @RequestBody Map<String, Object> body) {
-        return clientService.uploadChunk(uploadId, body);
-    }
-
-    @ApiName("结束上传客户端")
-    @ApiPermission("webgame.erp.clients.upload")
-    @PostMapping("/upload/finish")
-    public AjaxResult uploadFinish(@RequestParam(name = "uploadId", required = true) String uploadId) {
-        return clientService.uploadFinish(uploadId);
-    }
-
-    @ApiName("取消上传客户端")
-    @ApiPermission("webgame.erp.clients.upload")
-    @PostMapping("/upload/abort")
-    public AjaxResult uploadAbort(@RequestParam(name = "uploadId", required = true) String uploadId) {
-        return clientService.uploadAbort(uploadId);
-    }
 }

@@ -11,9 +11,8 @@ import com.dlz.db.annotation.TableName;
  * <p>包文件统一托管在 {@code plugins/WebGame/packages/}：</p>
  * <ul>
  *   <li>云游戏：{@code packages/cloud/cloud-2/client.zip}，{@code file} 为相对 packages 的路径；</li>
- *   <li>Eagler：{@code packages/eagler/eagler-2/}，{@code file} 为目录，{@code entryPath} 为入口；</li>
- *   <li>内置 Eagler：文件仍是 {@code eagler-clients/1.12.2/index.html}，用 {@code source=builtin} 区分，
- *       不复制到 packages；</li>
+ *   <li>Eagler：{@code packages/eagler/<id>/}，{@code file} 为目录，{@code entryPath} 为入口；</li>
+ *   <li>内置 Eagler：同样落在 {@code packages/eagler/<id>/}，首次启动从 jar 释放；</li>
  *   <li>外链 Eagler：不落盘，{@code externalUrl} 即客户端地址。</li>
  * </ul>
  */
@@ -27,12 +26,9 @@ public class ClientPackage {
     public static final String SOURCE_UPLOADED = "uploaded";
     public static final String SOURCE_EXTERNAL = "external";
 
-    /** SOYS 自增序号（YAML 根键 / MySQL seq），只用于生成稳定业务 id。 */
-    @TableId(value = "seq", type = IdType.AUTO)
-    private Long seq;
-    /** 服务端生成的稳定 id（如 eagler-1 / cloud-1），不展示给管理员。 */
-    @TableField("id")
-    private String id = "";
+    /** SOYS 自增数字主键（YAML 根键 / MySQL id），不再使用 eagler-N / cloud-N 业务编号。 */
+    @TableId(value = "id", type = IdType.AUTO)
+    private Long id;
     /** eagler / cloud。 */
     @TableField("package_type")
     private String packageType = TYPE_CLOUD;
@@ -59,16 +55,25 @@ public class ClientPackage {
     private String notes = "";
 
     public String getId() {
-        return id == null ? "" : id;
+        return id == null || id <= 0 ? "" : String.valueOf(id);
     }
 
     public void setId(String id) {
-        this.id = id == null ? "" : id.trim();
+        if (id == null || id.trim().isEmpty()) {
+            this.id = null;
+            return;
+        }
+        try {
+            long parsed = Long.parseLong(id.trim());
+            this.id = parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            this.id = null;
+        }
     }
 
-    /** 自增序号；0 表示尚未落库。 */
-    public long getSeq() {
-        return seq == null ? 0L : seq;
+    /** 数字主键（未知时 0）。内部排序/落盘用，对外统一暴露字符串 getId()。 */
+    public long getIdValue() {
+        return id == null ? 0L : id;
     }
 
     /** 对外 JSON 字段名用 type，数据库列名仍是 package_type。 */
@@ -209,8 +214,7 @@ public class ClientPackage {
     }
 
     /**
-     * ClientVersion.path 使用的入口：外链返回 URL；内置返回 eagler-clients/...；
-     * 新上传 Eagler 返回 packages/eagler/...；外部/内置不套 packages 前缀。
+     * ClientVersion.path 使用的入口：外链返回 URL；内置/上传 Eagler 返回 packages/...。
      */
     public String getStoragePath() {
         if (isExternal()) {
@@ -221,9 +225,8 @@ public class ClientPackage {
             if (base.isEmpty()) {
                 return "";
             }
-            String prefix = isBuiltin() ? "" : "packages/";
             String entry = getEntryPath();
-            return entry.isEmpty() ? prefix + base : prefix + base + "/" + entry;
+            return entry.isEmpty() ? "packages/" + base : "packages/" + base + "/" + entry;
         }
         if (getFile().isEmpty()) {
             return "";

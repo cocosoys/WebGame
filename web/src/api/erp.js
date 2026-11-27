@@ -76,22 +76,6 @@ export function updateClient(id, payload) {
   return request({ url: '/erp/clients/update', method: 'post', params: { id }, data: payload })
 }
 
-export function initClientUpload(payload) {
-  return request({ url: '/erp/clients/upload/init', method: 'post', data: payload })
-}
-
-export function uploadClientChunk(uploadId, index, data) {
-  return request({ url: '/erp/clients/upload/chunk', method: 'post', params: { uploadId }, data: { index, data } })
-}
-
-export function finishClientUpload(uploadId) {
-  return request({ url: '/erp/clients/upload/finish', method: 'post', params: { uploadId } })
-}
-
-export function abortClientUpload(uploadId) {
-  return request({ url: '/erp/clients/upload/abort', method: 'post', params: { uploadId } })
-}
-
 // ===== 云游戏客户端 =====
 
 export function listCloudClients(scope) {

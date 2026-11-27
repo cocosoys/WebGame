@@ -9,10 +9,9 @@ import com.github.cocosoys.mc.webgame.spring.entity.ClientPackage;
 import com.github.cocosoys.mc.webgame.spring.entity.ClientVersion;
 import com.github.cocosoys.mc.webgame.spring.entity.vo.ClientPackageVo;
 import com.github.cocosoys.mc.webgame.spring.service.ClientPackageService;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
@@ -39,8 +38,7 @@ import java.util.zip.ZipInputStream;
  * 统一客户端制品库实现。
  *
  * <p>元数据统一走 {@link WebGameDataStore}，文件仍在 {@code packages/}：
- * 云游戏包 {@code packages/cloud/<id>/<zip>}；Eagler 包 {@code packages/eagler/<id>/}；
- * 内置 Eagler 包继续使用 {@code eagler-clients/1.12.2/}。</p>
+ * 云游戏包 {@code packages/cloud/<id>/<zip>}；Eagler 包（含内置）{@code packages/eagler/<id>/}。</p>
  */
 public class ClientPackageServiceImpl implements ClientPackageService {
 
@@ -48,7 +46,6 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     public static final int CHUNK_SIZE = 512 * 1024;
     private static final String DEFAULT_TARGET_DIR = "1.12.2-Forge_14.23.5.2864";
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    private static final String LEGACY_META_FILE = "cloud-client-packages.yml";
 
     private final WebGame plugin;
     private final WebGameDataStore store;
@@ -254,7 +251,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 }
             }
             packages.remove(id);
-            store.delete(ClientPackage.class, p.getSeq());
+            store.delete(ClientPackage.class, p.getId());
             if (p.isCloud() && plugin.getCloudClientService() != null) {
                 plugin.getCloudClientService().clearPackageReference(id);
             }
@@ -391,8 +388,8 @@ public class ClientPackageServiceImpl implements ClientPackageService {
                 p.setUploadedAt(now());
                 p.setEnabled(true);
                 p.setSource(ClientPackage.SOURCE_UPLOADED);
-                // 先落元数据拿 AUTO 序号，再用序号生成 cloud-N 与文件目录。
-                String id = assignBusinessId(p);
+                // 先落元数据拿 AUTO 数字主键，再用主键生成文件目录。
+                String id = saveWithAutoId(p);
                 created = p;
                 File dir = new File(packagesDir(), "cloud/" + id);
                 ensureDir(dir);
@@ -416,7 +413,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setUploadedAt(now());
             p.setEnabled(true);
             p.setSource(ClientPackage.SOURCE_UPLOADED);
-            String id = assignBusinessId(p);
+            String id = saveWithAutoId(p);
             created = p;
             File dir = new File(packagesDir(), "eagler/" + id);
             ensureDir(dir);
@@ -451,8 +448,8 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             if (createdDir != null) {
                 deleteRecursively(createdDir);
             }
-            if (created != null && created.getSeq() > 0) {
-                store.delete(ClientPackage.class, created.getSeq());
+            if (created != null && created.getIdValue() > 0) {
+                store.delete(ClientPackage.class, created.getId());
             }
             deleteQuietly(session.part);
             return AjaxResult.error("上传完成失败：" + t.getMessage());
@@ -460,19 +457,14 @@ public class ClientPackageServiceImpl implements ClientPackageService {
     }
 
     /**
-     * 落元数据并用 SOYS AUTO 序号生成业务 id：Eagler → eagler-N，云游戏 → cloud-N。
-     * 序号由 ORM 分配，不再维护 next-*-number 计数器。
+     * 落元数据并拿到 SOYS AUTO 分配的数字主键。
+     * 这是制品的唯一 id，不再生成 eagler-N / cloud-N 业务编号。
      */
-    private String assignBusinessId(ClientPackage p) {
-        if (!store.save(p) || p.getSeq() <= 0) {
-            throw new IllegalStateException("客户端包元数据写入失败：未生成自增序号");
+    private String saveWithAutoId(ClientPackage p) {
+        if (!store.save(p) || p.getIdValue() <= 0) {
+            throw new IllegalStateException("客户端包元数据写入失败：未生成自增主键");
         }
-        String id = (p.isEagler() ? "eagler-" : "cloud-") + p.getSeq();
-        p.setId(id);
-        if (!store.save(p)) {
-            throw new IllegalStateException("客户端包业务 id 写入失败：" + id);
-        }
-        return id;
+        return p.getId();
     }
 
     @Override
@@ -504,7 +496,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setSource(ClientPackage.SOURCE_EXTERNAL);
             p.setEnabled(body == null || body.get("enabled") == null || toBool(body.get("enabled"), true));
             p.setUploadedAt(now());
-            String id = assignBusinessId(p);
+            String id = saveWithAutoId(p);
             packages.put(id, p);
             refreshPages();
             return AjaxResult.success("已登记外链客户端：" + name, vo(p));
@@ -532,80 +524,102 @@ public class ClientPackageServiceImpl implements ClientPackageService {
 
         ensureBuiltinPackage();
         if (packages(ClientPackage.TYPE_CLOUD).isEmpty()) {
-            importLegacyCloudPackages();
             seedLegacyZip();
         }
         refreshPages();
     }
 
-    /** 保证内置 Eagler 制品存在；已存在则补齐关键字段，不覆盖管理员改过的展示名。 */
+    /** 保证内置 Eagler 制品存在；文件统一释放到 packages/eagler/&lt;数字 id&gt;/。 */
     private void ensureBuiltinPackage() {
-        ClientPackage builtin = WebGameDataBootstrap.builtinPackage();
-        ClientPackage exist = packages.get(builtin.getId());
+        ClientPackage exist = null;
+        for (ClientPackage p : packages.values()) {
+            if (p.isBuiltin() && p.isEagler()) {
+                exist = p;
+                break;
+            }
+        }
         if (exist == null) {
-            packages.put(builtin.getId(), builtin);
-            store.save(builtin);
+            ClientPackage builtin = WebGameDataBootstrap.builtinPackage();
+            String id = saveWithAutoId(builtin);
+            String expected = "eagler/" + id;
+            if (!expected.equals(builtin.getFile())) {
+                builtin.setFile(expected);
+                store.save(builtin);
+            }
+            packages.put(id, builtin);
+            ensureBuiltinFiles(id);
+            updateBuiltinMeta(builtin);
             return;
         }
-        boolean changed = false;
-        if (!ClientPackage.TYPE_EAGLER.equals(exist.getType())) {
-            exist.setType(ClientPackage.TYPE_EAGLER);
-            changed = true;
-        }
-        if (!exist.isBuiltin()) {
-            exist.setSource(ClientPackage.SOURCE_BUILTIN);
-            changed = true;
-        }
-        if (exist.getFile().isEmpty()) {
-            exist.setFile(builtin.getFile());
-            exist.setEntryPath(builtin.getEntryPath());
-            changed = true;
-        }
-        if (changed) {
+        String id = exist.getId();
+        String file = exist.getFile();
+        if (file.startsWith("eagler-clients/") || file.isEmpty()) {
+            exist.setFile("eagler/" + id);
+            exist.setEntryPath("index.html");
             store.save(exist);
         }
+        ensureBuiltinFiles(id);
+        updateBuiltinMeta(exist);
     }
 
-    /** 旧 cloud-client-packages.yml 一次性迁移为 cloud-N。 */
-    private void importLegacyCloudPackages() {
-        File meta = new File(plugin.getDataFolder(), LEGACY_META_FILE);
-        if (!meta.isFile()) {
+    /** 内置制品首次释放后补齐大小、文件数与入口 SHA-256，避免表里长期是 0。 */
+    private void updateBuiltinMeta(ClientPackage p) {
+        File index = new File(packagesDir(), "eagler/" + p.getId() + "/index.html");
+        if (!index.isFile()) {
             return;
         }
         try {
-            YamlConfiguration y = YamlConfiguration.loadConfiguration(meta);
-            ConfigurationSection sec = y.getConfigurationSection("packages");
-            if (sec != null) {
-                for (String oldId : sec.getKeys(false)) {
-                    ConfigurationSection c = sec.getConfigurationSection(oldId);
-                    if (c == null) {
-                        continue;
-                    }
-                    ClientPackage p = new ClientPackage();
-                    p.setType(ClientPackage.TYPE_CLOUD);
-                    p.setName(c.getString("name", "旧云游戏客户端包"));
-                    p.setVersion(c.getString("version", DEFAULT_TARGET_DIR));
-                    p.setTargetDir(c.getString("target-dir", DEFAULT_TARGET_DIR));
-                    p.setFile(c.getString("file", "cloud-client.zip"));
-                    p.setSha256(c.getString("sha256", ""));
-                    p.setSize(c.getLong("size", 0));
-                    p.setFiles(c.getInt("files", 0));
-                    p.setUploadedAt(c.getString("uploaded-at", now()));
-                    p.setEnabled(c.getBoolean("enabled", true));
-                    p.setNotes(c.getString("notes", ""));
-                    p.setSource(ClientPackage.SOURCE_UPLOADED);
-                    // AUTO 序号生成 cloud-N，不再沿用旧文件的 next-id/default-id。
-                    String id = assignBusinessId(p);
-                    packages.put(id, p);
-                }
+            String sha = sha256(index);
+            int files = 1;
+            File sidecar = new File(index.getParentFile(), "eagler-bootstrap.js");
+            if (sidecar.isFile()) {
+                files++;
             }
-            plugin.getLogger().info("已迁移旧云游戏客户端包元数据 " + LEGACY_META_FILE + " → client-packages");
+            if (p.getSize() == index.length() && p.getFiles() == files && sha.equals(p.getSha256())) {
+                return;
+            }
+            p.setSize(index.length());
+            p.setFiles(files);
+            p.setSha256(sha);
+            store.save(p);
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "迁移 " + LEGACY_META_FILE + " 失败: " + t);
+            LOG.log(Level.WARNING, "计算内置 Eagler 制品元数据失败: " + t);
         }
     }
 
-    /** 没有旧元数据但存在 packages/cloud-client.zip 时，登记为 cloud-1。 */
+    @Override
+    public String builtinPackageId() {
+        for (ClientPackage p : packages.values()) {
+            if (p.isBuiltin() && p.isEagler()) {
+                return p.getId();
+            }
+        }
+        return "";
+    }
+
+    /** 内置 Eagler 的两份文件随 jar 发布；只在缺失时复制，不覆盖管理员替换。 */
+    private void ensureBuiltinFiles(String id) {
+        File dir = new File(packagesDir(), "eagler/" + id);
+        for (String name : new String[]{"index.html", "eagler-bootstrap.js"}) {
+            File target = new File(dir, name);
+            if (target.isFile()) {
+                continue;
+            }
+            try (InputStream in = plugin.getResource("packages/eagler/1/" + name)) {
+                if (in == null) {
+                    LOG.log(Level.WARNING, "jar 内缺少内置 Eagler 资源 packages/eagler/1/" + name);
+                    continue;
+                }
+                ensureDir(dir);
+                Files.copy(in, target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                LOG.info("已释放内置 Eagler 资源 " + target.getPath());
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "释放内置 Eagler 资源失败 " + name + ": " + t);
+            }
+        }
+    }
+
+    /** 没有云游戏包但存在 packages/cloud-client.zip 时，登记为云游戏包。 */
     private void seedLegacyZip() {
         File legacy = new File(packagesDir(), "cloud-client.zip");
         if (!legacy.isFile()) {
@@ -624,7 +638,7 @@ public class ClientPackageServiceImpl implements ClientPackageService {
             p.setUploadedAt(now());
             p.setEnabled(true);
             p.setSource(ClientPackage.SOURCE_UPLOADED);
-            String id = assignBusinessId(p);
+            String id = saveWithAutoId(p);
             packages.put(id, p);
             plugin.getLogger().info("已把既有 packages/cloud-client.zip 登记为云游戏客户端包 " + id);
         } catch (Throwable t) {

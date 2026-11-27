@@ -1,13 +1,12 @@
 # WebGame 统一客户端制品表（YAML 模式）
-# 根节点 = 表名；键 = SOYS @TableId(AUTO) 的 seq 序号，业务 id 由 seq 生成（eagler-N / cloud-N）。
+# 根节点 = 表名；键 = SOYS @TableId(AUTO) 分配的数字主键，不再有 eagler-N / cloud-N 业务编号。
 client-packages:
   '1':
-    seq: 1
-    id: "eagler-1"
+    id: 1
     package_type: "eagler"
     name: "1.12.2 内置客户端包"
     version: "1.12.2"
-    file: "eagler-clients/1.12.2"
+    file: "eagler/1"
     entry_path: "index.html"
     target_dir: ""
     external_url: ""

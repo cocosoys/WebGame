@@ -9,18 +9,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 一个已安装的 Eaglercraft 客户端（eagler-clients.yml 里的条目 + 运行时状态）。
+ * 一个已启用的 Eaglercraft 客户端入口。
  *
- * <p>磁盘布局：{@code plugins/WebGame/eagler-clients/<id>/index.html}；
- * 元数据集中在 {@code plugins/WebGame/eagler-clients.yml}（不放进版本目录，
- * 避免被页面托管直接暴露）。</p>
+ * <p>表里只保留“选哪个制品、是否启用、排序、协议”：名称、入口路径、来源、
+ * SHA-256、体积、上传时间全部由 {@code client-packages} 解析，避免两处漂移。
+ * 运行时字段用 {@code @TableField(exist=false)} 缓存。</p>
  */
 @TableName("eagler-clients")
 public class ClientVersion {
 
-    /** 内置版本 id（与 jar 内 eagler-clients/1.12.2/index.html 对应）。 */
+    /** 内置版本 id（页面 /eagler/1.12.2/ 与 WS 子路径不变）。 */
     public static final String BUILTIN_ID = "1.12.2";
-    public static final String BUILTIN_PACKAGE_ID = "eagler-1";
     public static final String SOURCE_BUILTIN = "builtin";
     public static final String SOURCE_UPLOADED = "uploaded";
     public static final String SOURCE_URL = "url";
@@ -29,14 +28,13 @@ public class ClientVersion {
     /** 版本标识，同时是页面子路径 /eagler/<id>/ 与 WS 子路径 /eagler/<id>。 */
     @TableId(value = "id", type = IdType.INPUT)
     private String id = "";
-    /** 展示名称。 */
+    /** 展示名称：运行时从 client-packages 回填。 */
+    @TableField(exist = false)
     private String name = "";
-    /**
-     * 客户端入口路径：{@code http(s)://…} 直接跳转；否则视为本地文件
-     * （相对插件数据目录 / 服务器根目录，或绝对路径）。
-     */
+    /** 客户端入口路径：运行时从 client-packages 回填。 */
+    @TableField(exist = false)
     private String path = "";
-    /** 引用的客户端制品 id（client-packages），路径由服务端解析，前端不再手填。 */
+    /** 引用的客户端制品 id（client-packages 数字主键）。 */
     @TableField("package_id")
     private String packageId = "";
     /** 支持的 Minecraft 版本（运行时视图；持久化用 mcVersionData）。 */
@@ -79,13 +77,17 @@ public class ClientVersion {
     private boolean enabled = true;
     /** 玩家选择页的展示顺序（升序）。 */
     private int order;
-    /** 数据来源：builtin / uploaded。 */
+    /** 数据来源：builtin / uploaded / url（运行时按制品解析）。 */
+    @TableField(exist = false)
     private String source = SOURCE_UPLOADED;
-    /** 文件 SHA-256（内置版本为空）。 */
+    /** 文件 SHA-256（运行时按制品回填）。 */
+    @TableField(exist = false)
     private String sha256 = "";
-    /** 文件字节数。 */
+    /** 文件字节数（运行时按制品回填）。 */
+    @TableField(exist = false)
     private long size;
-    /** 上传/登记时间（epoch millis）。 */
+    /** 上传/登记时间（运行时按制品回填）。 */
+    @TableField(exist = false)
     private long uploadedAt;
     /** 运行时：目录或 index.html 缺失。 */
     @TableField(exist = false)

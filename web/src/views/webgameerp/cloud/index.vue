@@ -188,13 +188,14 @@
         <el-form-item label="名称">
           <el-input v-model="editForm.name" maxlength="64" placeholder="展示名称" />
         </el-form-item>
-        <el-form-item label="URL" required>
-          <el-input
-            v-model="editForm.path"
-            placeholder="https://192.168.59.128:8080/（基础地址，可带结尾 /）"
-          />
+        <el-form-item label="设备地址" required>
+          <div class="address-row">
+            <el-input v-model="editForm.ip" placeholder="设备 IP 或主机名" />
+            <el-input-number v-model="editForm.port" :min="1" :max="65535" controls-position="right" />
+            <el-switch v-model="editForm.tls" active-text="HTTPS" />
+          </div>
           <div class="form-hint">
-            URL 客户端填云机基础地址即可，结尾是否带 / 都可以；本地页面才必须写到具体入口文件（如 index.html）。
+            入口地址由 IP、端口与 HTTPS 开关自动拼出，不再单独落盘。
           </div>
         </el-form-item>
         <el-form-item label="别名">
@@ -315,7 +316,9 @@ import Sortable from 'sortablejs'
 const emptyEditForm = () => ({
   id: '',
   name: '',
-  path: '',
+  ip: '',
+  port: 8080,
+  tls: false,
   enabled: true,
   aliasesText: '',
   pool: '',
@@ -491,7 +494,9 @@ export default {
       this.editForm = {
         id: row.id,
         name: row.name,
-        path: row.path,
+        ip: row.ip || '',
+        port: row.port || 8080,
+        tls: row.tls === true,
         enabled: row.enabled,
         aliasesText: (row.aliases || []).join(', '),
         pool: row.pool || '',
@@ -500,20 +505,20 @@ export default {
       this.editVisible = true
     },
     async submitEdit() {
-      const path = (this.editForm.path || '').trim()
-      if (!path) {
-        this.$message.error('请填写客户端路径')
+      const ip = (this.editForm.ip || '').trim()
+      if (!ip) {
+        this.$message.error('请填写设备 IP 或主机名')
         return
       }
-      // URL 是云机基础地址，结尾带 / 是合法写法；只有本地页面路径才要求写到具体文件。
-      const isUrl = /^https?:\/\//i.test(path)
-      if (!isUrl && (path.endsWith('/') || path.endsWith('\\'))) {
-        this.$message.error('本地页面请填写具体的入口文件路径，例如 index.html')
+      if (!this.editForm.port || this.editForm.port <= 0 || this.editForm.port > 65535) {
+        this.$message.error('请填写 1-65535 的设备端口')
         return
       }
       const payload = {
         name: this.editForm.name,
-        path,
+        ip,
+        port: this.editForm.port,
+        tls: this.editForm.tls === true,
         enabled: this.editForm.enabled,
         aliases: (this.editForm.aliasesText || '')
           .split(/[,，\s]+/)
@@ -533,12 +538,6 @@ export default {
       } finally {
         this.editSaving = false
       }
-    },
-    sourceLabel(source) {
-      return { url: 'URL', local: '本地' }[source] || source || '—'
-    },
-    sourceTagType(source) {
-      return { url: 'warning', local: 'success' }[source] || ''
     },
     runtimeLabel(status) {
       return {
@@ -791,6 +790,14 @@ export default {
   margin-top: 4px;
   font-size: 12px;
   color: #909399;
+}
+.address-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.address-row .el-input-number {
+  width: 140px;
 }
 .reason {
   display: inline-block;

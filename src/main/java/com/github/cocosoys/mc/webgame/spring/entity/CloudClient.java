@@ -35,20 +35,23 @@ public class CloudClient {
     /** 展示名称。 */
     private String name = "";
     /**
-     * 客户端入口路径：{@code http(s)://…} 直接跳转；否则视为本地文件
-     * （相对插件数据目录 / 服务器根目录，或绝对路径）。
+     * 客户端入口路径（运行时字段，不持久化）：由 {@link #ip}/{@link #port}/{@link #tls}
+     * 实时拼出，避免和设备地址重复落盘。
      */
+    @TableField(exist = false)
     private String path = "";
     /** 管理员最近一次成功下发/期望的客户端制品 id（client-packages），用于玩家进入时版本闸门。 */
     @TableField("package_id")
     private String packageId = "";
-    /** Minecraft 版本描述（自由文本，仅展示）。 */
+    /** Minecraft 版本描述（运行时从 client-packages 回填，不持久化）。 */
+    @TableField(exist = false)
     private String mcVersion = "";
     /** 是否启用。 */
     private boolean enabled = true;
     /** 玩家选择页的展示顺序（升序；-1 表示未指定，加载时补号）。 */
     private int order = -1;
-    /** 数据来源：url / local。 */
+    /** 数据来源（运行时字段，不持久化）：url / local，由入口地址推导。 */
+    @TableField(exist = false)
     private String source = SOURCE_LOCAL;
     /** 运行时：入口文件不存在。 */
     @TableField(exist = false)
@@ -155,7 +158,8 @@ public class CloudClient {
     }
 
     public String getPath() {
-        return path == null ? "" : path;
+        String p = path == null ? "" : path.trim();
+        return p.isEmpty() ? pageUrl() : p;
     }
 
     public void setPath(String path) {
