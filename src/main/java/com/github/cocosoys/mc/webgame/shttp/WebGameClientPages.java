@@ -97,8 +97,10 @@ public final class WebGameClientPages {
                     LOG.log(Level.WARNING, "登记客户端目录失败 " + id + ": " + t);
                 }
                 try {
-                    // 目录登记只覆盖 index.html，不处理 /eagler/<id>/ 尾斜杠；补一个跳转页
-                    byte[] redirect = buildRedirectPage(entry + INDEX_FILE)
+                    // 目录登记只覆盖 index.html，不处理 /eagler/<id>/ 尾斜杠；补一个相对跳转页。
+                    // 必须用相对地址：页面本身在 /web/plugins/WebGame/eagler/<id>/，
+                    // 写 "/eagler/<id>/index.html" 会跳到未登记的根路径。
+                    byte[] redirect = buildRedirectPage(INDEX_FILE)
                             .getBytes(StandardCharsets.UTF_8);
                     tag(java.util.Collections.singleton(
                             pages.registerPage(plugin, entry, redirect, TAG)));
