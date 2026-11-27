@@ -13,6 +13,7 @@ import com.github.cocosoys.mc.webgame.spring.service.ClientPackageService;
 import com.github.cocosoys.mc.webgame.shttp.WebGameClientPages;
 import com.github.cocosoys.mc.webgame.shttp.CloudClientPages;
 import com.github.cocosoys.mc.webgame.shttp.GameHubPages;
+import com.github.cocosoys.mc.webgame.shttp.PlayerNamePage;
 import com.github.cocosoys.mc.webgame.shttp.WebGameErpExpansion;
 import com.github.cocosoys.mc.webgame.shttp.WebGameExpansion;
 import com.github.cocosoys.mc.webgame.web.cloud.CloudPlayService;
@@ -70,6 +71,8 @@ public final class WebGame extends JavaPlugin implements Listener {
     private CloudClientPages cloudClientPages;
     /** 玩家统一入口页（/play/）：先选云游戏还是 eagler，再进各自选择页。 */
     private GameHubPages gameHubPages;
+    /** 独立的游戏名称输入页（/play/name/）：选完客户端后统一在这里填名字。 */
+    private PlayerNamePage playerNamePage;
 
     /** 云游戏"点击即玩"会话服务（槽位占用 + 代理调用 + 看门狗）。 */
     private CloudPlayService cloudPlayService;
@@ -148,6 +151,7 @@ public final class WebGame extends JavaPlugin implements Listener {
             cloudClientPages = new CloudClientPages(this, cloudClientService, cloudPlayService);
             // 玩家统一入口：先选方式（云游戏 / eagler），再进各自二级选择页
             gameHubPages = new GameHubPages(this, clientService, cloudClientService);
+            playerNamePage = new PlayerNamePage(this);
             // 90s 心跳：启动后立刻校准一轮，之后定时探测（离线阈值见 config.cloud.ttl-seconds）
             cloudClientService.startHeartbeat();
             // 会话看门狗：玩家在 MC 里退出后，会话必须被判定结束，否则桌面会解锁在玩家眼前
@@ -222,6 +226,9 @@ public final class WebGame extends JavaPlugin implements Listener {
         if (gameHubPages != null) {
             gameHubPages.unpublish();
         }
+        if (playerNamePage != null) {
+            playerNamePage.unpublish();
+        }
         if (erpExpansion != null) {
             erpExpansion.unregister();
             erpExpansion = null;
@@ -282,6 +289,10 @@ public final class WebGame extends JavaPlugin implements Listener {
             if (gameHubPages != null) {
                 gameHubPages.attach(expansion.getApi());
                 gameHubPages.publish();
+            }
+            if (playerNamePage != null) {
+                playerNamePage.attach(expansion.getApi());
+                playerNamePage.publish();
             }
             getLogger().info("前端页面托管已挂载：" + WebGameConfig.WEB_PLUGIN_PREFIX + "/");
         } else {

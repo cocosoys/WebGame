@@ -19,6 +19,13 @@
         // %%%%%%%%% launch options %%%%%%%%%%%%
 
         window.eaglercraftXOpts = {
+            // 统一名称页把名字放在 ?user=；必须在主脚本启动前交给 Eagler，
+            // 否则 defer 的 bootstrap 来不及改 profile，客户端会生成随机名。
+            username: (function () {
+                var u = new URLSearchParams(location.search).get("user") || "";
+                u = u.replace(/[^A-Za-z0-9_]/g, "").substring(0, 16);
+                return u.length >= 3 ? u : "WebPlayer";
+            })(),
             container: "game_frame",
             worldsDB: "worlds",
             servers: [

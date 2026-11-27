@@ -85,113 +85,20 @@
         var pending = localStorage.getItem(PENDING_KEY);
         var params = new URLSearchParams(window.location.search);
         var urlUser = cleanName(params.get("user") || "");
-        // 服务端口径（auto-join.enabled / default-username）：由 WebGame 的匿名端点下发，
-        // 每次会话只问一次（sessionStorage 标记），避免刷新页面时反复请求。
-        var CFG_URL = "/api/plugins/WebGame/cloud/page-config";
-        var CFG_FLAG = "wg_auto_cfg";
-        var cfg = { ready: false, enabled: false, name: "", note: "" };
-        function loadCfg(cb) {
-            var settled = false;
-            function fin(v) { if (settled) return; settled = true; cb(v); }
-            var timer = setTimeout(function () { fin(null); }, 2000);
-            try {
-                fetch(CFG_URL, { credentials: "same-origin", cache: "no-store" })
-                    .then(function (r) { return r.json(); })
-                    .then(function (j) {
-                        clearTimeout(timer);
-                        fin((j && j.data && j.data.autoJoin) || null);
-                    })
-                    .catch(function () { clearTimeout(timer); fin(null); });
-            } catch (e) { clearTimeout(timer); fin(null); }
+        if (pending && urlUser && cleanName(pending) !== urlUser) {
+            localStorage.removeItem(PENDING_KEY);
+            pending = null;
         }
         if (!pending) {
             if (urlUser && urlUser.length >= 3) {
                 applyProfile(urlUser).then(function () { window.location.reload(); });
                 return;
             }
-            function buildOverlay() {
-                if (document.getElementById("wg_overlay")) return;
-                var ov = document.createElement("div");
-                ov.id = "wg_overlay";
-                ov.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:rgba(0,0,0,0.88);display:flex;align-items:center;justify-content:center;font-family:'Microsoft YaHei','PingFang SC',Arial,sans-serif;";
-                ov.innerHTML = ""
-                    + "<div style='background:#161616;border:2px solid #4a4a4a;border-radius:10px;padding:30px 42px;text-align:center;box-shadow:0 0 60px rgba(0,0,0,.7);'>"
-                    + "<div style='color:#fff;font-size:24px;font-weight:bold;margin-bottom:4px;'>WebGame 服务器</div>"
-                    + "<div style='color:#9a9a9a;font-size:13px;margin-bottom:22px;'>输入用户名后自动进入服务器</div>"
-                    + "<input id='wg_name' type='text' maxlength='16' autocomplete='off' spellcheck='false' style='width:260px;padding:10px 14px;font-size:16px;border:2px solid #666;border-radius:4px;background:#101010;color:#fff;outline:none;text-align:center;' placeholder='用户名（3-16 字符）'/>"
-                    + "<div style='margin-top:18px;'>"
-                    + "<button id='wg_btn' style='padding:10px 44px;font-size:16px;font-weight:bold;background:#3c8527;color:#fff;border:2px solid #2a5f1c;border-radius:4px;cursor:pointer;'>进入服务器</button>"
-                    + "</div>"
-                    + "<div id='wg_err' style='color:#e55;font-size:13px;margin-top:12px;min-height:16px;'></div>"
-                    + "</div>";
-                document.body.appendChild(ov);
-                var inp = document.getElementById("wg_name");
-                var last = cleanName(localStorage.getItem(LAST_KEY) || "");
-                if (last) inp.value = last;
-                else if (cfg.name) inp.value = cfg.name;
-                var btn = document.getElementById("wg_btn");
-                var err = document.getElementById("wg_err");
-                if (!cfg.ready) {
-                    // 配置还没回来：先锁住按钮，别让人填完名进到一个"开关已关"的页面
-                    btn.disabled = true;
-                    err.textContent = "正在读取服务器配置…";
-                }
-                inp.focus();
-                function submit() {
-                    var u = cleanName(inp.value);
-                    if (u.length < 3) {
-                        document.getElementById("wg_err").textContent = "用户名至少 3 个字符";
-                        inp.focus();
-                        return;
-                    }
-                    document.getElementById("wg_btn").disabled = true;
-                    document.getElementById("wg_err").textContent = "正在准备...";
-                    applyProfile(u).then(function () {
-                        window.location.reload();
-                    }).catch(function () {
-                        document.getElementById("wg_err").textContent = "准备失败，请重试";
-                        document.getElementById("wg_btn").disabled = false;
-                    });
-                }
-                document.getElementById("wg_btn").addEventListener("click", submit);
-                inp.addEventListener("keydown", function (e) { if (e.key === "Enter") submit(); });
-            }
-            function guardOverlay() {
-                if (document.body) { buildOverlay(); }
-                else { var wt = setInterval(function () { if (document.body) { clearInterval(wt); buildOverlay(); } }, 50); }
-                try {
-                    if (window.MutationObserver) {
-                        var mo = new MutationObserver(function () { buildOverlay(); });
-                        mo.observe(document.documentElement, { childList: true, subtree: true });
-                    }
-                } catch (e) {}
-                setInterval(buildOverlay, 1000);
-            }
-            guardOverlay();
-            loadCfg(function (aj) {
-                cfg.ready = true;
-                cfg.enabled = !!(aj && aj.enabled);
-                cfg.name = cleanName((aj && aj.username) || "");
-                cfg.note = (aj && aj.note) || "";
-                var remembered = cleanName(localStorage.getItem(LAST_KEY) || "");
-                // 自动进服的两层含义（服务端口径）：
-                //   ①enabled=true 且本机记住过名字 → 直接用记住的名字进，不再弹框；
-                //   ②否则弹框，输入框预填 记住的名字 → default-username。
-                // 不把 default-username 当"所有人的名字"直接登录：同名玩家在离线模式下会互踢。
-                if (cfg.enabled && remembered.length >= 3 && !sessionStorage.getItem(CFG_FLAG)) {
-                    sessionStorage.setItem(CFG_FLAG, "1");
-                    applyProfile(remembered).then(function () { window.location.reload(); });
-                    return;
-                }
-                var inp = document.getElementById("wg_name");
-                var btn = document.getElementById("wg_btn");
-                var err = document.getElementById("wg_err");
-                if (inp && !inp.value) inp.value = remembered || cfg.name || "";
-                if (btn) btn.disabled = false;
-                if (err) err.textContent = cfg.note || "";
-                if (inp) inp.focus();
-                sessionStorage.setItem(CFG_FLAG, "1");
-            });
+            // 客户端内不再自己弹用户名框：没有名字就去统一名称页，填完再带 ?user= 回来。
+            var back = window.location.pathname || "";
+            window.location.replace("/web/plugins/WebGame/play/name/?kind=eagler&label="
+                + encodeURIComponent(document.title || "Eagler 网页版")
+                + "&back=" + encodeURIComponent(back));
             return;
         }
         var username = pending;
@@ -230,21 +137,22 @@
                 var o = document.getElementById("wg_overlay");
                 if (o) { o.style.display = "none"; if (o.parentNode) o.parentNode.removeChild(o); }
             };
-        })();
+        // 只做两次安全按键：第一次通过“按任意键开启声音”，第二次在服务器列表
+        // 出现后确认进入默认服务器。绝不再按 ArrowDown —— 服务器列表为空时那会越界崩溃。
         (function () {
             function getCanvas() {
                 var f = document.getElementById("game_frame");
                 return f ? f.querySelector("canvas") : null;
             }
-            function key(type, code, keyCode, key) {
+            function tapEnter() {
                 var c = getCanvas();
                 if (!c) return;
-                var ev = new KeyboardEvent(type, { bubbles: true, cancelable: true, code: code, key: key, keyCode: keyCode, which: keyCode });
-                c.dispatchEvent(ev);
-            }
-            function tap(code, keyCode, k) {
-                key("keydown", code, keyCode, k);
-                key("keyup", code, keyCode, k);
+                ["keydown", "keyup"].forEach(function (type) {
+                    c.dispatchEvent(new KeyboardEvent(type, {
+                        bubbles: true, cancelable: true, code: "Enter", key: "Enter",
+                        keyCode: 13, which: 13
+                    }));
+                });
             }
             function brightness() {
                 var c = getCanvas();
@@ -255,42 +163,35 @@
                     var t = tmp.getContext("2d");
                     t.drawImage(c, 0, 0, 16, 16);
                     var d = t.getImageData(0, 0, 16, 16).data;
-                    var s = 0, i;
-                    for (i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3;
-                    return s / (d.length / 4);
+                    var sum = 0;
+                    for (var i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+                    return sum / (d.length / 4);
                 } catch (e) { return null; }
             }
-            var stage = "boot", soundGoneAt = 0, menuKeyedAt = 0, done = false;
-            setInterval(function () {
-                if (done) return;
+            var canvasAt = 0, soundAt = 0, entryAt = 0, brightHits = 0;
+            var timer = setInterval(function () {
+                if (entryAt) { clearInterval(timer); return; }
+                if (!getCanvas()) return;
+                if (!canvasAt) canvasAt = Date.now();
+                if (!soundAt) {
+                    if (Date.now() - canvasAt >= 6000) {
+                        tapEnter();
+                        soundAt = Date.now();
+                    }
+                    return;
+                }
+                if (Date.now() - soundAt < 3500) return;
                 var b = brightness();
-                if (b === null) return;
-                if (stage === "boot") { if (b > 30) stage = "waitSound"; return; }
-                if (stage === "waitSound") {
-                    if (b > 150) { tap("Enter", 13, "Enter"); soundGoneAt = Date.now(); stage = "postSound"; }
-                    else if (b <= 80) { soundGoneAt = Date.now(); stage = "postSound"; }
-                    return;
+                if (b !== null && b > 25) brightHits++; else brightHits = 0;
+                if (brightHits >= 3) {
+                    tapEnter();
+                    entryAt = Date.now();
+                    clearInterval(timer);
+                } else if (Date.now() - soundAt > 15000) {
+                    clearInterval(timer);
                 }
-                if (stage === "postSound") {
-                    if ((Date.now() - soundGoneAt > 10000 && b < 90) || Date.now() - soundGoneAt > 25000) {
-                        tap("ArrowDown", 40, "ArrowDown");
-                        setTimeout(function () { tap("Enter", 13, "Enter"); }, 350);
-                        menuKeyedAt = Date.now();
-                        stage = "postMenu";
-                    }
-                    return;
-                }
-                if (stage === "postMenu") {
-                    if (Date.now() - menuKeyedAt > 4500) {
-                        tap("ArrowDown", 40, "ArrowDown");
-                        setTimeout(function () { tap("Enter", 13, "Enter"); }, 350);
-                        done = true;
-                        setTimeout(function () { localStorage.removeItem(PENDING_KEY); }, 6000);
-                        setTimeout(function () { if (window.__wgHideOverlay) window.__wgHideOverlay(); }, 15000);
-                    }
-                    return;
-                }
-            }, 400);
+            }, 500);
+        })();
         })();
     })();
     

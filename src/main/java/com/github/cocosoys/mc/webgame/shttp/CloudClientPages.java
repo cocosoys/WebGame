@@ -762,104 +762,12 @@ public final class CloudClientPages {
     }
 
     /**
-     * 池入口页：玩家看到的是一组机器（只读），提交时只报池名——
+     * 池入口页：不再收用户名；没有名字时先去统一名称页，拿到名字后再启动。
      * 具体挑哪台由服务端按策略决定，玩家不需要也不应该关心。
      */
     private String buildPoolEntryPage(String pool, List<CloudClient> members, String token) {
-        StringBuilder list = new StringBuilder(256);
-        for (CloudClient c : members) {
-            list.append("<span class=\"pill\">").append(escape(c.getName())).append("</span>");
-        }
-        String tok = js(token);
-        return "<!DOCTYPE html>\n"
-                + "<html lang=\"zh-CN\">\n<head>\n"
-                + "<meta charset=\"utf-8\">\n"
-                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                + "<title>池 " + escape(pool) + " · 进入云游戏</title>\n"
-                + "<style>\n"
-                + "*{box-sizing:border-box}\n"
-                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
-                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
-                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
-                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
-                + ".sub{margin:0 0 18px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
-                + ".pill{display:inline-block;margin:0 6px 6px 0;padding:2px 8px;border-radius:6px;"
-                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
-                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
-                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
-                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
-                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
-                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
-                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
-                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
-                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
-                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
-                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
-                + ".wait{margin-top:16px;display:none}\n"
-                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
-                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
-                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
-                + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
-                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
-                + ".back:hover{color:#4f8cff}\n"
-                + "</style>\n</head>\n<body>\n"
-                + "<div class=\"wrap\">\n"
-                + "<h1>池 " + escape(pool) + "</h1>\n"
-                + "<p class=\"sub\">这组机器共 " + members.size() + " 台，点进入后自动挑一台<strong>空闲且在线</strong>的；"
-                + "全部占用时会被拒，不会排队也不会抢别人的机器。</p>\n"
-                + "<div class=\"sub\">" + list + "</div>\n"
-                + "<form id=\"f\" autocomplete=\"off\">\n"
-                + "<div class=\"field\">游戏名称</div>\n"
-                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
-                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
-                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
-                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
-                + "<div class=\"msg\" id=\"m\"></div>\n"
-                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
-                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配工作区…</span></p></div>\n"
-                + "</form>\n"
-                + "<a class=\"back\" href=\"" + escape(ROOT_CLOUD_PATH) + "\">← 返回门牌目录</a>\n"
-                + "</div>\n"
-                + "<script>\n"
-                + "var API=" + js(API_PREFIX) + ";\n"
-                + "var POOL=" + js(pool) + ";\n"
-                + "var TOKEN=" + tok + ";\n"
-                + "var P=" + progressConfig() + ";\n"
-                + progressJs()
-                + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
-                + "var f=document.getElementById('f'),p=document.getElementById('p'),b=document.getElementById('b'),"
-                + "m=document.getElementById('m'),wait=document.getElementById('wait'),fill=document.getElementById('fill'),"
-                + "pc=document.getElementById('pc'),st=document.getElementById('st');\n"
-                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
-                + "var pr=null,attempts=0;\n"
-                + "function attempt(v){\n"
-                + "  if(!pr){pr=startProgress(fill,pc);}\n"
-                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
-                + "body:JSON.stringify({pool:POOL,player:v,token:TOKEN})})\n"
-                + "  .then(function(r){return r.json();})\n"
-                + "  .then(function(j){\n"
-                + "    var d=(j&&j.data)||{};\n"
-                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配 '+(d.clientName||'云主机')+'，正在连接画面…';"
-                + "location.replace(d.playUrl);return;}\n"
-                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
-                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
-                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
-                + "    pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say((j&&j.msg)||'暂时没有可用的机器，请稍后重试',true);\n"
-                + "  })\n"
-                + "  .catch(function(){pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say('网络异常，请稍后重试',true);});\n"
-                + "}\n"
-                + "f.addEventListener('submit',function(e){\n"
-                + "  e.preventDefault();\n"
-                + "  var v=(p.value||'').trim();\n"
-                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
-                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
-                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
-                + "st.textContent='正在分配工作区…';attempt(v);\n"
-                + "});\n"
-                + "</script>\n</body>\n</html>\n";
+        return buildCloudLaunchPage("池 " + pool, "池 " + pool, "", token, "",
+                pool, false, ROOT_CLOUD_PATH + POOL_SEGMENT + "/" + pool + "/");
     }
 
     /**
@@ -881,107 +789,13 @@ public final class CloudClientPages {
     /**
      * 唯一入口页：{@code /cloud/auto/}。
      *
-     * <p>玩家只填游戏名，机器由服务端挑（{@code pickAuto()}）。页面本身<b>不持有任何设备密钥</b>：
-     * 提交前向 {@code /cloud/entry-ticket} 要一张 180 秒票据，服务端认票挑机，再用挑中那台机器
-     * 自己的 cloud-key 去调它的代理。这样"唯一入口"不会把集群里所有机器的密钥发到浏览器。</p>
-     *
-     * <p>票据每次提交都重新取（重试更新客户端包时可能已过去几十秒），过期只会让这一次提交被拒，
-     * 玩家看到的仍是可重试的提示，不会卡死。</p>
+     * <p>页面本身不再收用户名，也不持有任何设备密钥：没有名字先去统一名称页；启动时向
+     * {@code /cloud/entry-ticket} 要一张 180 秒票据，服务端认票挑机，再用挑中那台机器
+     * 自己的 cloud-key 去调它的代理。</p>
      */
     private String buildAutoEntryPage() {
-        return "<!DOCTYPE html>\n"
-                + "<html lang=\"zh-CN\">\n<head>\n"
-                + "<meta charset=\"utf-8\">\n"
-                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                + "<title>进入云游戏 · 自动匹配</title>\n"
-                + "<style>\n"
-                + "*{box-sizing:border-box}\n"
-                + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
-                + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
-                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
-                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
-                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
-                + ".sub{margin:0 0 18px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
-                + ".pill{display:inline-block;margin:0 6px 6px 0;padding:2px 8px;border-radius:6px;"
-                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
-                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
-                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
-                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
-                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
-                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
-                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
-                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
-                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
-                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
-                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
-                + ".wait{margin-top:16px;display:none}\n"
-                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
-                + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
-                + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
-                + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
-                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
-                + ".back:hover{color:#4f8cff}\n"
-                + "</style>\n</head>\n<body>\n"
-                + "<div class=\"wrap\">\n"
-                + "<h1>进入云游戏</h1>\n"
-                + "<p class=\"sub\">不用选机器：提交后在<strong>全部在线且空闲</strong>的云主机里给你挑一台。"
-                + "全部占用时会被拒，不会排队、也不会抢别人的机器。</p>\n"
-                + "<form id=\"f\" autocomplete=\"off\">\n"
-                + "<div class=\"field\">游戏名称</div>\n"
-                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
-                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
-                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
-                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
-                + "<div class=\"msg\" id=\"m\"></div>\n"
-                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
-                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配工作区…</span></p></div>\n"
-                + "</form>\n"
-                + "<a class=\"back\" href=\"" + escape(ROOT_CLOUD_PATH) + "\">← 返回门牌目录</a>\n"
-                + "</div>\n"
-                + "<script>\n"
-                + "var API=" + js(API_PREFIX) + ";\n"
-                + "var P=" + progressConfig() + ";\n"
-                + progressJs()
-                + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
-                + "var f=document.getElementById('f'),p=document.getElementById('p'),b=document.getElementById('b'),"
-                + "m=document.getElementById('m'),wait=document.getElementById('wait'),fill=document.getElementById('fill'),"
-                + "pc=document.getElementById('pc'),st=document.getElementById('st');\n"
-                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
-                + "var pr=null,attempts=0;\n"
-                + "function attempt(v){\n"
-                + "  if(!pr){pr=startProgress(fill,pc);}\n"
-                + "  // 每次都重新签票：重试可能已过去几十秒，拿旧票会被服务端当过期拒掉\n"
-                + "  fetch(API+'/cloud/entry-ticket')\n"
-                + "  .then(function(r){return r.json();})\n"
-                + "  .then(function(t){\n"
-                + "    var td=(t&&t.data)||{};\n"
-                + "    if(!(t&&t.code===200&&td.ticket)){throw new Error((t&&t.msg)||'无法获取入场票据');}\n"
-                + "    return fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
-                + "body:JSON.stringify({player:v,ticket:td.ticket})});\n"
-                + "  })\n"
-                + "  .then(function(r){return r.json();})\n"
-                + "  .then(function(j){\n"
-                + "    var d=(j&&j.data)||{};\n"
-                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配 '+(d.clientName||'云主机')+'，正在连接画面…';"
-                + "location.replace(d.playUrl);return;}\n"
-                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
-                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
-                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
-                + "    pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say((j&&j.msg)||'暂时没有可用的机器，请稍后重试',true);\n"
-                + "  })\n"
-                + "  .catch(function(e){pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say((e&&e.message)||'网络异常，请稍后重试',true);});\n"
-                + "}\n"
-                + "f.addEventListener('submit',function(e){\n"
-                + "  e.preventDefault();\n"
-                + "  var v=(p.value||'').trim();\n"
-                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
-                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
-                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
-                + "st.textContent='正在挑选空闲云主机…';attempt(v);\n"
-                + "});\n"
-                + "</script>\n</body>\n</html>\n";
+        return buildCloudLaunchPage("自动匹配", "自动匹配", "", "", "", "", true,
+                ROOT_CLOUD_PATH + AUTO_SEGMENT + "/");
     }
 
     /**
@@ -1477,117 +1291,110 @@ public final class CloudClientPages {
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"wrap\">\n"
                 + "<h1>云游戏入口</h1>\n"
-                + "<p class=\"sub\">选一个入口进入；首次进入需要填写你在服务器中的游戏名。</p>\n"
+                + "<p class=\"sub\">选一个入口进入；选定后到统一页面填写游戏名。</p>\n"
                 + "<div class=\"grid\">" + cards + "</div>\n"
                 + "</div>\n</body>\n</html>\n";
     }
 
     /**
-     * 入口页：{@code /cloud/<id>/} 或 {@code /cloud/<别名>}。玩家必须先填游戏名，再点"进入云游戏"。
-     *
-     * <p>前端校验只是体验层（空格、长度、字符集），服务端 {@code /cloud/session/start}
-     * 会再校验一次：绕过页面直接 POST 同样会被拒。</p>
+     * 入口页：{@code /cloud/<id>/} 或 {@code /cloud/<别名>}。本页只负责启动会话；
+     * 用户名统一在 {@code /play/name/} 收集，服务端 {@code /cloud/session/start} 仍会再校验。
      */
     private String buildEntryPage(CloudClient c, String token, String alias) {
-        String name = escape(c.getName());
-        String id = js(c.getId());
-        String tok = js(token);
-        String mc = escape(c.getMcVersion());
-        String mcLine = mc.isEmpty() ? "" : "<span class=\"pill\">MC " + mc + "</span>";
-        // 别名入口：地址栏已经是 /cloud/<别名>，返回链接也要回门牌目录，别把人甩到长 URL
         boolean byAlias = alias != null && !alias.isEmpty();
-        String home = byAlias ? ROOT_CLOUD_PATH : WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH;
-        String aliasLine = byAlias ? "<span class=\"pill\">/cloud/" + escape(alias) + "</span>" : "";
+        String back = byAlias
+                ? ROOT_CLOUD_PATH + alias + "/"
+                : WebGameConfig.WEB_PLUGIN_PREFIX + PAGE_PATH + c.getId() + "/";
+        return buildCloudLaunchPage(c.getName(), c.getName(), c.getId(), token,
+                byAlias ? alias : "", "", false, back);
+    }
+
+    /**
+     * 云游戏启动页：不再承载用户名表单。没有 {@code player} 时立即去统一名称页，
+     * 拿到名字后才在这里显示进度并启动会话。
+     */
+    private String buildCloudLaunchPage(String title, String label, String clientId, String token,
+                                        String alias, String pool, boolean auto, String back) {
+        String gate = WebGameConfig.WEB_PLUGIN_PREFIX + PlayerNamePage.PATH
+                + "?kind=cloud&label=" + urlEncode(label) + "&back=" + urlEncode(back);
         return "<!DOCTYPE html>\n"
                 + "<html lang=\"zh-CN\">\n<head>\n"
                 + "<meta charset=\"utf-8\">\n"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                + "<title>" + name + " · 进入云游戏</title>\n"
+                + "<title>" + escape(title) + " · 启动云游戏</title>\n"
                 + "<style>\n"
                 + "*{box-sizing:border-box}\n"
                 + "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;"
                 + "background:radial-gradient(circle at 50% 0%,#1f2a44 0%,#0d1220 60%,#070a12 100%);"
                 + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#e8edf7}\n"
-                + ".wrap{width:100%;max-width:520px;padding:40px 24px}\n"
-                + "h1{margin:0 0 6px;font-size:24px;font-weight:600}\n"
+                + ".wrap{width:100%;max-width:520px;padding:40px 24px;text-align:center}\n"
+                + "h1{margin:0 0 8px;font-size:24px;font-weight:600}\n"
                 + ".sub{margin:0 0 24px;color:#8f9bb3;font-size:13px;line-height:1.7}\n"
-                + ".pill{display:inline-block;margin-right:8px;padding:2px 8px;border-radius:6px;"
-                + "background:rgba(255,255,255,.08);color:#9aa6bd;font-size:12px}\n"
-                + ".field{margin:18px 0 8px;font-size:13px;color:#b9c3d6}\n"
-                + "input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.16);"
-                + "background:rgba(255,255,255,.05);color:#e8edf7;font-size:16px;outline:none}\n"
-                + "input:focus{border-color:#4f8cff;background:rgba(79,140,255,.10)}\n"
-                + ".tip{margin:8px 0 0;font-size:12px;color:#7c879c}\n"
-                + "button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:12px;cursor:pointer;"
-                + "background:linear-gradient(135deg,#4f8cff,#2f6ad9);color:#fff;font-size:16px;font-weight:600}\n"
-                + "button:disabled{opacity:.55;cursor:not-allowed}\n"
-                + ".msg{margin-top:14px;font-size:13px;min-height:20px}\n"
-                + ".msg.err{color:#ff8b8b}.msg.ok{color:#9aa6bd}\n"
-                + ".wait{margin-top:16px;display:none}\n"
-                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}\n"
+                + ".track{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:18px}\n"
                 + ".track>i{display:block;height:100%;width:0;border-radius:6px;"
                 + "background:linear-gradient(90deg,#4f8cff,#67c23a);transition:width .12s linear}\n"
                 + ".pct{margin:8px 0 0;font-size:12px;color:#9aa6bd}\n"
-                + ".back{display:inline-block;margin-top:18px;font-size:13px;color:#7c879c;text-decoration:none}\n"
-                + ".back:hover{color:#4f8cff}\n"
+                + ".err{display:none;margin-top:18px;padding:12px 14px;border-radius:10px;"
+                + "background:rgba(255,90,100,.12);border:1px solid rgba(255,90,100,.28);color:#ff9aa4;font-size:13px;line-height:1.7}\n"
+                + ".acts{display:none;gap:10px;margin-top:14px}\n"
+                + ".acts a{flex:1;padding:10px 12px;border-radius:10px;text-decoration:none;font-size:13px;"
+                + "background:rgba(255,255,255,.08);color:#dbe4ff}\n"
+                + ".acts a:hover{background:rgba(79,140,255,.22)}\n"
                 + "</style>\n</head>\n<body>\n"
                 + "<div class=\"wrap\">\n"
-                + "<h1>" + name + "</h1>\n"
-                + "<p class=\"sub\">" + aliasLine + "<span class=\"pill\">ID " + escape(c.getId()) + "</span>" + mcLine
-                + "<br>进入前请填写你在服务器里的游戏名；云主机将按它启动客户端并自动连接本服。</p>\n"
-                + "<form id=\"f\" autocomplete=\"off\">\n"
-                + "<div class=\"field\">游戏名称</div>\n"
-                + "<input id=\"p\" maxlength=\"16\" placeholder=\"3–16 位字母、数字或下划线\" "
-                + "autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\">\n"
-                + "<p class=\"tip\">该名称会作为客户端登录名（--username）使用，请与你在服务器中的名字保持一致。</p>\n"
-                + "<button id=\"b\" type=\"submit\">进入云游戏</button>\n"
-                + "<div class=\"msg\" id=\"m\"></div>\n"
-                + "<div class=\"wait\" id=\"wait\"><div class=\"track\"><i id=\"fill\"></i></div>\n"
-                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配云主机…</span></p></div>\n"
-                + "</form>\n"
-                + "<a class=\"back\" href=\"" + escape(home) + "\">← 返回门牌目录</a>\n"
+                + "<h1>正在启动 " + escape(label) + "</h1>\n"
+                + "<p class=\"sub\">正在为你准备云主机，请稍候…</p>\n"
+                + "<div class=\"track\"><i id=\"fill\"></i></div>\n"
+                + "<p class=\"pct\"><span id=\"pc\">0</span>% · <span id=\"st\">正在分配工作区…</span></p>\n"
+                + "<div class=\"err\" id=\"err\"></div>\n"
+                + "<div class=\"acts\" id=\"acts\"><a id=\"rename\" href=\"javascript:void(0)\">更换游戏名称</a>"
+                + "<a id=\"retry\" href=\"javascript:void(0)\">重试</a></div>\n"
                 + "</div>\n"
                 + "<script>\n"
                 + "var API=" + js(API_PREFIX) + ";\n"
-                + "var CLIENT=" + id + ";\n"
-                + "var TOKEN=" + tok + ";\n"
-                + "var ALIAS=" + js(byAlias ? alias : "") + ";\n"
+                + "var GATE=" + js(gate) + ";\n"
+                + "var CLIENT=" + js(clientId == null ? "" : clientId) + ";\n"
+                + "var TOKEN=" + js(token == null ? "" : token) + ";\n"
+                + "var ALIAS=" + js(alias == null ? "" : alias) + ";\n"
+                + "var POOL=" + js(pool == null ? "" : pool) + ";\n"
+                + "var AUTO=" + auto + ";\n"
                 + "var P=" + progressConfig() + ";\n"
                 + progressJs()
                 + "var RE=/^[A-Za-z0-9_]{3,16}$/;\n"
-                + "var f=document.getElementById('f'),p=document.getElementById('p'),"
-                + "b=document.getElementById('b'),m=document.getElementById('m'),"
-                + "wait=document.getElementById('wait'),fill=document.getElementById('fill'),pc=document.getElementById('pc'),"
-                + "st=document.getElementById('st');\n"
-                + "function say(t,err){m.textContent=t;m.className='msg '+(err?'err':'ok');}\n"
-                + "var pr=null,attempts=0;\n"
-                + "function attempt(v){\n"
-                + "  if(!pr){pr=startProgress(fill,pc);}\n"
-                + "  fetch(API+'/cloud/session/start',{method:'POST',headers:{'Content-Type':'application/json'},"
-                + "body:JSON.stringify({clientId:CLIENT,player:v,token:TOKEN,alias:ALIAS})})\n"
-                + "  .then(function(r){return r.json();})\n"
-                + "  .then(function(j){\n"
-                + "    var d=(j&&j.data)||{};\n"
-                + "    if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配，正在连接画面…';"
-                + "location.replace(d.playUrl);return;}\n"
-                + "    // 客户端包在后台更新：进度条继续走，到点自己再点一次（不让人手动猜时间）\n"
-                + "    if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
-                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';say('',false);"
-                + "setTimeout(function(){attempt(v);},(d.retrySeconds||20)*1000);return;}\n"
-                + "    pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say((j&&j.msg)||'开始失败，请稍后重试',true);\n"
-                + "  })\n"
-                + "  .catch(function(){pr.stop();b.disabled=false;wait.style.display='none';"
-                + "say('网络异常，请稍后重试',true);});\n"
+                + "var q=new URLSearchParams(location.search),PLAYER=(q.get('player')||'').trim();\n"
+                + "var fill=document.getElementById('fill'),pc=document.getElementById('pc'),st=document.getElementById('st'),"
+                + "err=document.getElementById('err'),acts=document.getElementById('acts'),"
+                + "rename=document.getElementById('rename'),retry=document.getElementById('retry');\n"
+                + "var pr=null,attempts=0,current=PLAYER;\n"
+                + "function fail(msg){if(pr){pr.stop();}st.textContent='启动失败';err.style.display='block';"
+                + "err.textContent=msg||'启动失败，请稍后重试';acts.style.display='flex';}\n"
+                + "function start(v){current=v;attempts=0;err.style.display='none';acts.style.display='none';"
+                + "st.textContent=AUTO?'正在挑选空闲云主机…':'正在分配工作区…';if(!pr){pr=startProgress(fill,pc);}attempt();}\n"
+                + "function attempt(){\n"
+                + "  if(AUTO){\n"
+                + "    fetch(API+'/cloud/entry-ticket').then(function(r){return r.json();}).then(function(t){\n"
+                + "      var td=(t&&t.data)||{};\n"
+                + "      if(!(t&&t.code===200&&td.ticket)){throw new Error((t&&t.msg)||'无法获取入场票据');}\n"
+                + "      return post({player:current,ticket:td.ticket});\n"
+                + "    }).then(handle).catch(function(e){fail((e&&e.message)||'网络异常，请稍后重试');});\n"
+                + "  }else{\n"
+                + "    var body=POOL?{pool:POOL,player:current,token:TOKEN}"
+                + ":{clientId:CLIENT,player:current,token:TOKEN,alias:ALIAS};\n"
+                + "    post(body).then(handle).catch(function(){fail('网络异常，请稍后重试');});\n"
+                + "  }\n"
                 + "}\n"
-                + "f.addEventListener('submit',function(e){\n"
-                + "  e.preventDefault();\n"
-                + "  var v=(p.value||'').trim();\n"
-                + "  if(!v){say('请先输入游戏名称',true);p.focus();return;}\n"
-                + "  if(!RE.test(v)){say('游戏名称需为 3–16 位字母、数字或下划线',true);p.focus();return;}\n"
-                + "  b.disabled=true;say('',false);wait.style.display='block';attempts=0;"
-                + "st.textContent='正在分配工作区…';attempt(v);\n"
-                + "});\n"
+                + "function post(body){return fetch(API+'/cloud/session/start',{method:'POST',"
+                + "headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();});}\n"
+                + "function handle(j){\n"
+                + "  var d=(j&&j.data)||{};\n"
+                + "  if(j&&j.code===200&&d.playUrl){pr.finish();st.textContent='已分配，正在连接画面…';location.replace(d.playUrl);return;}\n"
+                + "  if(j&&j.code===200&&d.updating&&attempts<40){attempts++;"
+                + "st.textContent='正在更新云游戏客户端包，完成后会自动继续…';setTimeout(attempt,(d.retrySeconds||20)*1000);return;}\n"
+                + "  fail((j&&j.msg)||'暂时没有可用的机器，请稍后重试');\n"
+                + "}\n"
+                + "rename.onclick=function(){location.replace(GATE);};\n"
+                + "retry.onclick=function(){pr=null;fill.style.width='0';pc.textContent='0';start(current);};\n"
+                + "if(!RE.test(PLAYER)){location.replace(GATE);}else{start(PLAYER);}\n"
                 + "</script>\n</body>\n</html>\n";
     }
 
@@ -1822,5 +1629,14 @@ public final class CloudClientPages {
             return "\"\"";
         }
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    /** URL 查询参数编码（UTF-8）。 */
+    private static String urlEncode(String s) {
+        try {
+            return java.net.URLEncoder.encode(s == null ? "" : s, "UTF-8");
+        } catch (Throwable t) {
+            return "";
+        }
     }
 }

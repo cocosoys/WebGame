@@ -230,8 +230,11 @@ public final class WebGameClientPages {
             String name = escape(v.getName());
             String mc = escape(v.getMcVersionText());
             boolean isDefault = v.getId().equals(defaultId);
+            String back = prefix + pagePath + v.getId() + "/" + INDEX_FILE;
+            String gate = prefix + PlayerNamePage.PATH + "?kind=eagler&label=" + urlEncode(v.getName())
+                    + "&back=" + urlEncode(back);
             cards.append("<a class=\"card").append(isDefault ? " card-default" : "")
-                    .append("\" href=\"").append(prefix).append(pagePath).append(id).append("/\">")
+                    .append("\" href=\"").append(escape(gate)).append("\">")
                     .append("<div class=\"card-head\"><span class=\"card-name\">").append(name).append("</span>");
             if (isDefault) {
                 cards.append("<span class=\"badge\">默认</span>");
@@ -309,5 +312,14 @@ public final class WebGameClientPages {
             return "\"\"";
         }
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    /** URL 查询参数编码（UTF-8）。 */
+    private static String urlEncode(String s) {
+        try {
+            return java.net.URLEncoder.encode(s == null ? "" : s, "UTF-8");
+        } catch (Throwable t) {
+            return "";
+        }
     }
 }
